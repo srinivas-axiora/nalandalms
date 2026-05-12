@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Panel, StatusPill, ProgressBar, Avatar, cn } from "../components";
+import { Panel, StatusPill, ProgressBar, Avatar } from "../components";
 import { Radar, RadarChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis, ResponsiveContainer } from "recharts";
 import type { AppData, User } from "../types";
 

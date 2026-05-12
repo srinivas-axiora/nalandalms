@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Input } from "../components";
 import type { User, AppData, LoginSecurity } from "../types";
 import { now } from "../types";
+import { apiFetch } from "../api";
 
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 5 * 60 * 1000; // 5 minutes
@@ -13,13 +14,13 @@ const RATE_LIMIT_MAX = 10; // max 10 attempts per minute
 type Props = {
   users: User[];
   data: AppData;
-  onLogin: (u: User) => void;
+  onLogin: (u: User & { sessionVersion?: number; sv?: number }) => void;
   onUpdateSecurity: (next: Record<string, LoginSecurity>) => void;
 };
 
 export default function Login({ users, data, onLogin, onUpdateSecurity }: Props) {
-  const [email, setEmail] = useState("admin@nalanda.local");
-  const [password, setPassword] = useState("Password@123");
+  const [email, setEmail] = useState("Super Admin");
+  const [password, setPassword] = useState("Sadmin@2026");
   const [error, setError] = useState("");
   const [cooldownRemaining, setCooldownRemaining] = useState(0); // ms
   const [rateLimitRemaining, setRateLimitRemaining] = useState(0); // ms
@@ -99,16 +100,23 @@ export default function Login({ users, data, onLogin, onUpdateSecurity }: Props)
     return min > 0 ? `${min}:${String(sec).padStart(2, "0")}` : `${sec}s`;
   };
 
+  const loginIdFor = (user: User) => user.role === "Super Admin" ? "Super Admin" : user.email;
+  const passwordFor = (user: User) => {
+    if (user.role === "Super Admin") return "Sadmin@2026";
+    if (user.role === "Admin") return "Admin@2026";
+    if (user.role === "Manager") return "Passwrod@2026";
+    return "Password@123";
+  };
+
   const isLocked = cooldownRemaining > 0;
   const isRateLimited = rateLimitRemaining > 0;
   const currentSecurity = getSecurity(email);
   const remainingAttempts = Math.max(0, MAX_ATTEMPTS - currentSecurity.failedAttempts);
 
-  const submit = (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
 
-    // Check rate limit
     if (checkRateLimit()) {
       const wait = getRateLimitWait();
       setRateLimitRemaining(wait);
@@ -127,55 +135,50 @@ export default function Login({ users, data, onLogin, onUpdateSecurity }: Props)
       return;
     }
 
-    // Log this attempt for rate limiting
     rateLimitLog.current.push(Date.now());
 
-    // Check if account is locked
-    if (isLocked) {
-      setError(`Account locked. Try again in ${formatTime(cooldownRemaining)}.`);
-      return;
-    }
+    try {
+      const res = await apiFetch("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      });
+      const resData = await res.json();
 
-    // Attempt login
-    const u = users.find((x) => x.email === email && x.password === password && x.status === "Active");
-
-    if (!u) {
-      // Failed login
-      const sec = getSecurity(email);
-      const newAttempts = sec.failedAttempts + 1;
-      const updated = { ...security };
-
-      if (newAttempts >= MAX_ATTEMPTS) {
-        // Lock the account
-        const lockUntil = new Date(Date.now() + LOCKOUT_DURATION_MS).toISOString();
-        updated[email] = {
-          failedAttempts: newAttempts,
-          lockedUntil: lockUntil,
-          lastFailedAt: now(),
-        };
-        setError(`Account locked after ${MAX_ATTEMPTS} failed attempts. Try again in ${formatTime(LOCKOUT_DURATION_MS)}.`);
-      } else {
-        updated[email] = {
-          failedAttempts: newAttempts,
-          lockedUntil: null,
-          lastFailedAt: now(),
-        };
-        const left = MAX_ATTEMPTS - newAttempts;
-        if (left <= 2) {
-          setError(`Invalid credentials. ${left} attempt${left === 1 ? "" : "s"} remaining before lockout.`);
+      if (!res.ok) {
+        const updated = { ...security };
+        if (resData.lockedUntil) {
+          updated[email] = {
+            failedAttempts: resData.failedAttempts,
+            lockedUntil: resData.lockedUntil,
+            lastFailedAt: now(),
+          };
+          const remaining = new Date(resData.lockedUntil).getTime() - Date.now();
+          setError(`Account locked. Try again in ${formatTime(Math.max(0, remaining))}.`);
         } else {
-          setError("Invalid credentials or inactive account.");
+          updated[email] = {
+            failedAttempts: resData.failedAttempts || (getSecurity(email).failedAttempts + 1),
+            lockedUntil: null,
+            lastFailedAt: now(),
+          };
+          const left = MAX_ATTEMPTS - updated[email].failedAttempts;
+          if (left <= 2 && left > 0) {
+            setError(`Invalid credentials. ${left} attempt${left === 1 ? "" : "s"} remaining before lockout.`);
+          } else {
+            setError(resData.error || "Invalid credentials or inactive account.");
+          }
         }
+        onUpdateSecurity(updated);
+        return;
       }
-      onUpdateSecurity(updated);
-      return;
-    }
 
-    // Successful login — reset security
-    const updated = { ...security };
-    updated[email] = { failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
-    onUpdateSecurity(updated);
-    onLogin(u);
+      // Successful login — reset security locally and notify app
+      const updated = { ...security };
+      updated[email] = { failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
+      onUpdateSecurity(updated);
+      onLogin(resData.user);
+    } catch (err) {
+      setError("Failed to connect to the authentication server.");
+    }
   };
 
   const attemptBarWidth = Math.min(100, (currentSecurity.failedAttempts / MAX_ATTEMPTS) * 100);
@@ -200,9 +203,9 @@ export default function Login({ users, data, onLogin, onUpdateSecurity }: Props)
           <motion.form onSubmit={submit} initial={{ opacity: 0, x: 28 }} animate={{ opacity: 1, x: 0 }}
             className="w-full max-w-md rounded-[2rem] border border-white/10 bg-slate-950/80 p-6 shadow-2xl backdrop-blur-xl glow-cyan">
             <h2 className="font-display text-2xl font-semibold text-white">Secure sign in</h2>
-            <p className="mt-2 text-sm text-slate-400">Use any demo account. Password: Password@123</p>
+            <p className="mt-2 text-sm text-slate-400">Use the listed login IDs. Employees sign in with their mail ID.</p>
             <div className="mt-6 space-y-4">
-              <Input label="Email" value={email} onChange={setEmail} />
+              <Input label="Login ID" value={email} onChange={setEmail} />
               <Input label="Password" value={password} onChange={setPassword} type="password" />
             </div>
 
@@ -328,25 +331,25 @@ export default function Login({ users, data, onLogin, onUpdateSecurity }: Props)
             </AnimatePresence>
 
             {/* Error message */}
-            {error && !isLocked && !showAttemptWarning && (
+            {error && (
               <p className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-300/10 p-3 text-sm text-rose-100">{error}</p>
             )}
 
             <button
-              disabled={isLocked || isRateLimited}
+              disabled={isRateLimited}
               className={`mt-6 w-full rounded-full px-5 py-3 font-bold transition ${
-                isLocked || isRateLimited
+                isRateLimited
                   ? "bg-slate-700 text-slate-400 cursor-not-allowed opacity-60"
                   : "bg-gradient-to-r from-cyan-400 to-blue-500 text-slate-950 hover:shadow-lg hover:shadow-cyan-400/20"
               }`}
             >
-              {isLocked ? `Locked — ${formatTime(cooldownRemaining)}` : isRateLimited ? "Please wait…" : "Sign in"}
+              {isRateLimited ? "Please wait..." : "Sign in"}
             </button>
             <div className="mt-6 grid gap-2 text-xs text-slate-400">
-              {users.filter((u) => u.status === "Active").slice(0, 5).map((u) => (
-                <button type="button" key={u.id} onClick={() => setEmail(u.email)}
+              {users.filter((u) => u.status === "Active").map((u) => (
+                <button type="button" key={u.id} onClick={() => { setEmail(loginIdFor(u)); setPassword(passwordFor(u)); }}
                   className="rounded-2xl border border-white/10 px-3 py-2 text-left transition hover:border-cyan-300/50 hover:bg-white/5">
-                  <span className="font-semibold text-cyan-200">{u.role}</span>: {u.email}
+                  <span className="font-semibold text-cyan-200">{u.role}</span>: {loginIdFor(u)}
                 </button>
               ))}
             </div>

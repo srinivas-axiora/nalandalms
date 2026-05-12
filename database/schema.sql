@@ -8,7 +8,7 @@ CREATE EXTENSION IF NOT EXISTS citext;
 CREATE TYPE user_role AS ENUM ('Super Admin', 'Admin', 'Manager', 'Employee');
 CREATE TYPE lifecycle_status AS ENUM ('Active', 'Inactive');
 CREATE TYPE approval_status AS ENUM ('Draft', 'Pending', 'Approved', 'Rejected');
-CREATE TYPE assessment_type AS ENUM ('MCQ', 'Descriptive', 'Timed Quiz');
+CREATE TYPE assessment_type AS ENUM ('MCQ', 'Descriptive', 'Timed Quiz', 'Mixed');
 CREATE TYPE attempt_status AS ENUM ('InProgress', 'Submitted', 'AutoSubmitted', 'PendingManualReview', 'Evaluated');
 CREATE TYPE proctor_event_type AS ENUM ('FULLSCREEN_EXIT', 'TAB_SWITCH', 'NOISE', 'CAMERA_OFF', 'MIC_OFF', 'FACE_MISMATCH');
 
@@ -24,6 +24,9 @@ CREATE TABLE users (
   email CITEXT NOT NULL UNIQUE,
   password_hash TEXT,
   role user_role NOT NULL DEFAULT 'Employee',
+  login_id TEXT GENERATED ALWAYS AS (
+    CASE WHEN role = 'Super Admin'::user_role THEN 'Super Admin' ELSE email::TEXT END
+  ) STORED UNIQUE,
   department_id UUID REFERENCES departments(id),
   team TEXT NOT NULL DEFAULT 'Unassigned',
   designation TEXT NOT NULL DEFAULT 'Employee',
@@ -39,6 +42,27 @@ CREATE TABLE users (
 CREATE INDEX idx_users_role_status ON users(role, status);
 CREATE INDEX idx_users_manager ON users(manager_id);
 CREATE INDEX idx_users_department ON users(department_id);
+
+COMMENT ON COLUMN users.login_id IS 'Super Admin signs in with "Super Admin"; all other users sign in with their email address.';
+COMMENT ON COLUMN users.password_hash IS 'Store bcrypt hashes only. Demo password policy: Super Admin=Sadmin@2026, Admin=Admin@2026, Manager=Passwrod@2026, Employee=Password@123.';
+
+-- Every Active -> Inactive transition invalidates all previously issued JWTs.
+-- Tokens carry the user's session_version claim and the API rejects mismatches.
+CREATE OR REPLACE FUNCTION revoke_user_sessions_on_deactivate()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF OLD.status = 'Active' AND NEW.status = 'Inactive' THEN
+    NEW.session_version := OLD.session_version + 1;
+  END IF;
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_revoke_user_sessions_on_deactivate
+BEFORE UPDATE OF status ON users
+FOR EACH ROW
+EXECUTE FUNCTION revoke_user_sessions_on_deactivate();
 
 -- ── Login Security ──
 -- Tracks failed login attempts and account lockouts per email
@@ -139,10 +163,13 @@ CREATE TABLE chapters (
   url TEXT,
   file_name TEXT,
   duration_minutes INTEGER NOT NULL DEFAULT 10,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  minimum_time_minutes INTEGER NOT NULL DEFAULT 1 CHECK (minimum_time_minutes >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_chapters_course ON chapters(course_id, sequence);
+COMMENT ON COLUMN chapters.minimum_time_minutes IS 'Minimum learner time required before the chapter completion/next gate can be satisfied.';
 
 CREATE TABLE course_approvals (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -168,13 +195,36 @@ CREATE TABLE enrollments (
   progress NUMERIC(5,2) NOT NULL DEFAULT 0,
   completed_chapters TEXT[] NOT NULL DEFAULT '{}',
   time_spent_minutes INTEGER NOT NULL DEFAULT 0,
+  time_spent_seconds INTEGER NOT NULL DEFAULT 0,
+  chapter_time_spent_total_seconds INTEGER NOT NULL DEFAULT 0,
+  assessment_time_spent_seconds INTEGER NOT NULL DEFAULT 0,
+  chapter_time_spent_seconds JSONB NOT NULL DEFAULT '{}',
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   completed_at TIMESTAMPTZ,
+  CHECK (time_spent_seconds >= 0),
+  CHECK (chapter_time_spent_total_seconds >= 0),
+  CHECK (assessment_time_spent_seconds >= 0),
   UNIQUE(course_id, user_id)
 );
 
 CREATE INDEX idx_enrollments_user ON enrollments(user_id);
 CREATE INDEX idx_enrollments_course ON enrollments(course_id);
+COMMENT ON COLUMN enrollments.time_spent_seconds IS 'Course total time in seconds. Includes chapter learning time plus assessment attempt time.';
+COMMENT ON COLUMN enrollments.chapter_time_spent_seconds IS 'Denormalized API cache keyed by chapter_id. Canonical reporting rows are stored in chapter_time_totals.';
+
+CREATE TABLE chapter_time_totals (
+  user_id TEXT NOT NULL REFERENCES users(id),
+  course_id TEXT NOT NULL REFERENCES courses(id),
+  chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+  time_spent_seconds INTEGER NOT NULL DEFAULT 0 CHECK (time_spent_seconds >= 0),
+  first_recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, course_id, chapter_id),
+  FOREIGN KEY (course_id, user_id) REFERENCES enrollments(course_id, user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_chapter_time_course ON chapter_time_totals(course_id, chapter_id);
+COMMENT ON TABLE chapter_time_totals IS 'Per-learner per-chapter accumulated learning time used for gates and reporting.';
 
 CREATE TABLE assessments (
   id TEXT PRIMARY KEY,
@@ -224,6 +274,7 @@ CREATE TABLE assessment_attempts (
   selected_question_ids TEXT[] NOT NULL DEFAULT '{}',
   tab_switch_warnings INTEGER NOT NULL DEFAULT 0,
   auto_submitted_reason TEXT,
+  time_spent_seconds INTEGER NOT NULL DEFAULT 0,
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   submitted_at TIMESTAMPTZ,
   evaluated_by TEXT REFERENCES users(id)
@@ -231,6 +282,21 @@ CREATE TABLE assessment_attempts (
 
 CREATE INDEX idx_attempts_user ON assessment_attempts(user_id, started_at DESC);
 CREATE INDEX idx_attempts_assessment ON assessment_attempts(assessment_id);
+
+CREATE TABLE learning_time_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  course_id TEXT NOT NULL REFERENCES courses(id),
+  chapter_id TEXT REFERENCES chapters(id),
+  assessment_id TEXT REFERENCES assessments(id),
+  event_type TEXT NOT NULL CHECK (event_type IN ('CHAPTER_TIME', 'ASSESSMENT_TIME')),
+  seconds_spent INTEGER NOT NULL CHECK (seconds_spent > 0),
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_learning_time_user_course ON learning_time_events(user_id, course_id, recorded_at DESC);
+CREATE INDEX idx_learning_time_chapter ON learning_time_events(chapter_id, recorded_at DESC);
+CREATE INDEX idx_learning_time_assessment ON learning_time_events(assessment_id, recorded_at DESC);
 
 CREATE TABLE assessment_answers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -371,6 +437,53 @@ CREATE INDEX idx_certificates_course ON issued_certificates(course_id);
 CREATE INDEX idx_certificates_issued_by ON issued_certificates(issued_by);
 
 -- ── Analytics View ──
+CREATE VIEW analytics_learning_time AS
+SELECT
+  e.user_id,
+  e.course_id,
+  ctt.chapter_id,
+  ch.title AS chapter_title,
+  ch.minimum_time_minutes * 60 AS minimum_time_seconds,
+  ctt.time_spent_seconds AS chapter_time_seconds,
+  COALESCE(assessment_time.assessment_time_seconds, 0) AS assessment_time_seconds,
+  e.time_spent_seconds AS course_time_seconds,
+  ctt.time_spent_seconds >= (ch.minimum_time_minutes * 60) AS minimum_time_met
+FROM enrollments e
+JOIN chapter_time_totals ctt
+  ON ctt.user_id = e.user_id
+  AND ctt.course_id = e.course_id
+JOIN chapters ch ON ch.id = ctt.chapter_id
+LEFT JOIN LATERAL (
+  SELECT COALESCE(SUM(aa.time_spent_seconds), 0) AS assessment_time_seconds
+  FROM assessment_attempts aa
+  WHERE aa.user_id = e.user_id
+    AND aa.course_id = e.course_id
+    AND aa.chapter_id = ctt.chapter_id
+) assessment_time ON true;
+
+CREATE VIEW analytics_course_time_totals AS
+SELECT
+  e.user_id,
+  e.course_id,
+  e.time_spent_seconds AS course_time_seconds,
+  COALESCE(chapter_time.chapter_time_seconds, 0) AS chapter_time_seconds,
+  COALESCE(assessment_time.assessment_time_seconds, 0) AS assessment_time_seconds,
+  e.progress,
+  e.completed_at
+FROM enrollments e
+LEFT JOIN LATERAL (
+  SELECT COALESCE(SUM(ctt.time_spent_seconds), 0) AS chapter_time_seconds
+  FROM chapter_time_totals ctt
+  WHERE ctt.user_id = e.user_id
+    AND ctt.course_id = e.course_id
+) chapter_time ON true
+LEFT JOIN LATERAL (
+  SELECT COALESCE(SUM(aa.time_spent_seconds), 0) AS assessment_time_seconds
+  FROM assessment_attempts aa
+  WHERE aa.user_id = e.user_id
+    AND aa.course_id = e.course_id
+) assessment_time ON true;
+
 CREATE VIEW analytics_course_effectiveness AS
 SELECT
   c.id AS course_id,

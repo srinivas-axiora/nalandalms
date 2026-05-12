@@ -73,6 +73,7 @@ export type Chapter = {
   url?: string;
   fileName?: string;
   durationMinutes: number;
+  minimumTimeMinutes?: number;
   isCompleted?: boolean;
 };
 
@@ -132,6 +133,7 @@ export type Attempt = {
   proctorCaptures?: ProctorCapture[];
   startedAt: string;
   submittedAt: string | null;
+  timeSpentSeconds?: number;
 };
 
 export type ProctorCapture = {
@@ -156,6 +158,8 @@ export type Enrollment = {
   progress: number;
   completedChapters: string[];
   timeSpentMinutes: number;
+  timeSpentSeconds?: number;
+  chapterTimeSpentSeconds?: Record<string, number>;
   startedAt: string;
   completedAt: string | null;
 };

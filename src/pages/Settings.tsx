@@ -1,4 +1,4 @@
-import { Panel, StarRating, cn } from "../components";
+import { Panel } from "../components";
 import type { AppData, User, UserPreferences } from "../types";
 import { now, uid } from "../types";
 

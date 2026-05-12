@@ -5,6 +5,7 @@ import type { AppData, User, Course, Chapter, ChapterFeedback, Enrollment, Skill
 import { isAdminRole } from "../types";
 import { now, uid } from "../types";
 import { toast } from "../toast";
+import { apiFetch } from "../api";
 
 const demoPdfDataUrl = "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxMTggPj4Kc3RyZWFtCkJUCi9GMSAyNCBUZgo3MiA3MjAgVGQKKE5hbGFuZGEgQ2hhcHRlciBQREYpIFRqCjAgLTQwIFRkCi9GMSAxNCBUZgooVXBsb2FkIGEgcGRmIGZyb20gdGhlIGFkbWluIGNvdXJzZSBlZGl0b3IgdG8gcmVwbGFjZSB0aGlzIGRlbW8gZG9jdW1lbnQuKSBUagpFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNzQgMDAwMDAgbiAKMDAwMDAwMDQ0MiAwMDAwMCBuIAp0cmFpbGVyCjw8IC9Sb290IDEgMCBSIC9TaXplIDYgPj4Kc3RhcnR4cmVmCjUxMgolJUVPRg==";
 
@@ -14,6 +15,16 @@ function shuffleQuestions(questions: Question[], seed: string) {
     hash = (hash * 9301 + 49297) % 233280;
     return hash / 233280 - 0.5;
   });
+}
+
+function formatDuration(seconds = 0) {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  return hours > 0
+    ? `${hours}h ${String(minutes).padStart(2, "0")}m`
+    : `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
 function ProctoredAssessment({ assessment, course, chapter, currentUser, onSubmit, onCancel }: {
@@ -27,10 +38,12 @@ function ProctoredAssessment({ assessment, course, chapter, currentUser, onSubmi
   const [warningMessage, setWarningMessage] = useState("");
   const [captures, setCaptures] = useState<ProctorCapture[]>([]);
   const [startedAt, setStartedAt] = useState(now());
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const submittedRef = useRef(false);
   const assessmentRef = useRef<HTMLDivElement | null>(null);
+  const openedAtRef = useRef(Date.now());
   const selectedQuestions = useMemo(() => shuffleQuestions(assessment.questions, `${assessment.id}-${currentUser.id}-${Date.now()}`).slice(0, assessment.questionLimit || 10), [assessment, currentUser.id]);
   const currentQuestion = selectedQuestions[questionIndex];
 
@@ -40,6 +53,13 @@ function ProctoredAssessment({ assessment, course, chapter, currentUser, onSubmi
   };
 
   useEffect(() => () => stopStream(), []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - openedAtRef.current) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const requestPermissions = async () => {
     try {
@@ -92,9 +112,10 @@ function ProctoredAssessment({ assessment, course, chapter, currentUser, onSubmi
     const correct = mcqs.filter((q) => answers[q.id] === q.answer).length;
     const score = mcqs.length ? Math.round((correct / mcqs.length) * 100) : 100;
     const maxScore = selectedQuestions.reduce((sum, q) => sum + q.points, 0);
+    const timeSpentSeconds = Math.max(1, Math.floor((Date.now() - openedAtRef.current) / 1000));
     stopStream();
     if (document.fullscreenElement) document.exitFullscreen?.();
-    onSubmit({ id: uid("ATT"), assessmentId: assessment.id, chapterId: chapter.id, courseId: course.id, userId: currentUser.id, status: score >= assessment.passScore ? "Passed" : "Failed", score, maxScore, feedback: reason ? `Auto submitted: ${reason}` : score >= assessment.passScore ? "Passed!" : "Needs improvement", answers, selectedQuestionIds: selectedQuestions.map((q) => q.id), tabSwitchWarnings: forcedWarnings, autoSubmittedReason: reason, proctorCaptures: captures, startedAt, submittedAt: now() });
+    onSubmit({ id: uid("ATT"), assessmentId: assessment.id, chapterId: chapter.id, courseId: course.id, userId: currentUser.id, status: score >= assessment.passScore ? "Passed" : "Failed", score, maxScore, feedback: reason ? `Auto submitted: ${reason}` : score >= assessment.passScore ? "Passed!" : "Needs improvement", answers, selectedQuestionIds: selectedQuestions.map((q) => q.id), tabSwitchWarnings: forcedWarnings, autoSubmittedReason: reason, proctorCaptures: captures, startedAt, submittedAt: now(), timeSpentSeconds });
   };
 
   const handleViolation = (message: string) => {
@@ -131,6 +152,7 @@ function ProctoredAssessment({ assessment, course, chapter, currentUser, onSubmi
             <StatusPill tone="amber">Proctored assessment</StatusPill>
             <h2 className="mt-4 text-3xl font-semibold text-white">{assessment.title}</h2>
             <p className="mt-2 text-slate-400">{course.title} - {chapter.title}</p>
+            <p className="mt-3 text-sm text-cyan-100">Assessment timer: {formatDuration(elapsedSeconds)}</p>
             <div className="mt-6 grid gap-4 md:grid-cols-2">
               {["Camera and microphone access is mandatory.", "Assessment opens in fullscreen mode.", "Do not switch tabs, windows, or exit fullscreen.", "More than 2 violations auto-submit the attempt.", `Only ${assessment.questionLimit || 10} randomized questions are shown from the question bank.`, "A camera image is captured 3 seconds after each question appears for evaluation review."].map((rule) => <div key={rule} className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 text-sm text-slate-300">{rule}</div>)}
             </div>
@@ -145,6 +167,7 @@ function ProctoredAssessment({ assessment, course, chapter, currentUser, onSubmi
           <div className="mt-6 rounded-[2rem] border border-white/10 bg-white/[0.03] p-8">
             <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
               <div className="flex gap-2"><StatusPill tone="cyan">Question {questionIndex + 1}/{selectedQuestions.length}</StatusPill><StatusPill tone={warnings > 0 ? "amber" : "green"}>Warnings {warnings}/2</StatusPill></div>
+              <StatusPill tone="violet">Time {formatDuration(elapsedSeconds)}</StatusPill>
               <button onClick={() => submit(null)} className="rounded-full bg-cyan-300 px-5 py-2.5 text-sm font-bold text-slate-950">Submit assessment</button>
             </div>
             {warningMessage && <p className="mb-5 rounded-2xl border border-amber-300/30 bg-amber-300/10 p-4 text-sm text-amber-100">{warningMessage}</p>}
@@ -164,9 +187,9 @@ function ProctoredAssessment({ assessment, course, chapter, currentUser, onSubmi
   );
 }
 
-function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, feedbacks, currentUser, onProgress, onPdfViewed, onFeedback, onAttempt, onClose }: {
+function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, feedbacks, currentUser, onProgress, onChapterTime, onFeedback, onAttempt, onClose }: {
   course: Course; chapters: Chapter[]; enrollment?: Enrollment; assessments: Assessment[]; attempts: Attempt[]; feedbacks: ChapterFeedback[];
-  currentUser: User; onProgress: (chId: string, mins: number) => void; onPdfViewed: (mins: number) => void; onFeedback: (fb: ChapterFeedback) => void; onAttempt: (att: Attempt) => void; onClose: () => void;
+  currentUser: User; onProgress: (chId: string, seconds: number) => void; onChapterTime: (chId: string, seconds: number) => void; onFeedback: (fb: ChapterFeedback) => void; onAttempt: (att: Attempt) => void; onClose: () => void;
 }) {
   const [idx, setIdx] = useState(0);
   const [showFeedback, setShowFeedback] = useState(false);
@@ -175,7 +198,12 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
   const [pdfZoom, setPdfZoom] = useState(1);
   const [pdfOpenedAt, setPdfOpenedAt] = useState<number | null>(null);
   const [pdfElapsedSeconds, setPdfElapsedSeconds] = useState(0);
+  const [timerTick, setTimerTick] = useState(0);
+  const [chapterSeconds, setChapterSeconds] = useState<Record<string, number>>(() => ({ ...(enrollment?.chapterTimeSpentSeconds || {}) }));
   const [fbForm, setFbForm] = useState({ rating: 0, clarity: 0, relevance: 0, comments: "" });
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const activeChapterIdRef = useRef<string | null>(null);
+  const activeStartedAtRef = useRef<number | null>(null);
 
   const ch = chapters[idx];
   if (!ch) return null;
@@ -185,6 +213,64 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
   const hasAttempt = attempts.some((a: any) => a.chapterId === ch.id && a.userId === currentUser.id && (a.status === "Passed" || a.status === "Submitted"));
   const pdfSource = ch.url || demoPdfDataUrl;
   const pdfViewerSource = `${pdfSource}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
+  const requiredSeconds = Math.max(0, Math.round((ch.minimumTimeMinutes ?? ch.durationMinutes ?? 0) * 60));
+  const visibleElapsed = activeChapterIdRef.current === ch.id && activeStartedAtRef.current && !document.hidden ? Math.floor((Date.now() - activeStartedAtRef.current) / 1000) : 0;
+  const currentChapterSeconds = (chapterSeconds[ch.id] || 0) + visibleElapsed;
+  const minimumMet = isCompleted || currentChapterSeconds >= requiredSeconds;
+
+  const flushActiveTime = (pause = false, persist = true) => {
+    const activeId = activeChapterIdRef.current;
+    const startedAt = activeStartedAtRef.current;
+    if (!activeId || !startedAt) return 0;
+    const deltaSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    if (deltaSeconds > 0) {
+      setChapterSeconds((current) => {
+        return { ...current, [activeId]: (current[activeId] || 0) + deltaSeconds };
+      });
+      if (persist) onChapterTime(activeId, deltaSeconds);
+    }
+    activeStartedAtRef.current = pause ? null : Date.now();
+    return deltaSeconds;
+  };
+
+  const switchChapter = (nextIdx: number) => {
+    flushActiveTime(true);
+    setIdx(nextIdx);
+  };
+
+  const closePlayer = () => {
+    flushActiveTime(true);
+    onClose();
+  };
+
+  useEffect(() => {
+    setChapterSeconds((current) => ({ ...(enrollment?.chapterTimeSpentSeconds || {}), ...current }));
+  }, [enrollment?.id]);
+
+  useEffect(() => {
+    if (!ch || isCompleted) {
+      activeChapterIdRef.current = null;
+      activeStartedAtRef.current = null;
+      return;
+    }
+    activeChapterIdRef.current = ch.id;
+    activeStartedAtRef.current = Date.now();
+    return () => { flushActiveTime(true); };
+  }, [ch.id, isCompleted]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setTimerTick((tick) => tick + 1), 1000);
+    const onVisibility = () => {
+      if (document.hidden) flushActiveTime(true);
+      else if (activeChapterIdRef.current && !isCompleted) activeStartedAtRef.current = Date.now();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      flushActiveTime(true);
+    };
+  }, [isCompleted]);
 
   useEffect(() => {
     if (!showPdf || !pdfOpenedAt) return;
@@ -194,8 +280,37 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
     return () => window.clearInterval(interval);
   }, [showPdf, pdfOpenedAt]);
 
+  // Video progress tracking via API
+  useEffect(() => {
+    if (!ch || !ch.contentType.includes("Video")) return;
+    
+    // Fetch last saved progress
+    apiFetch(`/courses/${course.id}/chapters/${ch.id}/progress`)
+      .then((res) => { if (res.ok) return res.json(); throw new Error(); })
+      .then((data) => {
+        if (data.currentTime && videoRef.current) {
+          videoRef.current.currentTime = data.currentTime;
+        }
+      })
+      .catch(() => {});
+
+    // Save progress every 30 seconds
+    const intervalId = window.setInterval(() => {
+      if (videoRef.current && !videoRef.current.paused) {
+        apiFetch(`/courses/${course.id}/chapters/${ch.id}/progress`, {
+          method: "POST",
+          body: JSON.stringify({ currentTime: videoRef.current.currentTime }),
+        }).catch(() => {});
+      }
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
+  }, [ch, course.id]);
+
   const completeChapter = () => {
-    onProgress(ch.id, ch.durationMinutes);
+    if (!minimumMet) return;
+    const deltaSeconds = flushActiveTime(true, false);
+    onProgress(ch.id, deltaSeconds);
     if (chAssessment && !hasAttempt) {
       setShowAssessment(true);
     }
@@ -213,10 +328,6 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
     setShowPdf(true);
   };
   const closePdfViewer = () => {
-    const seconds = pdfOpenedAt ? Math.max(0, Math.floor((Date.now() - pdfOpenedAt) / 1000)) : pdfElapsedSeconds;
-    if (seconds > 0) {
-      onPdfViewed(Math.max(1, Math.ceil(seconds / 60)));
-    }
     setShowPdf(false);
     setPdfOpenedAt(null);
     setPdfElapsedSeconds(0);
@@ -224,14 +335,14 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
   const formatTimer = (seconds: number) => `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 
   return (
-    <Modal title={course.title} onClose={onClose} wide>
+    <Modal title={course.title} onClose={closePlayer} wide>
       <div className="grid gap-6 lg:grid-cols-[0.3fr_0.7fr]">
         <div className="space-y-2 max-h-[70vh] overflow-y-auto pr-2">
           <p className="text-xs uppercase tracking-widest text-slate-500 mb-3">Chapters ({chapters.length})</p>
           {chapters.map((c, i) => {
             const done = enrollment?.completedChapters.includes(c.id);
             return (
-              <button key={c.id} onClick={() => setIdx(i)} className={cn("w-full rounded-2xl border p-3 text-left transition", i === idx ? "border-cyan-300/50 bg-cyan-300/10" : "border-white/10 bg-white/[0.03] hover:bg-white/[0.06]")}>
+              <button key={c.id} onClick={() => switchChapter(i)} className={cn("w-full rounded-2xl border p-3 text-left transition", i === idx ? "border-cyan-300/50 bg-cyan-300/10" : "border-white/10 bg-white/[0.03] hover:bg-white/[0.06]")}>
                 <div className="flex items-center gap-2">
                   <span className={cn("flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold", done ? "bg-emerald-400 text-slate-950" : "bg-white/10 text-slate-400")}>{done ? "✓" : c.sequence}</span>
                   <span className="truncate text-sm font-medium text-white">{c.title}</span>
@@ -254,9 +365,17 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
             {isCompleted && <StatusPill tone="green">Completed</StatusPill>}
             {hasFeedback && <StatusPill tone="violet">Feedback submitted</StatusPill>}
             {hasAttempt && <StatusPill tone="green">Assessment passed</StatusPill>}
+            <StatusPill tone={minimumMet ? "green" : "amber"}>Time {formatDuration(currentChapterSeconds)} / {formatDuration(requiredSeconds)}</StatusPill>
           </div>
           <h3 className="text-2xl font-semibold text-white">{ch.title}</h3>
           <p className="mt-2 text-sm text-slate-400">{ch.description}</p>
+          {!minimumMet && (
+            <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4">
+              <p className="text-sm font-semibold text-amber-100">Minimum chapter time required before completion</p>
+              <div className="mt-3"><ProgressBar value={requiredSeconds ? Math.min(100, Math.round((currentChapterSeconds / requiredSeconds) * 100)) : 100} tone="amber" /></div>
+              <p className="mt-2 text-xs text-amber-100/80">{formatDuration(Math.max(0, requiredSeconds - currentChapterSeconds))} remaining before Mark complete and Next chapter are enabled.</p>
+            </div>
+          )}
           <div className="mt-6 rounded-2xl border border-white/10 bg-slate-900/50 p-6 text-slate-300 leading-7 min-h-[120px]">{ch.body}</div>
           {ch.contentType === "PDF" && (
             <div className="mt-4 rounded-2xl border border-white/10 bg-slate-900 p-6">
@@ -275,16 +394,20 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
             </div>
           )}
           {ch.contentType.includes("Video") && (
-            <div className="mt-4 aspect-video overflow-hidden rounded-2xl border border-white/10 bg-slate-900">
-              {ch.url ? <iframe className="h-full w-full" src={ch.url} title={ch.title} /> : <div className="flex h-full items-center justify-center text-slate-400">🎬 Video: {ch.fileName}</div>}
+            <div className="mt-4 aspect-video overflow-hidden rounded-2xl border border-white/10 bg-slate-900 relative group">
+              {ch.url ? (
+                <video ref={videoRef} className="h-full w-full object-contain" src={ch.url} controls controlsList="nodownload" />
+              ) : (
+                <div className="flex h-full items-center justify-center text-slate-400">🎬 Video: {ch.fileName}</div>
+              )}
             </div>
           )}
 
           <div className="mt-6 flex flex-wrap gap-3">
-            {!isCompleted && <button onClick={completeChapter} className="rounded-full bg-gradient-to-r from-emerald-400 to-teal-500 px-5 py-2.5 text-sm font-bold text-slate-950">Mark complete</button>}
+            {!isCompleted && <button onClick={completeChapter} disabled={!minimumMet} className={cn("rounded-full px-5 py-2.5 text-sm font-bold", minimumMet ? "bg-gradient-to-r from-emerald-400 to-teal-500 text-slate-950" : "cursor-not-allowed bg-slate-700 text-slate-400")}>Mark complete</button>}
             {isCompleted && !hasFeedback && <button onClick={() => setShowFeedback(true)} className="rounded-full bg-gradient-to-r from-violet-400 to-fuchsia-500 px-5 py-2.5 text-sm font-bold text-slate-950">Submit feedback ★</button>}
             {isCompleted && chAssessment && !hasAttempt && <button onClick={() => setShowAssessment(true)} className="rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 px-5 py-2.5 text-sm font-bold text-slate-950">Take assessment</button>}
-            {idx < chapters.length - 1 && <button onClick={() => setIdx(idx + 1)} className="rounded-full border border-white/10 px-5 py-2.5 text-sm font-semibold text-slate-200 hover:bg-white/5">Next chapter →</button>}
+            {idx < chapters.length - 1 && <button onClick={() => switchChapter(idx + 1)} disabled={!minimumMet} className={cn("rounded-full border px-5 py-2.5 text-sm font-semibold", minimumMet ? "border-white/10 text-slate-200 hover:bg-white/5" : "cursor-not-allowed border-white/5 text-slate-600")}>Next chapter</button>}
           </div>
         </div>
       </div>
@@ -349,7 +472,7 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
   const [deleteTarget, setDeleteTarget] = useState<Course | null>(null);
   const [form, setForm] = useState({ title: "", description: "", skillId: data.skills[0]?.id || "", category: "Technical", tags: "", targetLevel: "Beginner" as SkillLevel, difficulty: "Beginner" as Course["difficulty"], estimatedHours: "4" });
   const [editForm, setEditForm] = useState({ title: "", description: "", skillId: "", category: "", tags: "", targetLevel: "Beginner" as SkillLevel, difficulty: "Beginner" as Course["difficulty"], estimatedHours: "4" });
-  const [chapterForm, setChapterForm] = useState({ id: "", title: "", description: "", contentType: "Rich Text" as Chapter["contentType"], body: "", url: "", fileName: "", durationMinutes: "20" });
+  const [chapterForm, setChapterForm] = useState({ id: "", title: "", description: "", contentType: "Rich Text" as Chapter["contentType"], body: "", url: "", fileName: "", durationMinutes: "20", minimumTimeMinutes: "15" });
   const [assignmentForm, setAssignmentForm] = useState({ dueAt: "", priority: "High" as Enrollment["priority"], mandatory: true });
 
   const teamIds = data.users.filter((u) => u.managerId === currentUser.id).map((u) => u.id);
@@ -363,7 +486,7 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
 
   const candidates = data.users.filter((u) => !isAdminRole(u.role) && u.status === "Active" && (isAdminRole(currentUser.role) || teamIds.includes(u.id) || u.id === currentUser.id));
 
-  const resetChapterForm = () => setChapterForm({ id: "", title: "", description: "", contentType: "Rich Text", body: "", url: "", fileName: "", durationMinutes: "20" });
+  const resetChapterForm = () => setChapterForm({ id: "", title: "", description: "", contentType: "Rich Text", body: "", url: "", fileName: "", durationMinutes: "20", minimumTimeMinutes: "15" });
 
   const openEditor = (course: Course) => {
     const skill = data.skills.find((item) => course.skillIds?.includes(item.id) || item.name === course.skill);
@@ -489,6 +612,7 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
       url: chapterForm.url || undefined,
       fileName: chapterForm.fileName || undefined,
       durationMinutes: Number(chapterForm.durationMinutes),
+      minimumTimeMinutes: Number(chapterForm.minimumTimeMinutes) || Number(chapterForm.durationMinutes) || 1,
     };
     const chapters = chapterForm.id ? data.chapters.map((item) => item.id === chapter.id ? chapter : item) : [...data.chapters, chapter];
     setData(addAudit({ ...data, chapters }, chapterForm.id ? "Updated chapter" : "Created chapter", chapter.id));
@@ -505,6 +629,7 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
       url: chapter.url || "",
       fileName: chapter.fileName || "",
       durationMinutes: String(chapter.durationMinutes),
+      minimumTimeMinutes: String(chapter.minimumTimeMinutes ?? chapter.durationMinutes),
     });
   };
 
@@ -519,10 +644,10 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
 
   const assign = (courseId: string, userId: string) => {
     if (data.enrollments.some((e) => e.courseId === courseId && e.userId === userId)) return;
-    setData(addAudit({ ...data, enrollments: [{ id: uid("ENR"), courseId, userId, assignedBy: currentUser.id, dueAt: assignmentForm.dueAt || null, priority: assignmentForm.priority, mandatory: assignmentForm.mandatory, progress: 0, completedChapters: [], timeSpentMinutes: 0, startedAt: now(), completedAt: null }, ...data.enrollments] }, "Assigned course", `${courseId}→${userId}`));
+    setData(addAudit({ ...data, enrollments: [{ id: uid("ENR"), courseId, userId, assignedBy: currentUser.id, dueAt: assignmentForm.dueAt || null, priority: assignmentForm.priority, mandatory: assignmentForm.mandatory, progress: 0, completedChapters: [], timeSpentMinutes: 0, timeSpentSeconds: 0, chapterTimeSpentSeconds: {}, startedAt: now(), completedAt: null }, ...data.enrollments] }, "Assigned course", `${courseId}→${userId}`));
   };
 
-  const handleProgress = (chId: string, mins: number) => {
+  const handleProgress = (chId: string, seconds: number) => {
     if (!playCourse) return;
     const chapters = data.chapters.filter((c) => c.courseId === playCourse.id);
     const existing = data.enrollments.find((e) => e.courseId === playCourse.id && e.userId === currentUser.id);
@@ -530,21 +655,53 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
     completed.add(chId);
     const progress = Math.round((completed.size / chapters.length) * 100);
     const enrollments = existing
-      ? data.enrollments.map((e) => e.id === existing.id ? { ...e, progress, completedChapters: Array.from(completed), timeSpentMinutes: e.timeSpentMinutes + mins, completedAt: progress >= 100 ? now() : e.completedAt } : e)
-      : [{ id: uid("ENR"), courseId: playCourse.id, userId: currentUser.id, assignedBy: currentUser.id, dueAt: null, priority: "Medium" as const, mandatory: false, progress, completedChapters: Array.from(completed), timeSpentMinutes: mins, startedAt: now(), completedAt: progress >= 100 ? now() : null }, ...data.enrollments];
+      ? data.enrollments.map((e) => e.id === existing.id ? {
+        ...e,
+        progress,
+        completedChapters: Array.from(completed),
+        timeSpentSeconds: (e.timeSpentSeconds || 0) + seconds,
+        timeSpentMinutes: Math.ceil(((e.timeSpentSeconds || 0) + seconds) / 60),
+        chapterTimeSpentSeconds: seconds > 0 ? { ...(e.chapterTimeSpentSeconds || {}), [chId]: ((e.chapterTimeSpentSeconds || {})[chId] || 0) + seconds } : e.chapterTimeSpentSeconds,
+        completedAt: progress >= 100 ? now() : e.completedAt,
+      } : e)
+      : [{ id: uid("ENR"), courseId: playCourse.id, userId: currentUser.id, assignedBy: currentUser.id, dueAt: null, priority: "Medium" as const, mandatory: false, progress, completedChapters: Array.from(completed), timeSpentMinutes: Math.ceil(seconds / 60), timeSpentSeconds: seconds, chapterTimeSpentSeconds: seconds > 0 ? { [chId]: seconds } : {}, startedAt: now(), completedAt: progress >= 100 ? now() : null }, ...data.enrollments];
     setData(addAudit({ ...data, enrollments }, "Completed chapter", chId));
+    if (seconds > 0) {
+      apiFetch(`/courses/${playCourse.id}/chapters/${chId}/time`, {
+        method: "POST",
+        body: JSON.stringify({ seconds }),
+      }).catch(() => {});
+    }
   };
-  const handlePdfViewed = (mins: number) => {
+  const handleChapterTime = (chId: string, seconds: number) => {
     if (!playCourse) return;
+    if (seconds <= 0) return;
     const existing = data.enrollments.find((e) => e.courseId === playCourse.id && e.userId === currentUser.id);
     const enrollments = existing
-      ? data.enrollments.map((e) => e.id === existing.id ? { ...e, timeSpentMinutes: e.timeSpentMinutes + mins } : e)
-      : [{ id: uid("ENR"), courseId: playCourse.id, userId: currentUser.id, assignedBy: currentUser.id, dueAt: null, priority: "Medium" as const, mandatory: false, progress: 0, completedChapters: [], timeSpentMinutes: mins, startedAt: now(), completedAt: null }, ...data.enrollments];
-    setData(addAudit({ ...data, enrollments }, "Viewed PDF", playCourse.id));
+      ? data.enrollments.map((e) => e.id === existing.id ? {
+        ...e,
+        timeSpentSeconds: (e.timeSpentSeconds || 0) + seconds,
+        timeSpentMinutes: Math.ceil(((e.timeSpentSeconds || 0) + seconds) / 60),
+        chapterTimeSpentSeconds: { ...(e.chapterTimeSpentSeconds || {}), [chId]: ((e.chapterTimeSpentSeconds || {})[chId] || 0) + seconds },
+      } : e)
+      : [{ id: uid("ENR"), courseId: playCourse.id, userId: currentUser.id, assignedBy: currentUser.id, dueAt: null, priority: "Medium" as const, mandatory: false, progress: 0, completedChapters: [], timeSpentMinutes: Math.ceil(seconds / 60), timeSpentSeconds: seconds, chapterTimeSpentSeconds: { [chId]: seconds }, startedAt: now(), completedAt: null }, ...data.enrollments];
+    setData({ ...data, enrollments });
+    apiFetch(`/courses/${playCourse.id}/chapters/${chId}/time`, {
+      method: "POST",
+      body: JSON.stringify({ seconds }),
+    }).catch(() => {});
   };
   const handleFeedback = (fb: ChapterFeedback) => setData(addAudit({ ...data, chapterFeedbacks: [fb, ...data.chapterFeedbacks] }, "Submitted feedback", fb.chapterId));
   const handleAttempt = (att: any) => {
     const next = addAudit({ ...data, attempts: [att, ...data.attempts] }, "Submitted assessment", att.assessmentId);
+    const assessmentSeconds = att.timeSpentSeconds || 0;
+    if (assessmentSeconds > 0) {
+      next.enrollments = next.enrollments.map((enrollment) => enrollment.courseId === att.courseId && enrollment.userId === att.userId ? {
+        ...enrollment,
+        timeSpentSeconds: (enrollment.timeSpentSeconds || 0) + assessmentSeconds,
+        timeSpentMinutes: Math.ceil(((enrollment.timeSpentSeconds || 0) + assessmentSeconds) / 60),
+      } : enrollment);
+    }
     if (att.status === "Passed") {
       const skill = data.courses.find((c) => c.id === att.courseId)?.skill;
       if (skill) {
@@ -713,6 +870,7 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
                     <Input label="Chapter title" value={chapterForm.title} onChange={(v) => setChapterForm({ ...chapterForm, title: v })} />
                     <Select label="Content type" value={chapterForm.contentType} values={["Rich Text", "PDF", "Video Link"]} onChange={(v) => setChapterForm({ ...chapterForm, contentType: v, fileName: v === "PDF" ? chapterForm.fileName : "", url: v === "PDF" || v === "Video Link" ? chapterForm.url : "" })} />
                     <Input label="Duration (min)" value={chapterForm.durationMinutes} onChange={(v) => setChapterForm({ ...chapterForm, durationMinutes: v })} type="number" />
+                    <Input label="Minimum required time (min)" value={chapterForm.minimumTimeMinutes} onChange={(v) => setChapterForm({ ...chapterForm, minimumTimeMinutes: v })} type="number" />
                     {chapterForm.contentType === "Video Link" && <Input label="Video URL" value={chapterForm.url} onChange={(v) => setChapterForm({ ...chapterForm, url: v })} />}
                     {chapterForm.contentType === "PDF" && (
                       <label className="space-y-2 text-sm text-slate-400"><span>Upload PDF</span>
@@ -776,7 +934,7 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
             feedbacks={data.chapterFeedbacks.filter((f) => f.courseId === playCourse.id)}
             currentUser={currentUser}
             onProgress={handleProgress}
-            onPdfViewed={handlePdfViewed}
+            onChapterTime={handleChapterTime}
             onFeedback={handleFeedback}
             onAttempt={handleAttempt}
             onClose={() => setPlayCourse(null)}

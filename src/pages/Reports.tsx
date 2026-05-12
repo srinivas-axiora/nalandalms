@@ -12,6 +12,14 @@ function csvEscape(value: string | number | null | undefined) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
+function formatDuration(seconds = 0) {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  return hours > 0 ? `${hours}h ${String(minutes).padStart(2, "0")}m` : `${minutes}m ${String(secs).padStart(2, "0")}s`;
+}
+
 export default function Reports({ data, currentUser }: { data: AppData; currentUser: User }) {
   const earliestDate = data.users.map((user) => user.joinedAt).sort()[0] || new Date().toISOString().slice(0, 10);
   const [reportType, setReportType] = useState<ReportType>("Audit trail");
@@ -60,7 +68,12 @@ export default function Reports({ data, currentUser }: { data: AppData; currentU
         .map((item) => {
           const user = data.users.find((candidate) => candidate.id === item.userId);
           const course = data.courses.find((courseItem) => courseItem.id === item.courseId);
-          return { Employee: user?.name, Team: user?.team, Course: course?.title, Skill: course?.skill, Progress: `${item.progress}%`, TimeMinutes: item.timeSpentMinutes, DueDate: item.dueAt || "None", CompletedAt: item.completedAt || "Pending" };
+          const chapterBreakdown = Object.entries(item.chapterTimeSpentSeconds || {}).map(([chapterId, seconds]) => {
+            const chapter = data.chapters.find((candidate) => candidate.id === chapterId);
+            return `${chapter?.title || chapterId}: ${formatDuration(seconds)}`;
+          }).join("; ");
+          const assessmentSeconds = data.attempts.filter((attempt) => attempt.userId === item.userId && attempt.courseId === item.courseId).reduce((sum, attempt) => sum + (attempt.timeSpentSeconds || 0), 0);
+          return { Employee: user?.name, Team: user?.team, Course: course?.title, Skill: course?.skill, Progress: `${item.progress}%`, CourseTime: formatDuration(item.timeSpentSeconds || item.timeSpentMinutes * 60 || 0), ChapterTime: chapterBreakdown || "None", AssessmentTime: formatDuration(assessmentSeconds), DueDate: item.dueAt || "None", CompletedAt: item.completedAt || "Pending" };
         });
     }
     if (reportType === "Assessment outcomes") {
@@ -69,7 +82,9 @@ export default function Reports({ data, currentUser }: { data: AppData; currentU
         .map((item) => {
           const user = data.users.find((candidate) => candidate.id === item.userId);
           const assessment = data.assessments.find((assessmentItem) => assessmentItem.id === item.assessmentId);
-          return { Employee: user?.name, Team: user?.team, Assessment: assessment?.title, Status: item.status, Score: item.score ?? "Pending", MaxScore: item.maxScore, SubmittedAt: item.submittedAt || "Pending" };
+          const chapter = data.chapters.find((chapterItem) => chapterItem.id === item.chapterId);
+          const course = data.courses.find((courseItem) => courseItem.id === item.courseId);
+          return { Employee: user?.name, Team: user?.team, Course: course?.title, Chapter: chapter?.title, Assessment: assessment?.title, Status: item.status, Score: item.score ?? "Pending", MaxScore: item.maxScore, TimeSpent: formatDuration(item.timeSpentSeconds || 0), SubmittedAt: item.submittedAt || "Pending" };
         });
     }
     if (reportType === "Skill coverage") {
@@ -91,7 +106,8 @@ export default function Reports({ data, currentUser }: { data: AppData; currentU
 
   const chart = useMemo(() => {
     const grouped = rows.reduce<Record<string, number>>((acc, row) => {
-      const key = String(row.Team || row.Action || row.Status || row.Mandatory || "Records");
+      const r = row as Record<string, any>;
+      const key = String(r.Team || r.Action || r.Status || r.Mandatory || "Records");
       acc[key] = (acc[key] || 0) + 1;
       return acc;
     }, {});
@@ -102,7 +118,7 @@ export default function Reports({ data, currentUser }: { data: AppData; currentU
   const headers = rows[0] ? Object.keys(rows[0]) : ["No data"];
 
   const exportCsv = () => {
-    const csv = [headers.join(","), ...rows.map((row) => headers.map((header) => csvEscape(row[header])).join(","))].join("\n");
+    const csv = [headers.join(","), ...rows.map((row) => headers.map((header) => csvEscape((row as Record<string, any>)[header])).join(","))].join("\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     const link = document.createElement("a");
     link.href = url;
@@ -150,7 +166,7 @@ export default function Reports({ data, currentUser }: { data: AppData; currentU
             <table className="min-w-full text-left text-sm">
               <thead className="sticky top-0 bg-slate-950 text-xs uppercase tracking-[0.18em] text-slate-500"><tr>{headers.map((header) => <th key={header} className="px-4 py-3">{header}</th>)}</tr></thead>
               <tbody className="divide-y divide-white/10">
-                {rows.slice(0, 80).map((row, index) => <tr key={index} className="text-slate-300">{headers.map((header) => <td key={header} className="px-4 py-3">{String(row[header] ?? "")}</td>)}</tr>)}
+                {rows.slice(0, 80).map((row, index) => <tr key={index} className="text-slate-300">{headers.map((header) => <td key={header} className="px-4 py-3">{String((row as Record<string, any>)[header] ?? "")}</td>)}</tr>)}
                 {!rows.length && <tr><td className="px-4 py-6 text-slate-500">No records found for this report.</td></tr>}
               </tbody>
             </table>

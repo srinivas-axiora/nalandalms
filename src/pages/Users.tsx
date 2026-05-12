@@ -5,6 +5,7 @@ import { Panel, Modal, StatusPill, Input, Select, Avatar, Metric, DeleteConfirmM
 import type { AppData, User, Role, Status, ArchivedRecord } from "../types";
 import { isAdminRole, now, uid } from "../types";
 import { toast } from "../toast";
+import { apiFetch } from "../api";
 
 type Tab = "employees" | "hierarchy" | "skills" | "bulk" | "access";
 type EmployeeForm = {
@@ -88,6 +89,16 @@ function managerName(users: User[], managerId: string | null) {
   return users.find((user) => user.id === managerId)?.name || "Unknown";
 }
 
+async function assertApiOk(res: Response) {
+  if (res.ok) return;
+  let message = "User change was not saved to the backend.";
+  try {
+    const data = await res.json();
+    message = typeof data.error === "string" ? data.error : message;
+  } catch {}
+  throw new Error(message);
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className="space-y-2 text-sm text-slate-400"><span>{label}</span>{children}</label>;
 }
@@ -132,7 +143,7 @@ export default function Users({ data, currentUser, setData }: { data: AppData; c
     audit: [{ id: uid("AUD"), actorId: currentUser.id, action, entity, at: now() }, ...d.audit],
   });
 
-  const saveEmployee = (event: FormEvent) => {
+  const saveEmployee = async (event: FormEvent) => {
     event.preventDefault();
     if (!form.employeeId.trim() || !form.name.trim() || !form.email.trim()) return;
     const baseUser = {
@@ -150,6 +161,15 @@ export default function Users({ data, currentUser, setData }: { data: AppData; c
     };
 
     if (editing) {
+      try {
+        await assertApiOk(await apiFetch(`/users/${editing.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ ...baseUser, joinedAt: form.dateOfJoining }),
+        }));
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "Could not update employee.");
+        return;
+      }
       let nextData = addAudit({
         ...data,
         users: data.users.map((user) => user.id === editing.id ? { ...user, ...baseUser } : user),
@@ -165,6 +185,15 @@ export default function Users({ data, currentUser, setData }: { data: AppData; c
     } else {
       if (data.users.some((user) => user.id === form.employeeId)) return;
       const newUser: User = { id: form.employeeId, lastActive: "Never", preferences: { theme: "dark", language: "en", emailNotifications: true, pushNotifications: true, weeklyDigest: true, courseReminders: true, fontSize: "medium", reducedMotion: false, highContrast: false }, ...baseUser };
+      try {
+        await assertApiOk(await apiFetch("/users", {
+          method: "POST",
+          body: JSON.stringify({ id: form.employeeId, ...baseUser, joinedAt: form.dateOfJoining }),
+        }));
+      } catch (error) {
+        toast(error instanceof Error ? error.message : "Could not create employee.");
+        return;
+      }
       setData(addAudit({ ...data, users: [newUser, ...data.users] }, "Created employee", newUser.id));
       toast("Employee created successfully");
     }
@@ -180,7 +209,17 @@ export default function Users({ data, currentUser, setData }: { data: AppData; c
     setOpen(true);
   };
 
-  const patch = (id: string, patchData: Partial<User>, action = "Updated employee") => {
+  const patch = async (id: string, patchData: Partial<User>, action = "Updated employee") => {
+    try {
+      const statusOnly = patchData.status !== undefined && Object.keys(patchData).length === 1;
+      await assertApiOk(await apiFetch(statusOnly ? `/users/${id}/status` : `/users/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(patchData),
+      }));
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not update employee.");
+      return;
+    }
     let nextData = addAudit({ ...data, users: data.users.map((user) => user.id === id ? { ...user, ...patchData } : user) }, action, id);
     // Increment sessionVersion when deactivating to immediately revoke active sessions
     if (patchData.status === "Inactive") {
@@ -193,8 +232,17 @@ export default function Users({ data, currentUser, setData }: { data: AppData; c
     else if (action.includes("Activated")) toast("Employee activated successfully");
   };
 
-  const handleDeleteUser = (comment: string) => {
+  const handleDeleteUser = async (comment: string) => {
     if (!deleteTarget) return;
+    try {
+      await assertApiOk(await apiFetch(`/users/${deleteTarget.id}`, {
+        method: "DELETE",
+        body: JSON.stringify({ deletionComment: comment }),
+      }));
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not delete user.");
+      return;
+    }
     const archived: ArchivedRecord = {
       id: uid("ARC"),
       entityType: "User",

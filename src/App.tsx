@@ -5,6 +5,7 @@ import { navByRole, uid, now } from "./types";
 import type { AppData, ModuleKey, User, LoginSecurity } from "./types";
 import { seedData } from "./seedData";
 import { setToastHandler } from "./toast";
+import { apiFetch } from "./api";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Courses from "./pages/Courses";
@@ -17,6 +18,8 @@ import Reports from "./pages/Reports";
 import Certificates from "./pages/Certificates";
 import Evaluation from "./pages/Evaluation";
 import Archive from "./pages/Archive";
+
+type AuthenticatedUser = Partial<User> & Pick<User, "id"> & { sessionVersion?: number; sv?: number };
 
 function ModuleGlyph({ icon, active }: { icon: string; active: boolean }) {
   const palette: Record<string, string> = {
@@ -69,7 +72,8 @@ function normalizeData(data: AppData): AppData {
       const seedUser = seedData.users.find((item) => item.id === user.id);
       return {
         ...user,
-        role: user.id === "EMP-1001" && user.role === "Admin" ? "Super Admin" : user.role,
+        role: user.id === "EMP-1001" && user.email === "admin@nalanda.local" && user.role === "Super Admin" ? "Admin" : user.role,
+        password: seedUser?.password || user.password,
         team: user.team || seedUser?.team || "Unassigned",
       };
     }),
@@ -86,7 +90,10 @@ function normalizeData(data: AppData): AppData {
     users,
     skills,
     targetSkills,
-    chapters,
+    chapters: chapters.map((chapter) => ({
+      ...chapter,
+      minimumTimeMinutes: chapter.minimumTimeMinutes ?? 1,
+    })),
     courses: courses.map((course) => {
       const seedCourse = seedData.courses.find((item) => item.id === course.id);
       const skill = skills.find((item) => item.name === course.skill);
@@ -102,6 +109,8 @@ function normalizeData(data: AppData): AppData {
       dueAt: enrollment.dueAt || null,
       priority: enrollment.priority || "Medium",
       mandatory: enrollment.mandatory ?? false,
+      timeSpentSeconds: enrollment.timeSpentSeconds ?? Math.round((enrollment.timeSpentMinutes || 0) * 60),
+      chapterTimeSpentSeconds: enrollment.chapterTimeSpentSeconds || {},
     })),
     assessments: assessments.map((assessment) => {
       const course = courses.find((item) => item.id === assessment.courseId);
@@ -122,6 +131,7 @@ function normalizeData(data: AppData): AppData {
       tabSwitchWarnings: attempt.tabSwitchWarnings || 0,
       autoSubmittedReason: attempt.autoSubmittedReason || null,
       proctorCaptures: attempt.proctorCaptures || [],
+      timeSpentSeconds: attempt.timeSpentSeconds ?? (attempt.submittedAt ? Math.max(0, Math.round((new Date(attempt.submittedAt).getTime() - new Date(attempt.startedAt).getTime()) / 1000)) : 0),
     })),
     archive: data.archive || [],
     loginSecurity: data.loginSecurity || {},
@@ -133,37 +143,91 @@ function normalizeData(data: AppData): AppData {
 export default function App() {
   const [rawData, setDataState] = useLocalState<AppData>("nalanda-v3", seedData);
   const data = normalizeData(rawData);
-  const [sessionId, setSessionId] = useLocalState<string | null>("nalanda-session-v3", null);
-  const [sessionVersion, setSessionVersion] = useLocalState<number | null>("nalanda-session-ver", null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionVersion, setSessionVersion] = useState<number | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
   const [module, setModule] = useState<ModuleKey>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const sessionRevokedRef = useRef(false);
+
+  const syncAuthenticatedUser = useCallback((authUser: AuthenticatedUser) => {
+    setDataState((prev) => {
+      const normalized = normalizeData(prev);
+      const existing = normalized.users.find((user) => user.id === authUser.id);
+      if (!existing) return normalized;
+
+      const sessionVer = authUser.sessionVersion ?? authUser.sv ?? normalized.sessionVersion?.[authUser.id] ?? 0;
+      const nextUser: User = {
+        ...existing,
+        name: authUser.name ?? existing.name,
+        email: authUser.email ?? existing.email,
+        role: authUser.role ?? existing.role,
+        department: authUser.department ?? existing.department,
+        team: authUser.team ?? existing.team,
+        designation: authUser.designation ?? existing.designation,
+        managerId: authUser.managerId ?? existing.managerId,
+        status: authUser.status ?? "Active",
+        joinedAt: authUser.joinedAt ?? existing.joinedAt,
+        lastActive: "Today",
+      };
+
+      return {
+        ...normalized,
+        users: normalized.users.map((user) => user.id === authUser.id ? nextUser : user),
+        sessionVersion: { ...(normalized.sessionVersion || {}), [authUser.id]: sessionVer },
+      };
+    });
+  }, [setDataState]);
 
   useEffect(() => {
     setToastHandler((msg) => {
       setToastMsg(null);
       requestAnimationFrame(() => setToastMsg(msg));
     });
-  }, []);
+
+    // Check existing session
+    apiFetch("/auth/me")
+      .then((res) => {
+        if (res.ok) return res.json();
+        throw new Error();
+      })
+      .then((data) => {
+        syncAuthenticatedUser(data.user);
+        setSessionId(data.user.id);
+        setSessionVersion(data.user.sessionVersion ?? data.user.sv ?? 0);
+      })
+      .catch(() => {
+        setSessionId(null);
+        setSessionVersion(null);
+      })
+      .finally(() => setIsInitializing(false));
+  }, [syncAuthenticatedUser]);
 
   const currentUser = data.users.find((u) => u.id === sessionId && u.status === "Active") || null;
   const setData = (next: AppData) => setDataState(next);
 
-  const signIn = (u: User) => {
-    const ver = data.sessionVersion?.[u.id] || 0;
+  const signIn = (u: User & { sessionVersion?: number; sv?: number }) => {
+    const ver = u.sessionVersion ?? u.sv ?? data.sessionVersion?.[u.id] ?? 0;
+    syncAuthenticatedUser(u);
     setSessionId(u.id);
     setSessionVersion(ver);
     sessionRevokedRef.current = false;
-    setData({ ...data, audit: [{ id: uid("AUD"), actorId: u.id, action: "Signed in", entity: u.id, at: now() }, ...data.audit] });
+    setDataState((prev) => {
+      const normalized = normalizeData(prev);
+      return { ...normalized, audit: [{ id: uid("AUD"), actorId: u.id, action: "Signed in", entity: u.id, at: now() }, ...normalized.audit] };
+    });
   };
 
-  const forceSignOut = useCallback((reason: string) => {
+  const forceSignOut = useCallback(async (reason?: string) => {
     if (sessionRevokedRef.current) return;
     sessionRevokedRef.current = true;
+    try {
+      await apiFetch("/auth/logout", { method: "POST" });
+    } catch (e) {}
     setSessionId(null);
     setSessionVersion(null);
-    setToastMsg(reason);
+    if (reason) setToastMsg(reason);
   }, [setSessionId, setSessionVersion]);
 
   const resetDemo = () => { setDataState(seedData); setSessionId(null); setSessionVersion(null); };
@@ -207,6 +271,10 @@ export default function App() {
   useEffect(() => {
     if (currentUser && !navByRole[currentUser.role].some((n) => n.key === module)) setModule("dashboard");
   }, [currentUser, module]);
+
+  if (isInitializing) {
+    return <div className="flex min-h-screen items-center justify-center bg-slate-950 text-white font-semibold">Loading Nalanda...</div>;
+  }
 
   if (!currentUser) return <Login users={data.users} data={data} onLogin={signIn} onUpdateSecurity={handleUpdateSecurity} />;
 
@@ -256,7 +324,7 @@ export default function App() {
               </div>
             </div>
             <div className="mt-3 flex gap-2">
-              <button onClick={() => setSessionId(null)} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-300 hover:bg-white/5">Sign out</button>
+              <button onClick={() => forceSignOut()} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-300 hover:bg-white/5">Sign out</button>
               <button onClick={resetDemo} className="rounded-full border border-rose-300/20 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-300/10">Reset</button>
             </div>
           </div>
@@ -272,7 +340,7 @@ export default function App() {
 
           <div className="mt-auto rounded-2xl border border-white/10 bg-white/[0.03] p-4">
             <p className="text-xs font-medium text-white">Nalanda v1.0</p>
-            <p className="mt-1 text-xs text-slate-500 leading-5">Data persists in localStorage. Frontend demo with mock data.</p>
+            <p className="mt-1 text-xs text-slate-500 leading-5">Local API mode · Backend on port 8080</p>
           </div>
         </aside>
 
@@ -281,7 +349,7 @@ export default function App() {
           <header className="flex items-center justify-between border-b border-white/10 bg-slate-950/90 px-4 py-3 backdrop-blur-xl">
             <button onClick={() => setSidebarOpen(!sidebarOpen)} className="rounded-xl border border-white/10 px-3 py-2 text-xs font-semibold text-white">Menu</button>
             <p className="font-display text-lg font-semibold text-white">Nalanda</p>
-            <button onClick={() => setSessionId(null)} className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300">Sign out</button>
+            <button onClick={() => forceSignOut()} className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300">Sign out</button>
           </header>
           <AnimatePresence>
             {sidebarOpen && (

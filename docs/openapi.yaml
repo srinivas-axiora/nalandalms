@@ -18,7 +18,9 @@ components:
       type: object
       required: [email, password]
       properties:
-        email: { type: string, format: email }
+        email:
+          type: string
+          description: Login ID. Use "Super Admin" for the Super Admin account; all other users use their email address.
         password: { type: string }
     User:
       type: object
@@ -26,10 +28,11 @@ components:
         id: { type: string }
         name: { type: string }
         email: { type: string }
-        role: { type: string, enum: [Admin, Manager, User] }
+        role: { type: string, enum: [Super Admin, Admin, Manager, Employee] }
         department: { type: string }
         managerId: { type: string, nullable: true }
         status: { type: string, enum: [Active, Inactive] }
+        sessionVersion: { type: integer, description: Incremented to revoke stale JWTs after deactivation or deletion. }
     Course:
       type: object
       properties:
@@ -49,9 +52,34 @@ components:
         id: { type: string }
         title: { type: string }
         courseId: { type: string }
-        type: { type: string, enum: [MCQ, Descriptive, Timed Quiz] }
+        chapterId: { type: string, nullable: true }
+        type: { type: string, enum: [MCQ, Descriptive, Timed Quiz, Mixed] }
         strictMode: { type: boolean }
         approval: { type: string, enum: [Pending, Approved, Rejected] }
+        timeSpentSeconds: { type: integer, description: Elapsed time captured on the submitted attempt. }
+    Chapter:
+      type: object
+      properties:
+        id: { type: string }
+        courseId: { type: string }
+        sequence: { type: integer }
+        title: { type: string }
+        contentType: { type: string, enum: [Rich Text, PDF, Video Link] }
+        durationMinutes: { type: integer }
+        minimumTimeMinutes:
+          type: integer
+          description: Minimum required learner time before the chapter gate is met.
+    LearningTimeRow:
+      type: object
+      properties:
+        userId: { type: string }
+        courseId: { type: string }
+        chapterId: { type: string, nullable: true }
+        minimumTimeSeconds: { type: integer }
+        minimumTimeMet: { type: boolean }
+        chapterTimeSeconds: { type: integer }
+        assessmentTimeSeconds: { type: integer }
+        courseTimeSeconds: { type: integer }
 paths:
   /health:
     get:
@@ -71,6 +99,7 @@ paths:
       responses:
         "200": { description: Authenticated }
         "401": { description: Invalid credentials }
+        "403": { description: Invalid CSRF token or account lockout }
   /auth/me:
     get:
       summary: Current authenticated user
@@ -104,10 +133,28 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        "200": { description: User updated }
+        "200": { description: User updated; deactivation increments sessionVersion and revokes existing JWTs }
+    delete:
+      summary: Permanently delete and archive a user; Super Admin only
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deletionComment]
+              properties:
+                deletionComment: { type: string, minLength: 10 }
+      responses:
+        "200": { description: User deleted; future API access with that token is rejected }
   /users/{id}/status:
     patch:
-      summary: Inactivate or reactivate user without deleting records
+      summary: Inactivate or reactivate user without deleting records; deactivation revokes existing JWTs
       parameters:
         - in: path
           name: id
@@ -154,6 +201,44 @@ paths:
           schema: { type: string }
       responses:
         "200": { description: Course reviewed }
+  /courses/{courseId}/chapters:
+    get:
+      summary: List chapters for a course, including minimum-time requirements
+      parameters:
+        - in: path
+          name: courseId
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Chapter list }
+    post:
+      summary: Create a chapter with a minimum required time gate
+      parameters:
+        - in: path
+          name: courseId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Chapter' }
+      responses:
+        "201": { description: Chapter created }
+  /courses/{courseId}/chapters/{chapterId}:
+    put:
+      summary: Update chapter content or minimum required time
+      parameters:
+        - in: path
+          name: courseId
+          required: true
+          schema: { type: string }
+        - in: path
+          name: chapterId
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Chapter updated }
   /assignments:
     post:
       summary: Assign course to individuals or teams
@@ -190,14 +275,28 @@ paths:
         "201": { description: Attempt started }
   /assessments/attempts/{attemptId}/submit:
     post:
-      summary: Submit answers and calculate MCQ score or queue manual review
+      summary: Submit answers, calculate MCQ score or queue manual review, and persist assessment time
       parameters:
         - in: path
           name: attemptId
           required: true
           schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                answers: { type: object }
+                selectedQuestionIds:
+                  type: array
+                  items: { type: string }
+                tabSwitchWarnings: { type: integer, minimum: 0 }
+                autoSubmittedReason: { type: string, nullable: true }
+                timeSpentSeconds: { type: integer, minimum: 0 }
       responses:
-        "200": { description: Attempt submitted }
+        "200": { description: Attempt submitted; course and assessment time totals updated }
   /proctoring/events:
     post:
       summary: Append proctoring events such as tab switch, noise, camera off, or fullscreen exit
@@ -213,16 +312,64 @@ paths:
       summary: Manager team analytics
       responses:
         "200": { description: Analytics returned }
+  /analytics/time:
+    get:
+      summary: Time spent by employee on chapters, assessments, and courses
+      responses:
+        "200":
+          description: Learning time rows returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/LearningTimeRow' }
+                  summary:
+                    type: object
+                    properties:
+                      chapterTimeSeconds: { type: integer }
+                      assessmentTimeSeconds: { type: integer }
+                      courseTimeSeconds: { type: integer }
+  /analytics/time/events:
+    get:
+      summary: Recent raw chapter and assessment time events for audit/reporting
+      responses:
+        "200": { description: Learning time events returned }
   /analytics/me:
     get:
       summary: User learning analytics
       responses:
         "200": { description: Analytics returned }
+  /courses/{courseId}/chapters/{chapterId}/time:
+    post:
+      summary: Add tracked chapter time in seconds for the authenticated learner and return gate totals
+      parameters:
+        - in: path
+          name: courseId
+          required: true
+          schema: { type: string }
+        - in: path
+          name: chapterId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [seconds]
+              properties:
+                seconds: { type: integer, minimum: 1 }
+      responses:
+        "200": { description: Time added; response includes per-chapter, course, assessment, and minimum-time gate totals }
   /reports/export:
     post:
-      summary: Queue PDF or Excel report export
+      summary: Queue PDF or Excel report export with course, chapter, and assessment time totals
       responses:
-        "202": { description: Report queued or ready }
+        "202": { description: Report queued or ready; response includes timing summary and export rows }
   /settings:
     get:
       summary: Read proctoring and security settings

@@ -1,10 +1,17 @@
 import { useMemo } from "react";
 import { motion } from "framer-motion";
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, Radar, RadarChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Panel, Metric, ProgressBar, StatusPill, Avatar, cn } from "../components";
+import { Panel, Metric, ProgressBar, StatusPill, Avatar } from "../components";
 import type { AppData, User } from "../types";
 import { isAdminRole } from "../types";
 import { colors } from "../types";
+
+function formatDuration(seconds = 0) {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  return hours > 0 ? `${hours}h ${String(minutes).padStart(2, "0")}m` : `${minutes}m`;
+}
 
 export default function Dashboard({ data, currentUser }: { data: AppData; currentUser: User }) {
   const teamIds = useMemo(() => data.users.filter((u) => u.managerId === currentUser.id).map((u) => u.id), [data.users, currentUser.id]);
@@ -13,8 +20,6 @@ export default function Dashboard({ data, currentUser }: { data: AppData; curren
   const completion = vis.length ? Math.round(vis.reduce((s, e) => s + e.progress, 0) / vis.length) : 0;
   const approved = data.courses.filter((c) => c.approval === "Approved" && c.status === "Active").length;
   const pending = data.courses.filter((c) => c.approval === "Pending").length + data.assessments.filter((a) => a.approval === "Pending").length;
-  const avgScore = data.attempts.filter((a) => visibleIds.includes(a.userId) && a.score !== null);
-  const score = avgScore.length ? Math.round(avgScore.reduce((s, a) => s + (a.score || 0), 0) / avgScore.length) : 0;
 
   const monthly = ["Aug", "Sep", "Oct", "Nov", "Dec", "Jan"].map((m, i) => ({ month: m, completions: 430 + i * 160, hours: 900 + i * 290, score: Math.min(96, 70 + i * 4) }));
   const skillRows = ["Security", "Leadership", "Analytics", "Communication", "Compliance"].map((s) => ({ name: s, value: data.skillRatings.filter((r) => r.skill === s && visibleIds.includes(r.userId)).reduce((a, r) => a + r.score, 0) || 10 }));
@@ -24,6 +29,20 @@ export default function Dashboard({ data, currentUser }: { data: AppData; curren
   });
 
   const recentEnrollments = vis.slice(0, 4);
+  const totalCourseSeconds = vis.reduce((sum, enrollment) => sum + (enrollment.timeSpentSeconds || enrollment.timeSpentMinutes * 60 || 0), 0);
+  const visibleAttempts = data.attempts.filter((attempt) => visibleIds.includes(attempt.userId));
+  const totalAssessmentSeconds = visibleAttempts.reduce((sum, attempt) => sum + (attempt.timeSpentSeconds || 0), 0);
+  const timeRows = vis.flatMap((enrollment) => {
+    const user = data.users.find((item) => item.id === enrollment.userId);
+    const course = data.courses.find((item) => item.id === enrollment.courseId);
+    return Object.entries(enrollment.chapterTimeSpentSeconds || {}).map(([chapterId, seconds]) => {
+      const chapter = data.chapters.find((item) => item.id === chapterId);
+      const assessmentSeconds = visibleAttempts
+        .filter((attempt) => attempt.userId === enrollment.userId && attempt.courseId === enrollment.courseId && attempt.chapterId === chapterId)
+        .reduce((sum, attempt) => sum + (attempt.timeSpentSeconds || 0), 0);
+      return { user, course, chapter, chapterSeconds: seconds, assessmentSeconds, courseSeconds: enrollment.timeSpentSeconds || enrollment.timeSpentMinutes * 60 || 0 };
+    });
+  }).sort((a, b) => b.courseSeconds - a.courseSeconds).slice(0, 8);
 
   return (
     <div className="space-y-6">
@@ -42,7 +61,7 @@ export default function Dashboard({ data, currentUser }: { data: AppData; curren
           <div className="grid gap-3 sm:grid-cols-2">
             <Metric label={currentUser.role === "Employee" ? "My progress" : "Active users"} value={currentUser.role === "Employee" ? `${completion}%` : String(data.users.filter((u) => u.status === "Active").length)} helper="Platform engagement" />
             <Metric label="Avg completion" value={`${completion}%`} helper="Across enrollments" tone="green" />
-            <Metric label="Approved courses" value={String(approved)} helper="Ready for assignment" tone="violet" />
+            <Metric label="Learning time" value={formatDuration(totalCourseSeconds)} helper="Course total" tone="violet" />
             <Metric label="Pending actions" value={String(pending)} helper="Awaiting approval" tone="amber" />
           </div>
         </div>
@@ -108,6 +127,25 @@ export default function Dashboard({ data, currentUser }: { data: AppData; curren
                 </div>
               );
             })}
+          </div>
+        </Panel>
+      )}
+
+      {currentUser.role !== "Employee" && (
+        <Panel title="Time spent by employee" kicker="Chapter and assessment analytics">
+          <div className="mb-4 grid gap-3 md:grid-cols-3">
+            <Metric label="Course time" value={formatDuration(totalCourseSeconds)} helper="Chapter + assessment time" tone="cyan" />
+            <Metric label="Assessment time" value={formatDuration(totalAssessmentSeconds)} helper="Submitted attempts" tone="violet" />
+            <Metric label="Tracked chapters" value={String(timeRows.length)} helper="Visible records" tone="green" />
+          </div>
+          <div className="overflow-x-auto rounded-3xl border border-white/10">
+            <table className="min-w-[860px] text-left text-sm">
+              <thead className="text-xs uppercase tracking-[0.18em] text-slate-500"><tr><th className="px-4 py-3">Employee</th><th className="px-4 py-3">Course</th><th className="px-4 py-3">Chapter</th><th className="px-4 py-3">Chapter time</th><th className="px-4 py-3">Assessment time</th><th className="px-4 py-3">Course total</th></tr></thead>
+              <tbody className="divide-y divide-white/10">
+                {timeRows.map((row) => <tr key={`${row.user?.id}-${row.course?.id}-${row.chapter?.id}`} className="text-slate-300"><td className="px-4 py-3">{row.user?.name}</td><td className="px-4 py-3">{row.course?.title}</td><td className="px-4 py-3">{row.chapter?.title}</td><td className="px-4 py-3">{formatDuration(row.chapterSeconds)}</td><td className="px-4 py-3">{formatDuration(row.assessmentSeconds)}</td><td className="px-4 py-3">{formatDuration(row.courseSeconds)}</td></tr>)}
+                {!timeRows.length && <tr><td className="px-4 py-6 text-slate-500">No tracked learning time yet.</td></tr>}
+              </tbody>
+            </table>
           </div>
         </Panel>
       )}

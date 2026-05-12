@@ -8,7 +8,7 @@ import { now, uid } from "../types";
 
 export default function Chapters({ data, currentUser, setData }: { data: AppData; currentUser: User; setData: (d: AppData) => void }) {
   const [createOpen, setCreateOpen] = useState(false);
-  const [form, setForm] = useState({ courseId: "", title: "", description: "", contentType: "Rich Text" as Chapter["contentType"], body: "", url: "", fileName: "", durationMinutes: "20" });
+  const [form, setForm] = useState({ courseId: "", title: "", description: "", contentType: "Rich Text" as Chapter["contentType"], body: "", url: "", fileName: "", durationMinutes: "20", minimumTimeMinutes: "15" });
 
   const addAudit = (d: AppData, action: string, entity: string): AppData => ({ ...d, audit: [{ id: uid("AUD"), actorId: currentUser.id, action, entity, at: now() }, ...d.audit] });
 
@@ -18,10 +18,10 @@ export default function Chapters({ data, currentUser, setData }: { data: AppData
     e.preventDefault();
     const courseChapters = data.chapters.filter((c) => c.courseId === form.courseId);
     if (courseChapters.length >= 99) return;
-    const ch: Chapter = { id: uid("CH"), courseId: form.courseId, sequence: courseChapters.length + 1, title: form.title, description: form.description, contentType: form.contentType, body: form.body, url: form.url || undefined, fileName: form.fileName || undefined, durationMinutes: Number(form.durationMinutes) };
+    const ch: Chapter = { id: uid("CH"), courseId: form.courseId, sequence: courseChapters.length + 1, title: form.title, description: form.description, contentType: form.contentType, body: form.body, url: form.url || undefined, fileName: form.fileName || undefined, durationMinutes: Number(form.durationMinutes), minimumTimeMinutes: Number(form.minimumTimeMinutes) || Number(form.durationMinutes) || 1 };
     setData(addAudit({ ...data, chapters: [...data.chapters, ch] }, "Created chapter", ch.id));
     setCreateOpen(false);
-    setForm({ courseId: "", title: "", description: "", contentType: "Rich Text", body: "", url: "", fileName: "", durationMinutes: "20" });
+    setForm({ courseId: "", title: "", description: "", contentType: "Rich Text", body: "", url: "", fileName: "", durationMinutes: "20", minimumTimeMinutes: "15" });
   };
 
   const grouped = visibleCourses.map((c) => ({ course: c, chapters: data.chapters.filter((ch) => ch.courseId === c.id).sort((a, b) => a.sequence - b.sequence) }));
@@ -75,6 +75,7 @@ export default function Chapters({ data, currentUser, setData }: { data: AppData
               <Input label="Chapter title" value={form.title} onChange={(v) => setForm({ ...form, title: v })} />
               <Select label="Content type" value={form.contentType} values={["Rich Text", "PDF", "Video Link"]} onChange={(v) => setForm({ ...form, contentType: v })} />
               <Input label="Duration (min)" value={form.durationMinutes} onChange={(v) => setForm({ ...form, durationMinutes: v })} type="number" />
+              <Input label="Minimum required time (min)" value={form.minimumTimeMinutes} onChange={(v) => setForm({ ...form, minimumTimeMinutes: v })} type="number" />
               {form.contentType.includes("Video") && <Input label="Video URL" value={form.url} onChange={(v) => setForm({ ...form, url: v })} />}
               {form.contentType === "PDF" && <Input label="File name" value={form.fileName} onChange={(v) => setForm({ ...form, fileName: v })} />}
               <label className="space-y-2 text-sm text-slate-400 md:col-span-2"><span>Description</span>

@@ -3,6 +3,13 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { Metric, Panel, StatusPill } from "../components";
 import type { AppData, User } from "../types";
 
+function formatDuration(seconds = 0) {
+  const total = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${minutes}m ${String(secs).padStart(2, "0")}s`;
+}
+
 export default function Evaluation({ data, currentUser }: { data: AppData; currentUser: User }) {
   const [team, setTeam] = useState("All");
   const [employeeId, setEmployeeId] = useState("All");
@@ -21,6 +28,7 @@ export default function Evaluation({ data, currentUser }: { data: AppData; curre
   const avgScore = completed.length ? Math.round(completed.reduce((sum, attempt) => sum + (attempt.score || 0), 0) / completed.length) : 0;
   const warningCount = attempts.reduce((sum, attempt) => sum + (attempt.tabSwitchWarnings || 0), 0);
   const autoSubmitted = attempts.filter((attempt) => attempt.autoSubmittedReason).length;
+  const assessmentTime = attempts.reduce((sum, attempt) => sum + (attempt.timeSpentSeconds || 0), 0);
 
   const teamChart = Array.from(new Set(data.users.map((user) => user.team))).map((teamName) => {
     const teamUsers = data.users.filter((user) => user.team === teamName).map((user) => user.id);
@@ -42,11 +50,12 @@ export default function Evaluation({ data, currentUser }: { data: AppData; curre
             </div>
           </Panel>
 
-          <div className="grid gap-4 md:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-5">
             <Metric label="Attempts" value={String(attempts.length)} helper="Matched submissions" tone="cyan" />
             <Metric label="Average" value={`${avgScore}%`} helper="Assessment score" tone="green" />
             <Metric label="Warnings" value={String(warningCount)} helper="Tab/fullscreen violations" tone="amber" />
             <Metric label="Auto submits" value={String(autoSubmitted)} helper="Anti-cheating triggers" tone="violet" />
+            <Metric label="Time spent" value={formatDuration(assessmentTime)} helper="Assessment attempts" tone="cyan" />
           </div>
 
           <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
@@ -68,13 +77,13 @@ export default function Evaluation({ data, currentUser }: { data: AppData; curre
             <Panel title="Assessment completions" kicker="Employee-wise">
               <div className="max-h-80 overflow-auto rounded-3xl border border-white/10">
                 <table className="min-w-full text-left text-sm">
-                  <thead className="sticky top-0 bg-slate-950 text-xs uppercase tracking-[0.18em] text-slate-500"><tr><th className="px-4 py-3">Employee</th><th className="px-4 py-3">Course</th><th className="px-4 py-3">Assessment</th><th className="px-4 py-3">Score</th><th className="px-4 py-3">Warnings</th><th className="px-4 py-3">Status</th></tr></thead>
+                  <thead className="sticky top-0 bg-slate-950 text-xs uppercase tracking-[0.18em] text-slate-500"><tr><th className="px-4 py-3">Employee</th><th className="px-4 py-3">Course</th><th className="px-4 py-3">Assessment</th><th className="px-4 py-3">Score</th><th className="px-4 py-3">Time</th><th className="px-4 py-3">Warnings</th><th className="px-4 py-3">Status</th></tr></thead>
                   <tbody className="divide-y divide-white/10">
                     {attempts.map((attempt) => {
                       const user = data.users.find((item) => item.id === attempt.userId);
                       const course = data.courses.find((item) => item.id === attempt.courseId);
                       const assessment = data.assessments.find((item) => item.id === attempt.assessmentId);
-                      return <tr key={attempt.id} className="text-slate-300"><td className="px-4 py-3">{user?.name}</td><td className="px-4 py-3">{course?.title}</td><td className="px-4 py-3">{assessment?.title}</td><td className="px-4 py-3">{attempt.score}%</td><td className="px-4 py-3">{attempt.tabSwitchWarnings || 0}</td><td className="px-4 py-3"><StatusPill tone={attempt.autoSubmittedReason ? "red" : attempt.status === "Passed" ? "green" : "amber"}>{attempt.autoSubmittedReason ? "Auto submitted" : attempt.status}</StatusPill></td></tr>;
+                      return <tr key={attempt.id} className="text-slate-300"><td className="px-4 py-3">{user?.name}</td><td className="px-4 py-3">{course?.title}</td><td className="px-4 py-3">{assessment?.title}</td><td className="px-4 py-3">{attempt.score}%</td><td className="px-4 py-3">{formatDuration(attempt.timeSpentSeconds || 0)}</td><td className="px-4 py-3">{attempt.tabSwitchWarnings || 0}</td><td className="px-4 py-3"><StatusPill tone={attempt.autoSubmittedReason ? "red" : attempt.status === "Passed" ? "green" : "amber"}>{attempt.autoSubmittedReason ? "Auto submitted" : attempt.status}</StatusPill></td></tr>;
                     })}
                     {!attempts.length && <tr><td className="px-4 py-6 text-slate-500">No attempts found.</td></tr>}
                   </tbody>
