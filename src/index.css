@@ -167,3 +167,37 @@ a, button, input, select, textarea {
 }
 .toast-enter { animation: toast-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 .toast-exit { animation: toast-out 0.3s ease-in forwards; }
+
+.chapter-rich-text {
+  line-height: 1.75;
+}
+.chapter-rich-text h2 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.65rem;
+  color: #f8fafc;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+.chapter-rich-text h2:first-child {
+  margin-top: 0;
+}
+.chapter-rich-text p {
+  margin: 0.7rem 0;
+}
+.chapter-rich-text ul,
+.chapter-rich-text ol {
+  margin: 0.75rem 0 1rem 1.25rem;
+  padding-left: 1rem;
+}
+.chapter-rich-text ul {
+  list-style: disc;
+}
+.chapter-rich-text ol {
+  list-style: decimal;
+}
+.chapter-rich-text li {
+  margin: 0.35rem 0;
+}
+.chapter-rich-text strong {
+  color: #e0f2fe;
+}

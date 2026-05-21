@@ -6,6 +6,7 @@ import { isAdminRole } from "../types";
 import { now, uid } from "../types";
 import { toast } from "../toast";
 import { apiFetch } from "../api";
+import AICopilot from "../components/AICopilot";
 
 const demoPdfDataUrl = "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxMTggPj4Kc3RyZWFtCkJUCi9GMSAyNCBUZgo3MiA3MjAgVGQKKE5hbGFuZGEgQ2hhcHRlciBQREYpIFRqCjAgLTQwIFRkCi9GMSAxNCBUZgooVXBsb2FkIGEgcGRmIGZyb20gdGhlIGFkbWluIGNvdXJzZSBlZGl0b3IgdG8gcmVwbGFjZSB0aGlzIGRlbW8gZG9jdW1lbnQuKSBUagpFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNzQgMDAwMDAgbiAKMDAwMDAwMDQ0MiAwMDAwMCBuIAp0cmFpbGVyCjw8IC9Sb290IDEgMCBSIC9TaXplIDYgPj4Kc3RhcnR4cmVmCjUxMgolJUVPRg==";
 
@@ -25,6 +26,13 @@ function formatDuration(seconds = 0) {
   return hours > 0
     ? `${hours}h ${String(minutes).padStart(2, "0")}m`
     : `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+function sanitizeRichText(html = "") {
+  return html
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
+    .replace(/\son\w+=(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/javascript:/gi, "");
 }
 
 function ProctoredAssessment({ assessment, course, chapter, currentUser, onSubmit, onCancel }: {
@@ -195,6 +203,7 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
   const [showFeedback, setShowFeedback] = useState(false);
   const [showAssessment, setShowAssessment] = useState(false);
   const [showPdf, setShowPdf] = useState(false);
+  const [copilotOpen, setCopilotOpen] = useState(false);
   const [pdfZoom, setPdfZoom] = useState(1);
   const [pdfOpenedAt, setPdfOpenedAt] = useState<number | null>(null);
   const [pdfElapsedSeconds, setPdfElapsedSeconds] = useState(0);
@@ -376,7 +385,10 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
               <p className="mt-2 text-xs text-amber-100/80">{formatDuration(Math.max(0, requiredSeconds - currentChapterSeconds))} remaining before Mark complete and Next chapter are enabled.</p>
             </div>
           )}
-          <div className="mt-6 rounded-2xl border border-white/10 bg-slate-900/50 p-6 text-slate-300 leading-7 min-h-[120px]">{ch.body}</div>
+          <div
+            className="chapter-rich-text mt-6 min-h-[120px] rounded-2xl border border-white/10 bg-slate-900/50 p-6 text-slate-300"
+            dangerouslySetInnerHTML={{ __html: sanitizeRichText(ch.body) }}
+          />
           {ch.contentType === "PDF" && (
             <div className="mt-4 rounded-2xl border border-white/10 bg-slate-900 p-6">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -459,6 +471,16 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
           </motion.div>
         )}
       </AnimatePresence>
+      {/* AI Copilot — context-aware for this chapter */}
+      <AICopilot
+        isOpen={copilotOpen}
+        onToggle={() => setCopilotOpen(o => !o)}
+        context={{
+          courseTitle: course.title,
+          chapterTitle: ch.title,
+          chapterBody: ch.body,
+        }}
+      />
     </Modal>
   );
 }

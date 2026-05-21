@@ -1,6 +1,6 @@
 // Types for the Nalanda L&D Platform
 export type Role = "Super Admin" | "Admin" | "Manager" | "Employee";
-export type ModuleKey = "dashboard" | "my-learning" | "courses" | "chapters" | "assessments" | "team" | "users" | "settings" | "skills" | "reports" | "certificates" | "evaluation" | "archive";
+export type ModuleKey = "dashboard" | "my-learning" | "courses" | "chapters" | "assessments" | "team" | "users" | "settings" | "skills" | "reports" | "certificates" | "evaluation" | "archive" | "ai-generator";
 export type Status = "Active" | "Inactive";
 export type Approval = "Approved" | "Pending" | "Rejected";
 export type AssessmentType = "MCQ" | "Descriptive" | "Mixed";
@@ -60,6 +60,8 @@ export type Course = {
   estimatedHours: number;
   createdAt: string;
   updatedAt: string;
+  generatedBy?: "Acharya";
+  generationDurationMs?: number;
 };
 
 export type Chapter = {
@@ -75,6 +77,8 @@ export type Chapter = {
   durationMinutes: number;
   minimumTimeMinutes?: number;
   isCompleted?: boolean;
+  generatedBy?: "Acharya";
+  generationDurationMs?: number;
 };
 
 export type ChapterFeedback = {
@@ -105,15 +109,21 @@ export type Assessment = {
   questions: Question[];
   createdAt?: string;
   updatedAt?: string;
+  generatedBy?: "Acharya";
+  generationDurationMs?: number;
 };
 
 export type Question = {
   id: string;
-  type: "MCQ" | "Descriptive";
+  type: "MCQ" | "Descriptive" | "Rating" | "YesNo" | "ShortAnswer" | "LongAnswer";
   prompt: string;
   options?: string[];
   answer?: number;
   points: number;
+  category?: "ProblemSolving" | "Technical" | "CourseDepth" | "BeyondCourse" | "AnalyticalAbility";
+  ratingScale?: number;
+  expectedAnswer?: string;
+  rubric?: string;
 };
 
 export type Attempt = {
@@ -258,6 +268,7 @@ export const navByRole: Record<Role, { key: ModuleKey; label: string; icon: stri
     { key: "dashboard", label: "HQ", icon: "dashboard" },
     { key: "users", label: "People", icon: "users" },
     { key: "courses", label: "Courses", icon: "courses" },
+    { key: "ai-generator", label: "Acharya", icon: "ai-generator" },
     { key: "assessments", label: "Tests", icon: "assessments" },
     { key: "skills", label: "Skills", icon: "skills" },
     { key: "reports", label: "Reports", icon: "reports" },
@@ -270,6 +281,7 @@ export const navByRole: Record<Role, { key: ModuleKey; label: string; icon: stri
     { key: "dashboard", label: "HQ", icon: "dashboard" },
     { key: "users", label: "People", icon: "users" },
     { key: "courses", label: "Courses", icon: "courses" },
+    { key: "ai-generator", label: "Acharya", icon: "ai-generator" },
     { key: "assessments", label: "Tests", icon: "assessments" },
     { key: "skills", label: "Skills", icon: "skills" },
     { key: "reports", label: "Reports", icon: "reports" },
@@ -280,6 +292,7 @@ export const navByRole: Record<Role, { key: ModuleKey; label: string; icon: stri
     { key: "dashboard", label: "Hub", icon: "dashboard" },
     { key: "my-learning", label: "Learn", icon: "my-learning" },
     { key: "courses", label: "Studio", icon: "courses" },
+    { key: "ai-generator", label: "Acharya", icon: "ai-generator" },
     { key: "assessments", label: "Tests", icon: "assessments" },
     { key: "team", label: "Team", icon: "team" },
     { key: "certificates", label: "Certificates", icon: "certificates" },

@@ -18,6 +18,8 @@ import Reports from "./pages/Reports";
 import Certificates from "./pages/Certificates";
 import Evaluation from "./pages/Evaluation";
 import Archive from "./pages/Archive";
+import TextToCourseAgent from "./pages/TextToCourseAgent";
+import AICopilot from "./components/AICopilot";
 
 type AuthenticatedUser = Partial<User> & Pick<User, "id"> & { sessionVersion?: number; sv?: number };
 
@@ -35,6 +37,7 @@ function ModuleGlyph({ icon, active }: { icon: string; active: boolean }) {
     settings: "from-slate-200 via-slate-400 to-slate-700",
     team: "from-blue-300 via-cyan-400 to-emerald-500",
     "my-learning": "from-cyan-200 via-emerald-300 to-lime-500",
+    "ai-generator": "from-cyan-300 via-teal-400 to-emerald-600",
   };
 
   return (
@@ -147,6 +150,7 @@ export default function App() {
   const [sessionVersion, setSessionVersion] = useState<number | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [module, setModule] = useState<ModuleKey>("dashboard");
+  const [copilotOpen, setCopilotOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const sessionRevokedRef = useRef(false);
@@ -294,6 +298,9 @@ export default function App() {
       case "certificates": return <Certificates data={data} currentUser={currentUser} setData={setData} />;
       case "evaluation": return <Evaluation data={data} currentUser={currentUser} />;
       case "archive": return <Archive data={data} currentUser={currentUser} setData={setData} />;
+      case "ai-generator": return <TextToCourseAgent data={data} currentUser={currentUser} setData={setData} onGoToCreated={() => {
+        setModule("courses");
+      }} />;
       default: return <Dashboard data={data} currentUser={currentUser} />;
     }
   };
@@ -381,6 +388,11 @@ export default function App() {
       </div>
     </main>
     <ToastNotification message={toastMsg} onDone={() => setToastMsg(null)} />
+    <AICopilot
+      isOpen={copilotOpen}
+      onToggle={() => setCopilotOpen(o => !o)}
+      context={{ courseTitle: `Nalanda ${nav.find(n => n.key === module)?.label || ""} Module` }}
+    />
     </>
   );
 }
