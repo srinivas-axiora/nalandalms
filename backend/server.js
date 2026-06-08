@@ -1900,6 +1900,18 @@ ${text}
   }
 });
 
+// ── Serve Frontend Production Build ──
+const frontendDistPath = path.resolve(__dirname, "../frontend/dist");
+app.use(express.static(frontendDistPath));
+
+// Fallback wildcard route to serve React app's index.html for client-side routing
+app.get("*splat", (req, res) => {
+  if (req.path.startsWith("/api")) {
+    return res.status(404).json({ error: "API endpoint not found" });
+  }
+  res.sendFile(path.join(frontendDistPath, "index.html"));
+});
+
 app.listen(PORT, () => {
   console.log(`Nalanda API listening on http://localhost:${PORT}`);
 });
