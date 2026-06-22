@@ -42,6 +42,11 @@ export async function findSkillByName(name) {
   return rows[0] ? mapSkill(rows[0]) : null;
 }
 
+export async function findSkillById(id) {
+  const { rows } = await query("SELECT * FROM skills WHERE id = $1 LIMIT 1", [id]);
+  return rows[0] ? mapSkill(rows[0]) : null;
+}
+
 // Inserts a pre-built skill object ({ id, name, category, description, status, createdAt }).
 // Throws Error with code "DUPLICATE_SKILL" if the (case-insensitive) name exists.
 export async function insertSkill(skill) {

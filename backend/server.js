@@ -41,8 +41,11 @@ import { registerCourses } from "./src/modules/courses/courses.routes.js";
 import { registerChapters } from "./src/modules/chapters/chapters.routes.js";
 import { registerAssessments } from "./src/modules/assessments/assessments.routes.js";
 import { registerAI } from "./src/modules/ai/ai.routes.js";
+import * as skillsRepo from "./src/repositories/skills.repository.pg.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Phase-2 gated cutover: when on, skills/target-skills reads come from PostgreSQL.
+const USE_PG_SKILLS = process.env.USE_PG_SKILLS === "1";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -91,10 +94,12 @@ app.get("/api/csrf-token", (req, res) => {
   res.json({ csrfToken: token });
 });
 
-app.get("/api/app-data", authenticate, (req, res) => {
+app.get("/api/app-data", authenticate, async (req, res) => {
   const admin = isAdmin(req.user.role);
   const superAdmin = req.user.role === "Super Admin";
   const visibleUserIds = new Set(visibleUserIdsFor(req.user));
+  const allSkills = USE_PG_SKILLS ? await skillsRepo.listSkills() : skills;
+  const allTargetSkills = USE_PG_SKILLS ? await skillsRepo.listTargetSkills() : targetSkills;
   const visibleCourses = coursesVisibleTo(req.user);
   const visibleCourseIds = new Set(visibleCourses.map((course) => course.id));
   const scopedAssignments = assignments.filter((assignment) => assignmentVisibleTo(assignment, req.user) && (admin || visibleCourseIds.has(assignment.courseId)));
@@ -121,8 +126,8 @@ app.get("/api/app-data", authenticate, (req, res) => {
     settings: admin ? settings : {},
     issuedCertificates: scopedCertificates,
     archives: superAdmin ? archives : [],
-    skills,
-    targetSkills: targetSkills.filter((target) => targetSkillVisibleTo(target, req.user)),
+    skills: allSkills,
+    targetSkills: allTargetSkills.filter((target) => targetSkillVisibleTo(target, req.user)),
     skillRatings: skillRatings.filter((rating) => admin || visibleUserIds.has(rating.userId)),
     chapterFeedbacks: chapterFeedbacks.filter((feedback) => admin || feedback.userId === req.user.id || visibleCourseIds.has(feedback.courseId))
   });

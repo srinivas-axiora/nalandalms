@@ -105,7 +105,9 @@ per-entity and roll back instantly.
 
 For each bounded context, in roughly ascending coupling:
 
-- [x] skills, target_skills  *(pilot — this slice)*
+- [x] skills, target_skills  *(pilot — schema + repo + backfill)*
+- [x] skills/target_skills **module cutover wired behind `USE_PG_SKILLS=1`** —
+      default-off path verified unchanged; on-path uses Postgres (verify against a real DB)
 - [ ] chapter_feedbacks
 - [ ] users  (+ login_security, session_versions)
 - [ ] courses
