@@ -1,8 +1,9 @@
+import { auditLogs, securityEvents, archives, users, courses, chapters, assessments, assignments } from "../../core.js";
+import { audit } from "../../domain.js";
+import { authenticate, requireRole } from "../../middleware.js";
 // Module: Governance (audit logs, security events, archive + restore).
 // Handlers moved verbatim from server.js; shared deps injected via ctx.
-export function registerGovernance(app, ctx) {
-  const { authenticate, requireRole, audit, auditLogs, securityEvents, archives, users, courses, chapters, assessments, assignments } = ctx;
-
+export function registerGovernance(app) {
   app.get("/api/archive", authenticate, requireRole("Super Admin"), (req, res) => {
     res.json({ data: archives, total: archives.length });
   });

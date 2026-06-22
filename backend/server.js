@@ -11,29 +11,20 @@ import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 
 import {
-  PORT, upload, corsOrigin, COOKIE_SECURE, COOKIE_SAMESITE, CSRF_COOKIE, STEP_UP_COOKIE,
-  GEMINI_MODEL, getGeminiApiKey,
+  PORT, corsOrigin, COOKIE_SECURE, COOKIE_SAMESITE, CSRF_COOKIE, GEMINI_MODEL, getGeminiApiKey,
 } from "./src/config.js";
-import { sanitizeHtmlServer, parseGeminiJson, withTimeout, geminiErrorMessage } from "./src/lib.js";
 import {
-  now, isAdmin, roles, nextCourseId, sessionVersions, loginSecurity,
-  rateLimitCheck, rateLimitRecord, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS,
-  MAX_CHAPTER_TIME_INCREMENT_SECONDS, ASSESSMENT_TIME_GRACE_SECONDS,
-  users, courses, chapters, assessments, assignments, attempts, proctoringLogs,
+  now, isAdmin, users, courses, chapters, assessments, assignments, attempts, proctoringLogs,
   learningTimeEvents, reportExports, auditLogs, securityEvents, archives,
-  skills, targetSkills, skillRatings, chapterFeedbacks, settings, videoProgress,
+  skills, targetSkills, skillRatings, chapterFeedbacks, settings,
   issuedCertificates, acharyaFeedbackMemory, storage, saveDb, loadDb,
 } from "./src/core.js";
 import {
-  publicUser, audit, securityEvent, signToken, signStepUpToken, canManageCourse,
-  visibleUserIdsFor, questionPointsTotal, assessmentForUser, assessmentsVisibleTo,
-  coursesVisibleTo, assignmentVisibleTo, targetSkillVisibleTo, getRelevantAcharyaFeedback,
-  buildFeedbackGuidance, saveAcharyaFeedbackMemory, addChapterTime, addAssessmentTime,
-  assessmentTimeFor, chapterTimeFor, buildTimeRows, buildReportRows,
+  publicUser, visibleUserIdsFor, coursesVisibleTo, assignmentVisibleTo,
+  assessmentsVisibleTo, assessmentForUser, targetSkillVisibleTo,
 } from "./src/domain.js";
 import {
-  verifyCsrf, rateLimit, aiRateLimit, authenticate, requireRole, requireStepUp,
-  persistResponseMiddleware, securityLoggingMiddleware, errorHandler,
+  verifyCsrf, rateLimit, authenticate, persistResponseMiddleware, securityLoggingMiddleware, errorHandler,
 } from "./src/middleware.js";
 
 import { registerCertificates } from "./src/modules/certificates/certificates.routes.js";
@@ -66,41 +57,22 @@ app.use("/api", rateLimit({ windowMs: 60_000, max: 600, scope: "ip", name: "glob
 app.use(persistResponseMiddleware);
 app.use(securityLoggingMiddleware);
 
-// ── Shared module context (strangler bridge) ──
-// Supplies feature modules with the shared state + helpers + middleware they need.
-const moduleCtx = {
-  authenticate, requireRole, requireStepUp,
-  audit, now, publicUser, visibleUserIdsFor, buildReportRows, buildTimeRows,
-  users, courses, chapters, assessments, assignments, attempts, proctoringLogs,
-  learningTimeEvents, reportExports, auditLogs, securityEvents, archives,
-  skills, targetSkills, chapterFeedbacks, settings,
-  isAdmin, roles, sessionVersions, signToken, signStepUpToken, securityEvent,
-  rateLimitCheck, rateLimitRecord, loginSecurity, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS,
-  COOKIE_SECURE, COOKIE_SAMESITE, CSRF_COOKIE, STEP_UP_COOKIE,
-  coursesVisibleTo, addAssessmentTime,
-  nextCourseId, canManageCourse, upload, sanitizeHtmlServer, videoProgress,
-  addChapterTime, chapterTimeFor, assessmentTimeFor, assessmentsVisibleTo,
-  assessmentForUser, questionPointsTotal,
-  MAX_CHAPTER_TIME_INCREMENT_SECONDS, ASSESSMENT_TIME_GRACE_SECONDS,
-  aiRateLimit, GEMINI_MODEL, getGeminiApiKey, geminiErrorMessage, withTimeout,
-  acharyaFeedbackMemory, saveAcharyaFeedbackMemory, getRelevantAcharyaFeedback,
-  buildFeedbackGuidance, parseGeminiJson,
-};
-
-registerGovernance(app, moduleCtx);
-registerSettings(app, moduleCtx);
-registerSkills(app, moduleCtx);
-registerAnalytics(app, moduleCtx);
-registerReports(app, moduleCtx);
-registerAuth(app, moduleCtx);
-registerUsers(app, moduleCtx);
-registerEnrollments(app, moduleCtx);
-registerProctoring(app, moduleCtx);
-registerCourses(app, moduleCtx);
-registerChapters(app, moduleCtx);
-registerAssessments(app, moduleCtx);
-registerAI(app, moduleCtx);
-registerCertificates(app, { store: { issuedCertificates, users, courses }, audit, now, authenticate, requireRole });
+// ── Feature module registration ──
+// Each module imports its own foundation dependencies directly (no shared ctx).
+registerGovernance(app);
+registerSettings(app);
+registerSkills(app);
+registerAnalytics(app);
+registerReports(app);
+registerAuth(app);
+registerUsers(app);
+registerEnrollments(app);
+registerProctoring(app);
+registerCourses(app);
+registerChapters(app);
+registerAssessments(app);
+registerAI(app);
+registerCertificates(app);
 
 // ── System routes ──
 app.get("/api/health", (_req, res) => {

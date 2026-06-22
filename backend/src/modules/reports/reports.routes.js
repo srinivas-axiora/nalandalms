@@ -2,10 +2,11 @@
 // Handler moved verbatim from server.js; uuid imported directly, other deps via ctx.
 import { z } from "zod";
 import { v4 as uuid } from "uuid";
+import { now, reportExports } from "../../core.js";
+import { audit, buildReportRows } from "../../domain.js";
+import { authenticate, requireRole } from "../../middleware.js";
 
-export function registerReports(app, ctx) {
-  const { authenticate, requireRole, audit, now, buildReportRows, reportExports } = ctx;
-
+export function registerReports(app) {
   app.post("/api/reports/export", authenticate, requireRole("Admin", "Manager"), (req, res) => {
     const schema = z.object({ format: z.enum(["PDF", "Excel"]), reportType: z.enum(["User", "Team", "Course"]), filters: z.record(z.string(), z.any()).default({}) });
     const parsed = schema.safeParse(req.body);

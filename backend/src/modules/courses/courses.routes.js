@@ -2,10 +2,12 @@
 // Handlers moved verbatim from server.js; shared deps injected via ctx.
 import { z } from "zod";
 import { v4 as uuid } from "uuid";
+import { upload } from "../../config.js";
+import { courses, chapters, assessments, assignments, archives, now, nextCourseId } from "../../core.js";
+import { audit, canManageCourse, coursesVisibleTo } from "../../domain.js";
+import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
 
-export function registerCourses(app, ctx) {
-  const { authenticate, requireRole, requireStepUp, upload, courses, chapters, assessments, assignments, archives, audit, now, nextCourseId, canManageCourse, coursesVisibleTo } = ctx;
-
+export function registerCourses(app) {
   app.get("/api/courses", authenticate, (req, res) => {
     const { skill, approval, status = "Active" } = req.query;
     let visible = coursesVisibleTo(req.user);

@@ -3,10 +3,11 @@
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { v4 as uuid } from "uuid";
+import { users, isAdmin, sessionVersions, archives, roles, now } from "../../core.js";
+import { audit, publicUser } from "../../domain.js";
+import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
 
-export function registerUsers(app, ctx) {
-  const { authenticate, requireRole, requireStepUp, users, audit, publicUser, isAdmin, sessionVersions, archives, roles, now } = ctx;
-
+export function registerUsers(app) {
   app.patch("/api/users/me/preferences", authenticate, (req, res) => {
     const schema = z.object({
       theme: z.enum(["dark", "light", "system"]).optional(),

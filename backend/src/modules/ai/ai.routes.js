@@ -4,16 +4,13 @@
 import { z } from "zod";
 import { v4 as uuid } from "uuid";
 import { GoogleGenAI } from "@google/genai";
+import { getGeminiApiKey, GEMINI_MODEL } from "../../config.js";
+import { parseGeminiJson, geminiErrorMessage, withTimeout, sanitizeHtmlServer } from "../../lib.js";
+import { now, courses, chapters, assessments, acharyaFeedbackMemory, nextCourseId } from "../../core.js";
+import { audit, saveAcharyaFeedbackMemory, getRelevantAcharyaFeedback, buildFeedbackGuidance } from "../../domain.js";
+import { authenticate, requireRole, aiRateLimit } from "../../middleware.js";
 
-export function registerAI(app, ctx) {
-  const {
-    authenticate, requireRole, aiRateLimit, audit, now,
-    courses, chapters, assessments,
-    acharyaFeedbackMemory, saveAcharyaFeedbackMemory, getRelevantAcharyaFeedback,
-    buildFeedbackGuidance, parseGeminiJson, geminiErrorMessage, withTimeout,
-    getGeminiApiKey, GEMINI_MODEL, nextCourseId, sanitizeHtmlServer,
-  } = ctx;
-
+export function registerAI(app) {
 app.get("/api/ai/generation-feedback", authenticate, requireRole("Admin", "Manager"), (req, res) => {
   res.json({ data: acharyaFeedbackMemory.slice(0, 25) });
 });

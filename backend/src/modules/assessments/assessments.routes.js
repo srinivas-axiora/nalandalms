@@ -2,14 +2,11 @@
 // Handlers moved verbatim from server.js; shared deps injected via ctx.
 import { z } from "zod";
 import { v4 as uuid } from "uuid";
+import { assessments, courses, chapters, assignments, attempts, archives, settings, now, isAdmin, ASSESSMENT_TIME_GRACE_SECONDS } from "../../core.js";
+import { audit, canManageCourse, assessmentsVisibleTo, assessmentForUser, questionPointsTotal, addAssessmentTime } from "../../domain.js";
+import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
 
-export function registerAssessments(app, ctx) {
-  const {
-    authenticate, requireRole, requireStepUp, assessments, courses, chapters, assignments, attempts, archives,
-    settings, audit, now, isAdmin, canManageCourse, assessmentsVisibleTo, assessmentForUser,
-    questionPointsTotal, addAssessmentTime, ASSESSMENT_TIME_GRACE_SECONDS,
-  } = ctx;
-
+export function registerAssessments(app) {
   app.get("/api/assessments", authenticate, (req, res) => {
     const visible = assessmentsVisibleTo(req.user);
     res.json({ data: visible.map((item) => assessmentForUser(item, req.user)), total: visible.length });

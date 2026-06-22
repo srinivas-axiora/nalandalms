@@ -3,10 +3,11 @@
 // (second registration, never reached) is intentionally dropped — the live
 // first-registered handler is preserved here.
 import { z } from "zod";
+import { now, skills, targetSkills, chapterFeedbacks } from "../../core.js";
+import { audit } from "../../domain.js";
+import { authenticate, requireRole } from "../../middleware.js";
 
-export function registerSkills(app, ctx) {
-  const { authenticate, requireRole, audit, now, skills, targetSkills, chapterFeedbacks } = ctx;
-
+export function registerSkills(app) {
   app.post("/api/skills", authenticate, requireRole("Admin"), (req, res) => {
     const schema = z.object({
       name: z.string().min(2),

@@ -2,14 +2,12 @@
 // Handlers moved verbatim from server.js; shared deps injected via ctx.
 import { z } from "zod";
 import bcrypt from "bcryptjs";
+import { COOKIE_SECURE, COOKIE_SAMESITE, CSRF_COOKIE, STEP_UP_COOKIE } from "../../config.js";
+import { rateLimitCheck, rateLimitRecord, loginSecurity, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS, users, now } from "../../core.js";
+import { signToken, signStepUpToken, audit, publicUser, securityEvent } from "../../domain.js";
+import { authenticate } from "../../middleware.js";
 
-export function registerAuth(app, ctx) {
-  const {
-    authenticate, rateLimitCheck, rateLimitRecord, loginSecurity, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS,
-    users, signToken, signStepUpToken, audit, publicUser, securityEvent, now,
-    COOKIE_SECURE, COOKIE_SAMESITE, CSRF_COOKIE, STEP_UP_COOKIE,
-  } = ctx;
-
+export function registerAuth(app) {
   app.post("/api/auth/login", (req, res) => {
     const ip = req.ip || req.connection.remoteAddress;
     if (rateLimitCheck(ip, "/api/auth/login")) {

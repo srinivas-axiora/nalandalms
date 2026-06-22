@@ -2,10 +2,11 @@
 // Handler moved verbatim from server.js; shared deps injected via ctx.
 import { z } from "zod";
 import { v4 as uuid } from "uuid";
+import { attempts, proctoringLogs, assessments, settings, now } from "../../core.js";
+import { audit, addAssessmentTime } from "../../domain.js";
+import { authenticate } from "../../middleware.js";
 
-export function registerProctoring(app, ctx) {
-  const { authenticate, attempts, proctoringLogs, assessments, settings, audit, now, addAssessmentTime } = ctx;
-
+export function registerProctoring(app) {
   app.post("/api/proctoring/events", authenticate, (req, res) => {
     const schema = z.object({ attemptId: z.string(), eventType: z.enum(["FULLSCREEN_EXIT", "TAB_SWITCH", "NOISE", "CAMERA_OFF", "MIC_OFF", "FACE_MISMATCH"]), severity: z.enum(["low", "medium", "high"]), metadata: z.record(z.string(), z.any()).optional() });
     const parsed = schema.safeParse(req.body);

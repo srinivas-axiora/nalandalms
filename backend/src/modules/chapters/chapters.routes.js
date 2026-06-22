@@ -1,10 +1,12 @@
 // Module: Chapters (list, create, update) + learning-time / video-progress endpoints.
 // Handlers moved verbatim from server.js; shared deps injected via ctx.
 import { z } from "zod";
+import { sanitizeHtmlServer } from "../../lib.js";
+import { courses, chapters, assignments, videoProgress, now, MAX_CHAPTER_TIME_INCREMENT_SECONDS } from "../../core.js";
+import { canManageCourse, coursesVisibleTo, addChapterTime, chapterTimeFor, assessmentTimeFor, audit } from "../../domain.js";
+import { authenticate, requireRole } from "../../middleware.js";
 
-export function registerChapters(app, ctx) {
-  const { authenticate, requireRole, courses, chapters, assignments, videoProgress, canManageCourse, coursesVisibleTo, sanitizeHtmlServer, addChapterTime, chapterTimeFor, assessmentTimeFor, audit, now, MAX_CHAPTER_TIME_INCREMENT_SECONDS } = ctx;
-
+export function registerChapters(app) {
   app.get("/api/courses/:courseId/chapters", authenticate, (req, res) => {
     const course = courses.find((item) => item.id === req.params.courseId);
     if (!course) return res.status(404).json({ error: "Course not found" });

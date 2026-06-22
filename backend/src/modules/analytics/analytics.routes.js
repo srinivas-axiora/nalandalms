@@ -1,8 +1,9 @@
+import { users, courses, learningTimeEvents } from "../../core.js";
+import { publicUser, visibleUserIdsFor, buildTimeRows } from "../../domain.js";
+import { authenticate, requireRole } from "../../middleware.js";
 // Module: Analytics (personal/team/org dashboards + time analytics).
 // Handlers moved verbatim from server.js; shared deps injected via ctx.
-export function registerAnalytics(app, ctx) {
-  const { authenticate, requireRole, publicUser, visibleUserIdsFor, buildTimeRows, users, courses, learningTimeEvents } = ctx;
-
+export function registerAnalytics(app) {
   app.get("/api/analytics/global", authenticate, requireRole("Admin"), (_req, res) => {
     res.json({ users: users.length, activeUsers: users.filter((user) => user.status === "Active").length, courses: courses.length, approvedCourses: courses.filter((course) => course.approval === "Approved").length, completionRate: 78, averageScore: 86, topPerformers: ["Diya Sharma", "Nisha Rao"], lowPerformers: ["Rohan Das"] });
   });

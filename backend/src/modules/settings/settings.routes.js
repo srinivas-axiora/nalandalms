@@ -4,10 +4,11 @@
 // modules and the persistence snapshot, this mutates in place with Object.assign
 // — content-identical behavior, stable reference.
 import { z } from "zod";
+import { settings } from "../../core.js";
+import { audit } from "../../domain.js";
+import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
 
-export function registerSettings(app, ctx) {
-  const { authenticate, requireRole, requireStepUp, audit, settings } = ctx;
-
+export function registerSettings(app) {
   app.get("/api/settings", authenticate, requireRole("Admin"), (_req, res) => {
     res.json({ data: settings });
   });

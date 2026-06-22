@@ -1,13 +1,14 @@
 // Module wiring: assembles repository -> service -> controller and mounts routes.
-// `ctx` is the strangler-migration bridge supplying shared dependencies from
-// server.js (store + audit + auth middleware). In the full rollout these become
-// direct imports from the persistence/middleware layers.
+// Shared dependencies are imported directly from the foundation layers.
 import { createCertificatesRepository } from "./certificates.repository.js";
 import { createCertificatesService } from "./certificates.service.js";
 import { createCertificatesController } from "./certificates.controller.js";
+import { issuedCertificates, users, courses, now } from "../../core.js";
+import { audit } from "../../domain.js";
+import { authenticate, requireRole } from "../../middleware.js";
 
-export function registerCertificates(app, ctx) {
-  const { store, audit, now, authenticate, requireRole } = ctx;
+export function registerCertificates(app) {
+  const store = { issuedCertificates, users, courses };
   const repo = createCertificatesRepository(store);
   const service = createCertificatesService({ repo, audit, now });
   const controller = createCertificatesController(service);

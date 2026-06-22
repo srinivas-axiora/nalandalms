@@ -1,10 +1,11 @@
 // Module: Enrollments / course assignment.
 // Handler moved verbatim from server.js; shared deps injected via ctx.
 import { z } from "zod";
+import { courses, users, assignments, now } from "../../core.js";
+import { audit, coursesVisibleTo, visibleUserIdsFor } from "../../domain.js";
+import { authenticate, requireRole } from "../../middleware.js";
 
-export function registerEnrollments(app, ctx) {
-  const { authenticate, requireRole, courses, users, assignments, audit, now, coursesVisibleTo, visibleUserIdsFor } = ctx;
-
+export function registerEnrollments(app) {
   app.post("/api/assignments", authenticate, requireRole("Admin", "Manager"), (req, res) => {
     const schema = z.object({
       courseId: z.string(),
