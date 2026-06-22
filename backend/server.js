@@ -7,6 +7,7 @@ import multer from "multer";
 import { z } from "zod";
 import { v4 as uuid } from "uuid";
 import cookieParser from "cookie-parser";
+import sanitizeHtml from "sanitize-html";
 import { GoogleGenAI } from "@google/genai";
 import { loadEnvFile } from "node:process";
 import fs from "node:fs";
@@ -14,6 +15,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import { createStorage } from "./db.js";
+import { registerCertificates } from "./src/modules/certificates/certificates.routes.js";
+import { registerGovernance } from "./src/modules/governance/governance.routes.js";
+import { registerSettings } from "./src/modules/settings/settings.routes.js";
+import { registerSkills } from "./src/modules/skills/skills.routes.js";
+import { registerAnalytics } from "./src/modules/analytics/analytics.routes.js";
+import { registerReports } from "./src/modules/reports/reports.routes.js";
 
 try {
   loadEnvFile();
@@ -44,6 +51,11 @@ const app = express();
 app.set("trust proxy", 1);
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const PORT = process.env.PORT || 8080;
+
+if (IS_PRODUCTION && !process.env.DATABASE_URL) {
+  console.error("FATAL: DATABASE_URL is required in production. Refusing to use local JSON-file persistence.");
+  process.exit(1);
+}
 
 // File uploads are buffered in memory, so cap size aggressively and validate type.
 const ALLOWED_UPLOAD_MIME = new Set([
@@ -126,6 +138,7 @@ app.use(cookieParser());
 // response, so they cannot forge a matching header. The token is bound to the
 // browser session rather than shared in a global set.
 const CSRF_COOKIE = "csrfToken";
+const STEP_UP_COOKIE = "stepUpToken";
 const timingSafeEqual = (a, b) => {
   const bufA = Buffer.from(String(a || ""));
   const bufB = Buffer.from(String(b || ""));
@@ -165,11 +178,22 @@ const aiRateLimit = rateLimit({ windowMs: 60_000, max: 15, scope: "user", name: 
 app.use("/api", rateLimit({ windowMs: 60_000, max: 600, scope: "ip", name: "global" }));
 
 app.use((req, res, next) => {
-  if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") {
-    res.on("finish", () => {
-      persist();
-    });
-  }
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+
+  const originalJson = res.json.bind(res);
+  res.json = async (body) => {
+    if (res.statusCode >= 200 && res.statusCode < 400 && !res.headersSent) {
+      try {
+        await saveDb();
+      } catch (err) {
+        console.error("[persist] blocking response after save failure:", err?.message || err);
+        res.status(503);
+        return originalJson({ error: "Data could not be saved. Please retry shortly." });
+      }
+    }
+    return originalJson(body);
+  };
+
   next();
 });
 
@@ -189,6 +213,8 @@ const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_MS = 5 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 10;
+const MAX_CHAPTER_TIME_INCREMENT_SECONDS = 5 * 60;
+const ASSESSMENT_TIME_GRACE_SECONDS = 30;
 
 const isAdmin = (role) => adminRoles.includes(role);
 
@@ -215,11 +241,7 @@ const rolePassword = (role) => {
     "Employee": "SEED_EMPLOYEE_PASSWORD",
   }[role];
   if (envKey && process.env[envKey]) return process.env[envKey];
-  if (IS_PRODUCTION) return crypto.randomBytes(18).toString("base64url");
-  if (role === "Super Admin") return "Sadmin@2026";
-  if (role === "Admin") return "Admin@2026";
-  if (role === "Manager") return "Passwrod@2026";
-  return "Password@123";
+  return crypto.randomBytes(18).toString("base64url");
 };
 
 const demoUser = ({ id, name, email, department, team, designation, role, managerId, status, joinedAt }) => ({
@@ -396,6 +418,7 @@ const attempts = [
 
 const proctoringLogs = [];
 const auditLogs = [{ id: "AUD-001", actorId: "EMP-1001", action: "System initialized", entity: "SYSTEM", at: now() }];
+const securityEvents = [];
 const learningTimeEvents = [];
 const acharyaFeedbackMemory = [];
 const reportExports = [];
@@ -417,6 +440,7 @@ const snapshot = () => ({
   attempts,
   proctoringLogs,
   auditLogs,
+  securityEvents,
   learningTimeEvents,
   acharyaFeedbackMemory,
   reportExports,
@@ -433,11 +457,7 @@ const snapshot = () => ({
 });
 
 const saveDb = async () => {
-  try {
-    await storage.save(snapshot());
-  } catch (err) {
-    console.error("[persist] save failed:", err?.message || err);
-  }
+  await storage.save(snapshot());
 };
 
 // Coalesce concurrent save requests: while a save is running, mark a single
@@ -468,6 +488,7 @@ const loadDb = async () => {
     if (data.attempts) { attempts.length = 0; attempts.push(...data.attempts); }
     if (data.proctoringLogs) { proctoringLogs.length = 0; proctoringLogs.push(...data.proctoringLogs); }
     if (data.auditLogs) { auditLogs.length = 0; auditLogs.push(...data.auditLogs); }
+    if (data.securityEvents) { securityEvents.length = 0; securityEvents.push(...data.securityEvents); }
     if (data.learningTimeEvents) { learningTimeEvents.length = 0; learningTimeEvents.push(...data.learningTimeEvents); }
     if (data.acharyaFeedbackMemory) { acharyaFeedbackMemory.length = 0; acharyaFeedbackMemory.push(...data.acharyaFeedbackMemory); }
     if (data.reportExports) { reportExports.length = 0; reportExports.push(...data.reportExports); }
@@ -499,31 +520,61 @@ const audit = (actorId, action, entityType, entityId, metadata = {}) => {
   if (auditLogs.length > AUDIT_LOG_CAP) auditLogs.length = AUDIT_LOG_CAP;
 };
 
+const SECURITY_EVENT_CAP = 10000;
+const securityEvent = (req, type, metadata = {}) => {
+  securityEvents.unshift({
+    id: uuid(),
+    type,
+    actorId: req?.user?.id || null,
+    ip: req?.ip || null,
+    method: req?.method || null,
+    path: req?.originalUrl || req?.url || null,
+    userAgent: req?.headers?.["user-agent"] || null,
+    metadata,
+    createdAt: now(),
+  });
+  if (securityEvents.length > SECURITY_EVENT_CAP) securityEvents.length = SECURITY_EVENT_CAP;
+};
+
+app.use((req, res, next) => {
+  res.on("finish", () => {
+    if (res.statusCode === 401) securityEvent(req, "AUTHENTICATION_FAILED", { statusCode: res.statusCode });
+    if (res.statusCode === 403) securityEvent(req, "AUTHORIZATION_DENIED", { statusCode: res.statusCode });
+    if (res.statusCode === 429) securityEvent(req, "RATE_LIMITED", { statusCode: res.statusCode });
+  });
+  next();
+});
+
 // ── Server-side HTML sanitizer (no external deps) ──
 // Defense-in-depth for stored rich-text / AI chapter bodies that the client
 // renders with dangerouslySetInnerHTML. Removes dangerous elements, inline
 // event handlers, unsafe URL schemes, and style attributes.
-const HTML_DANGEROUS_TAGS = [
-  "script", "style", "iframe", "object", "embed", "svg", "math", "link",
-  "meta", "base", "form", "input", "button", "textarea", "select",
-  "noscript", "template", "frame", "frameset", "applet",
-];
-const sanitizeHtmlServer = (html = "") => {
-  let out = String(html);
-  for (const tag of HTML_DANGEROUS_TAGS) {
-    out = out.replace(new RegExp(`<${tag}[\\s\\S]*?</${tag}>`, "gi"), "");
-    out = out.replace(new RegExp(`<${tag}\\b[^>]*>`, "gi"), "");
-  }
-  out = out.replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
-  out = out.replace(/(href|src)\s*=\s*("|')\s*javascript:[^"']*\2/gi, "$1=$2#$2");
-  out = out.replace(/(href|src)\s*=\s*("|')\s*data:(?!image\/)[^"']*\2/gi, "$1=$2#$2");
-  out = out.replace(/\sstyle\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
-  return out;
-};
+const sanitizeHtmlServer = (html = "") => sanitizeHtml(String(html), {
+  allowedTags: [
+    "p", "br", "strong", "b", "em", "i", "u", "s", "blockquote", "code", "pre",
+    "h2", "h3", "h4", "ul", "ol", "li", "a", "table", "thead", "tbody", "tr",
+    "th", "td", "hr", "span", "div"
+  ],
+  allowedAttributes: {
+    a: ["href", "name", "target", "rel"],
+    "*": ["class"]
+  },
+  allowedSchemes: ["http", "https", "mailto"],
+  transformTags: {
+    a: sanitizeHtml.simpleTransform("a", { rel: "noopener noreferrer", target: "_blank" }, true),
+  },
+  disallowedTagsMode: "discard",
+  enforceHtmlBoundary: true,
+});
 
 const signToken = (user) => {
   const sv = sessionVersions[user.id] || 0;
   return jwt.sign({ sub: user.id, role: user.role, department: user.department, sv }, JWT_SECRET, { expiresIn: "30m" });
+};
+
+const signStepUpToken = (user) => {
+  const sv = sessionVersions[user.id] || 0;
+  return jwt.sign({ sub: user.id, sv, purpose: "step-up" }, JWT_SECRET, { expiresIn: "10m" });
 };
 
 const authenticate = (req, res, next) => {
@@ -553,6 +604,26 @@ const requireRole = (...allowed) => (req, res, next) => {
   return next();
 };
 
+const requireStepUp = (req, res, next) => {
+  const token = req.cookies?.[STEP_UP_COOKIE];
+  if (!token) {
+    securityEvent(req, "STEP_UP_REQUIRED");
+    return res.status(412).json({ error: "Recent re-authentication required", code: "STEP_UP_REQUIRED" });
+  }
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    const currentSv = sessionVersions[req.user.id] || 0;
+    if (payload.sub !== req.user.id || payload.purpose !== "step-up" || payload.sv !== currentSv) {
+      securityEvent(req, "STEP_UP_INVALID");
+      return res.status(412).json({ error: "Recent re-authentication required", code: "STEP_UP_REQUIRED" });
+    }
+    return next();
+  } catch {
+    securityEvent(req, "STEP_UP_EXPIRED");
+    return res.status(412).json({ error: "Recent re-authentication required", code: "STEP_UP_REQUIRED" });
+  }
+};
+
 const canManageCourse = (user, course) => isAdmin(user.role) || course.ownerId === user.id;
 
 const visibleUserIdsFor = (user) => {
@@ -578,6 +649,39 @@ const stripAnswerKeys = (assessment) => {
 };
 const assessmentForUser = (assessment, user) =>
   (isAdmin(user.role) || assessment.ownerId === user.id) ? assessment : stripAnswerKeys(assessment);
+
+const assignmentVisibleTo = (assignment, user) => {
+  if (isAdmin(user.role)) return true;
+  if (user.role === "Manager") return visibleUserIdsFor(user).includes(assignment.userId);
+  return assignment.userId === user.id;
+};
+
+const coursesVisibleTo = (user) => {
+  if (isAdmin(user.role)) return courses;
+  if (user.role === "Manager") {
+    return courses.filter((course) => course.ownerId === user.id || (course.approval === "Approved" && course.status === "Active"));
+  }
+  const assignedCourseIds = new Set(assignments.filter((assignment) => assignment.userId === user.id).map((assignment) => assignment.courseId));
+  return courses.filter((course) => assignedCourseIds.has(course.id) && course.approval === "Approved" && course.status === "Active");
+};
+
+const assessmentsVisibleTo = (user) => {
+  const visibleCourseIds = new Set(coursesVisibleTo(user).map((course) => course.id));
+  if (isAdmin(user.role)) return assessments;
+  if (user.role === "Manager") {
+    return assessments.filter((assessment) => assessment.ownerId === user.id || (visibleCourseIds.has(assessment.courseId) && assessment.approval === "Approved" && assessment.status === "Active"));
+  }
+  return assessments.filter((assessment) => visibleCourseIds.has(assessment.courseId) && assessment.approval === "Approved" && assessment.status === "Active");
+};
+
+const targetSkillVisibleTo = (target, user) => {
+  if (isAdmin(user.role)) return true;
+  if (target.scope === "Organization") return true;
+  if (target.scope === "Employee") return target.userId === user.id;
+  if (target.scope === "Role") return target.designation === user.designation;
+  if (target.scope === "Department") return target.department === user.department || target.department === `Team:${user.team}`;
+  return false;
+};
 
 const tokenize = (text = "") => new Set(String(text).toLowerCase().match(/[a-z0-9]+/g) || []);
 
@@ -778,6 +882,23 @@ const buildReportRows = ({ reportType, filters = {}, requester }) => {
   return [];
 };
 
+// ── Shared module context (strangler bridge) ──
+// Supplies extracted feature modules with the shared state + helpers + middleware
+// they need. As foundation layers (config/persistence/middleware/lib) are fully
+// extracted, entries here are replaced by direct imports and this object shrinks.
+const moduleCtx = {
+  authenticate, requireRole, requireStepUp,
+  audit, now, publicUser, visibleUserIdsFor, buildReportRows, buildTimeRows,
+  users, courses, chapters, assessments, assignments, learningTimeEvents, reportExports,
+  auditLogs, securityEvents, archives, skills, targetSkills, chapterFeedbacks, settings,
+};
+
+registerGovernance(app, moduleCtx);
+registerSettings(app, moduleCtx);
+registerSkills(app, moduleCtx);
+registerAnalytics(app, moduleCtx);
+registerReports(app, moduleCtx);
+
 app.get("/api/health", (_req, res) => {
   const apiKey = getGeminiApiKey();
   res.json({ ok: true, service: "Nalanda API", time: now(), geminiConfigured: Boolean(apiKey), geminiModel: GEMINI_MODEL });
@@ -836,7 +957,28 @@ app.post("/api/auth/login", (req, res) => {
 app.post("/api/auth/logout", (_req, res) => {
   res.clearCookie("token", { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
   res.clearCookie(CSRF_COOKIE, { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
+  res.clearCookie(STEP_UP_COOKIE, { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
   res.json({ ok: true });
+});
+
+app.post("/api/auth/reauth", authenticate, (req, res) => {
+  const schema = z.object({ password: z.string().min(8) });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  if (!bcrypt.compareSync(parsed.data.password, req.user.passwordHash)) {
+    securityEvent(req, "STEP_UP_FAILED");
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+
+  securityEvent(req, "STEP_UP_GRANTED");
+  res.cookie(STEP_UP_COOKIE, signStepUpToken(req.user), {
+    httpOnly: true,
+    secure: COOKIE_SECURE,
+    sameSite: COOKIE_SAMESITE,
+    maxAge: 10 * 60 * 1000,
+  });
+  res.json({ ok: true, expiresInSeconds: 600 });
 });
 
 app.get("/api/auth/me", authenticate, (req, res) => {
@@ -905,7 +1047,7 @@ app.post("/api/users", authenticate, requireRole("Admin"), (req, res) => {
   res.status(201).json({ data: publicUser(user) });
 });
 
-app.patch("/api/users/:id", authenticate, requireRole("Admin"), (req, res) => {
+app.patch("/api/users/:id", authenticate, requireRole("Admin"), requireStepUp, (req, res) => {
   const schema = z.object({
     name: z.string().min(2).optional(),
     email: z.string().email().optional(),
@@ -950,7 +1092,7 @@ app.patch("/api/users/:id", authenticate, requireRole("Admin"), (req, res) => {
   res.json({ data: publicUser(user) });
 });
 
-app.patch("/api/users/:id/status", authenticate, requireRole("Admin"), (req, res) => {
+app.patch("/api/users/:id/status", authenticate, requireRole("Admin"), requireStepUp, (req, res) => {
   const schema = z.object({ status: z.enum(["Active", "Inactive"]) });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -973,7 +1115,7 @@ app.patch("/api/users/:id/status", authenticate, requireRole("Admin"), (req, res
   res.json({ data: publicUser(user), note: "Session revoked if inactivated." });
 });
 
-app.delete("/api/users/:id", authenticate, requireRole("Super Admin"), (req, res) => {
+app.delete("/api/users/:id", authenticate, requireRole("Super Admin"), requireStepUp, (req, res) => {
   const schema = z.object({ deletionComment: z.string().min(10) });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -1000,84 +1142,13 @@ app.delete("/api/users/:id", authenticate, requireRole("Super Admin"), (req, res
   audit(req.user.id, "DELETE_USER", "USER", user.id);
   res.json({ success: true, message: "User permanently deleted and archived" });
 });
-app.post("/api/skills", authenticate, requireRole("Admin"), (req, res) => {
-  const schema = z.object({
-    name: z.string().min(2),
-    category: z.enum(["Technical", "Functional", "Leadership", "Compliance", "Behavioral"]),
-    description: z.string().default("")
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  
-  const skill = {
-    id: `SKILL-${Math.floor(1000 + Math.random() * 9000)}`,
-    name: parsed.data.name.trim(),
-    category: parsed.data.category,
-    description: parsed.data.description,
-    status: "Active",
-    createdAt: now()
-  };
-  
-  if (skills.some((item) => item.name.toLowerCase() === skill.name.toLowerCase())) {
-    return res.status(409).json({ error: "Skill name already exists" });
-  }
-  
-  skills.unshift(skill);
-  audit(req.user.id, "CREATE_SKILL", "SKILL", skill.id);
-  res.status(201).json({ data: skill });
-});
 
-app.patch("/api/skills/:id/status", authenticate, requireRole("Admin"), (req, res) => {
-  const schema = z.object({ status: z.enum(["Active", "Inactive"]) });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  
-  const skill = skills.find((item) => item.id === req.params.id);
-  if (!skill) return res.status(404).json({ error: "Skill not found" });
-  
-  skill.status = parsed.data.status;
-  audit(req.user.id, "SKILL_STATUS", "SKILL", skill.id, parsed.data);
-  res.json({ data: skill });
-});
 
-app.post("/api/skills/targets", authenticate, requireRole("Admin"), (req, res) => {
-  const schema = z.object({
-    skillId: z.string(),
-    scope: z.enum(["Organization", "Department", "Role", "Employee"]),
-    department: z.string().optional(),
-    designation: z.string().optional(),
-    userId: z.string().optional(),
-    targetLevel: z.enum(["Beginner", "Intermediate", "Advanced", "Expert"]),
-    targetScore: z.coerce.number().min(1).max(100),
-    priority: z.enum(["Low", "Medium", "High"])
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  
-  const target = {
-    id: `TS-${Math.floor(1000 + Math.random() * 9000)}`,
-    skillId: parsed.data.skillId,
-    scope: parsed.data.scope,
-    department: parsed.data.scope === "Department" ? parsed.data.department : undefined,
-    designation: parsed.data.scope === "Role" ? parsed.data.designation : undefined,
-    userId: parsed.data.scope === "Employee" ? parsed.data.userId : undefined,
-    targetLevel: parsed.data.targetLevel,
-    targetScore: parsed.data.targetScore,
-    priority: parsed.data.priority,
-    createdAt: now()
-  };
-  
-  targetSkills.unshift(target);
-  audit(req.user.id, "CREATE_TARGET_SKILL", "TARGET_SKILL", target.id);
-  res.status(201).json({ data: target });
-});
 
 
 app.get("/api/courses", authenticate, (req, res) => {
   const { skill, approval, status = "Active" } = req.query;
-  let visible = courses;
-  if (req.user.role === "Manager") visible = visible.filter((course) => course.ownerId === req.user.id || course.approval === "Approved");
-  if (req.user.role === "Employee") visible = visible.filter((course) => course.approval === "Approved" && course.status === "Active");
+  let visible = coursesVisibleTo(req.user);
   if (skill) visible = visible.filter((course) => course.skill === skill);
   if (approval) visible = visible.filter((course) => course.approval === approval);
   if (status !== "All") visible = visible.filter((course) => course.status === status);
@@ -1168,7 +1239,7 @@ app.patch("/api/courses/:id/approval", authenticate, requireRole("Admin"), (req,
   res.json({ data: course });
 });
 
-app.patch("/api/courses/:id/status", authenticate, requireRole("Admin"), (req, res) => {
+app.patch("/api/courses/:id/status", authenticate, requireRole("Admin"), requireStepUp, (req, res) => {
   const schema = z.object({ status: z.enum(["Active", "Inactive"]) });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -1179,7 +1250,7 @@ app.patch("/api/courses/:id/status", authenticate, requireRole("Admin"), (req, r
   res.json({ data: course });
 });
 
-app.delete("/api/courses/:id", authenticate, requireRole("Admin", "Manager"), (req, res) => {
+app.delete("/api/courses/:id", authenticate, requireRole("Admin", "Manager"), requireStepUp, (req, res) => {
   const schema = z.object({ deletionComment: z.string().min(10) });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -1229,7 +1300,7 @@ app.delete("/api/courses/:id", authenticate, requireRole("Admin", "Manager"), (r
 app.get("/api/courses/:courseId/chapters", authenticate, (req, res) => {
   const course = courses.find((item) => item.id === req.params.courseId);
   if (!course) return res.status(404).json({ error: "Course not found" });
-  if (req.user.role === "Employee" && (course.approval !== "Approved" || course.status !== "Active")) {
+  if (!coursesVisibleTo(req.user).some((item) => item.id === course.id)) {
     return res.status(403).json({ error: "Forbidden" });
   }
   const data = chapters
@@ -1320,9 +1391,31 @@ app.post("/api/assignments", authenticate, requireRole("Admin", "Manager"), (req
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const created = parsed.data.userIds.map((userId) => ({
+
+  const course = courses.find((item) => item.id === parsed.data.courseId);
+  if (!course) return res.status(404).json({ error: "Course not found" });
+  if (req.user.role === "Manager" && !coursesVisibleTo(req.user).some((item) => item.id === course.id)) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const allowedUserIds = new Set(visibleUserIdsFor(req.user));
+  const uniqueUserIds = [...new Set(parsed.data.userIds)];
+  const invalidUserIds = uniqueUserIds.filter((userId) => {
+    const user = users.find((item) => item.id === userId && item.status === "Active");
+    return !user || !allowedUserIds.has(userId) || userId === req.user.id && req.user.role === "Manager";
+  });
+  if (invalidUserIds.length) {
+    return res.status(403).json({ error: "One or more assignees are outside your permitted scope", userIds: invalidUserIds });
+  }
+
+  const duplicates = uniqueUserIds.filter((userId) => assignments.some((assignment) => assignment.courseId === course.id && assignment.userId === userId));
+  if (duplicates.length) {
+    return res.status(409).json({ error: "One or more users are already assigned to this course", userIds: duplicates });
+  }
+
+  const created = uniqueUserIds.map((userId) => ({
     id: `ENR-${Math.floor(1000 + Math.random() * 9000)}`,
-    courseId: parsed.data.courseId,
+    courseId: course.id,
     userId,
     assignedBy: req.user.id,
     progress: 0,
@@ -1337,14 +1430,12 @@ app.post("/api/assignments", authenticate, requireRole("Admin", "Manager"), (req
     createdAt: now()
   }));
   assignments.push(...created);
-  audit(req.user.id, "ASSIGN_COURSE", "COURSE", parsed.data.courseId, { count: created.length });
+  audit(req.user.id, "ASSIGN_COURSE", "COURSE", course.id, { count: created.length });
   res.status(201).json({ data: created });
 });
 
 app.get("/api/assessments", authenticate, (req, res) => {
-  let visible = assessments;
-  if (req.user.role === "Manager") visible = visible.filter((item) => item.ownerId === req.user.id || item.approval === "Approved");
-  if (req.user.role === "Employee") visible = visible.filter((item) => item.approval === "Approved");
+  const visible = assessmentsVisibleTo(req.user);
   res.json({ data: visible.map((item) => assessmentForUser(item, req.user)), total: visible.length });
 });
 
@@ -1401,7 +1492,7 @@ app.put("/api/assessments/:id", authenticate, requireRole("Admin", "Manager"), (
   res.json({ data: assessment });
 });
 
-app.patch("/api/assessments/:id/status", authenticate, requireRole("Admin", "Manager"), (req, res) => {
+app.patch("/api/assessments/:id/status", authenticate, requireRole("Admin", "Manager"), requireStepUp, (req, res) => {
   const schema = z.object({ status: z.enum(["Active", "Inactive"]) });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -1414,7 +1505,7 @@ app.patch("/api/assessments/:id/status", authenticate, requireRole("Admin", "Man
   res.json({ data: assessment });
 });
 
-app.delete("/api/assessments/:id", authenticate, requireRole("Admin", "Manager"), (req, res) => {
+app.delete("/api/assessments/:id", authenticate, requireRole("Admin", "Manager"), requireStepUp, (req, res) => {
   const schema = z.object({ deletionComment: z.string().min(10) });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -1455,8 +1546,16 @@ app.patch("/api/assessments/:id/approval", authenticate, requireRole("Admin"), (
 });
 
 app.post("/api/assessments/:id/attempts/start", authenticate, requireRole("Employee", "Manager", "Admin"), (req, res) => {
-  const assessment = assessments.find((item) => item.id === req.params.id && item.approval === "Approved");
+  const assessment = assessments.find((item) => item.id === req.params.id && item.approval === "Approved" && item.status === "Active");
   if (!assessment) return res.status(404).json({ error: "Approved assessment not found" });
+  const course = courses.find((item) => item.id === assessment.courseId);
+  if (!course || course.approval !== "Approved" || course.status !== "Active") {
+    return res.status(403).json({ error: "Assessment is not available" });
+  }
+  if (!isAdmin(req.user.role)) {
+    const assigned = assignments.some((assignment) => assignment.userId === req.user.id && assignment.courseId === assessment.courseId);
+    if (!assigned) return res.status(403).json({ error: "You are not assigned to this course" });
+  }
   const attempt = { id: uuid(), assessmentId: assessment.id, courseId: assessment.courseId, chapterId: assessment.chapterId || null, userId: req.user.id, startedAt: now(), submittedAt: null, status: "InProgress", score: null, maxScore: questionPointsTotal(assessment), feedback: "", answers: {}, selectedQuestionIds: [], tabSwitchWarnings: 0, autoSubmittedReason: null, timeSpentSeconds: 0, flags: [] };
   attempts.unshift(attempt);
   audit(req.user.id, "START_ATTEMPT", "ASSESSMENT_ATTEMPT", attempt.id);
@@ -1483,7 +1582,11 @@ app.post("/api/assessments/attempts/:attemptId/submit", authenticate, (req, res)
   const mcqScore = mcqQuestions.length ? Math.round((mcqQuestions.filter((question) => parsed.data.answers?.[question.id] === question.answer).length / mcqQuestions.length) * 100) : null;
   const submittedAt = now();
   const elapsedSeconds = Math.max(1, Math.round((new Date(submittedAt).getTime() - new Date(attempt.startedAt).getTime()) / 1000));
-  const timeSpentSeconds = parsed.data.timeSpentSeconds || elapsedSeconds;
+  const requestedTimeSpentSeconds = parsed.data.timeSpentSeconds || elapsedSeconds;
+  const timeSpentSeconds = Math.min(requestedTimeSpentSeconds, elapsedSeconds + ASSESSMENT_TIME_GRACE_SECONDS);
+  if (requestedTimeSpentSeconds > elapsedSeconds + ASSESSMENT_TIME_GRACE_SECONDS) {
+    audit(req.user.id, "ASSESSMENT_TIME_CLAMPED", "ASSESSMENT_ATTEMPT", attempt.id, { requestedTimeSpentSeconds, elapsedSeconds });
+  }
   Object.assign(attempt, {
     answers: parsed.data.answers,
     selectedQuestionIds: parsed.data.selectedQuestionIds || attempt.selectedQuestionIds || [],
@@ -1525,103 +1628,20 @@ app.post("/api/proctoring/events", authenticate, (req, res) => {
   res.status(201).json({ data: event, autoSubmitted: attempt?.status === "AutoSubmitted" });
 });
 
-app.get("/api/analytics/global", authenticate, requireRole("Admin"), (_req, res) => {
-  res.json({ users: users.length, activeUsers: users.filter((user) => user.status === "Active").length, courses: courses.length, approvedCourses: courses.filter((course) => course.approval === "Approved").length, completionRate: 78, averageScore: 86, topPerformers: ["Diya Sharma", "Nisha Rao"], lowPerformers: ["Rohan Das"] });
-});
 
-app.get("/api/analytics/team", authenticate, requireRole("Manager"), (req, res) => {
-  const team = users.filter((user) => user.managerId === req.user.id);
-  res.json({ managerId: req.user.id, members: team.map(publicUser), completionRate: 74, skillGaps: ["Secure coding", "Data storytelling"], engagement: "Medium-high" });
-});
 
-app.get("/api/analytics/me", authenticate, (req, res) => {
-  res.json({ userId: req.user.id, progress: 76, completedCourses: 9, pendingCourses: 3, strengths: ["Communication", "Compliance"], weaknesses: ["Secure coding"], suggestions: ["Complete Secure Coding for Cloud Teams", "Retake practice quiz"] });
-});
 
-app.post("/api/reports/export", authenticate, requireRole("Admin", "Manager"), (req, res) => {
-  const schema = z.object({ format: z.enum(["PDF", "Excel"]), reportType: z.enum(["User", "Team", "Course"]), filters: z.record(z.string(), z.any()).default({}) });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const rows = buildReportRows({ reportType: parsed.data.reportType, filters: parsed.data.filters, requester: req.user });
-  const summary = rows.reduce((acc, row) => ({
-    chapterTimeSeconds: acc.chapterTimeSeconds + (row.chapterTimeSeconds || 0),
-    assessmentTimeSeconds: acc.assessmentTimeSeconds + (row.assessmentTimeSeconds || 0),
-    courseTimeSeconds: acc.courseTimeSeconds + (row.courseTimeSeconds || 0)
-  }), { chapterTimeSeconds: 0, assessmentTimeSeconds: 0, courseTimeSeconds: 0 });
-  const report = { id: uuid(), requestedBy: req.user.id, status: "Ready", downloadUrl: `/exports/${uuid()}.${parsed.data.format === "PDF" ? "pdf" : "xlsx"}`, ...parsed.data, rowCount: rows.length, rows, summary, createdAt: now() };
-  reportExports.unshift(report);
-  audit(req.user.id, "EXPORT_REPORT", "REPORT", report.id, parsed.data);
-  res.status(202).json({ data: report });
-});
 
-app.get("/api/certificates", authenticate, (req, res) => {
-  let visible = issuedCertificates;
-  if (req.user.role === "Manager") {
-    const teamIds = new Set(users.filter((u) => u.managerId === req.user.id).map((u) => u.id));
-    visible = visible.filter((cert) => cert.employeeId === req.user.id || teamIds.has(cert.employeeId));
-  } else if (req.user.role === "Employee") {
-    visible = visible.filter((cert) => cert.employeeId === req.user.id);
-  }
-  res.json({ data: visible, total: visible.length });
-});
+// ── Certificates (extracted to a layered module; see src/modules/certificates) ──
+// Strangler bridge: shared deps are injected via ctx until the persistence and
+// middleware layers are fully extracted in the full rollout.
+registerCertificates(app, { store: { issuedCertificates, users, courses }, audit, now, authenticate, requireRole });
 
-app.post("/api/certificates", authenticate, requireRole("Admin"), (req, res) => {
-  const schema = z.object({ employeeId: z.string(), courseId: z.string(), title: z.string().default("Certificate of Completion"), template: z.string().default("Executive"), accent: z.string().default("#0f766e"), duration: z.string().default(""), subtitle: z.string().default(""), footer: z.string().default(""), htmlSnapshot: z.string() });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  
-  const employee = users.find((u) => u.id === parsed.data.employeeId);
-  const course = courses.find((c) => c.id === parsed.data.courseId);
-  if (!employee || !course) return res.status(404).json({ error: "Employee or Course not found" });
 
-  const cert = { id: `CERT-${Math.floor(1000 + Math.random() * 9000)}`, ...parsed.data, issuedBy: req.user.id, issuedByName: req.user.name, issuedAt: now() };
-  issuedCertificates.unshift(cert);
-  audit(req.user.id, "ISSUE_CERTIFICATE", "CERTIFICATE", cert.id, { employeeId: cert.employeeId, courseId: cert.courseId });
-  res.status(201).json({ data: cert });
-});
 
-app.get("/api/archive", authenticate, requireRole("Super Admin"), (req, res) => {
-  res.json({ data: archives, total: archives.length });
-});
 
-app.post("/api/archive/:id/restore", authenticate, requireRole("Super Admin"), (req, res) => {
-  const idx = archives.findIndex((item) => item.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: "Archived record not found" });
-  
-  const record = archives[idx];
-  if (record.entityType === "User") {
-    users.unshift(record.entityData);
-  } else if (record.entityType === "Course") {
-    courses.unshift(record.entityData);
-    if (record.relatedData?.chapters) chapters.unshift(...record.relatedData.chapters);
-    if (record.relatedData?.assessments) assessments.unshift(...record.relatedData.assessments);
-    if (record.relatedData?.enrollments) assignments.unshift(...record.relatedData.enrollments);
-  } else if (record.entityType === "Assessment") {
-    assessments.unshift(record.entityData);
-  }
 
-  archives.splice(idx, 1);
-  audit(req.user.id, "RESTORE_ARCHIVE", record.entityType.toUpperCase(), record.entityId);
-  res.json({ success: true, message: `${record.entityType} restored` });
-});
 
-app.get("/api/settings", authenticate, requireRole("Admin"), (_req, res) => {
-  res.json({ data: settings });
-});
-
-app.patch("/api/settings", authenticate, requireRole("Admin"), (req, res) => {
-  const schema = z.object({ fullscreenRequired: z.boolean().optional(), cameraRequired: z.boolean().optional(), microphoneRequired: z.boolean().optional(), tabSwitchAutoSubmit: z.boolean().optional(), noiseThreshold: z.number().min(1).max(100).optional(), maxAssessmentFlags: z.number().min(0).optional() });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  settings = { ...settings, ...parsed.data };
-  audit(req.user.id, "UPDATE_SETTINGS", "SETTINGS", "proctoring", parsed.data);
-  res.json({ data: settings });
-});
-
-app.get("/api/audit-logs", authenticate, requireRole("Admin"), (req, res) => {
-  const limit = Math.min(Number(req.query.limit || 50), 200);
-  res.json({ data: auditLogs.slice(0, limit), total: auditLogs.length });
-});
 
 // ── Video Progress Endpoints ──
 
@@ -1636,7 +1656,7 @@ app.post("/api/courses/:courseId/chapters/:chapterId/progress", authenticate, (r
 });
 
 app.post("/api/courses/:courseId/chapters/:chapterId/time", authenticate, (req, res) => {
-  const schema = z.object({ seconds: z.number().int().positive() });
+  const schema = z.object({ seconds: z.number().int().positive().max(MAX_CHAPTER_TIME_INCREMENT_SECONDS) });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
@@ -1663,27 +1683,7 @@ app.post("/api/courses/:courseId/chapters/:chapterId/time", authenticate, (req, 
   });
 });
 
-app.get("/api/analytics/time", authenticate, requireRole("Admin", "Manager"), (req, res) => {
-  const rows = buildTimeRows(req.user);
-  const summary = rows.reduce((acc, row) => ({
-    chapterTimeSeconds: acc.chapterTimeSeconds + (row.chapterTimeSeconds || 0),
-    assessmentTimeSeconds: acc.assessmentTimeSeconds + (row.assessmentTimeSeconds || 0),
-    courseTimeSeconds: acc.courseTimeSeconds + (row.courseTimeSeconds || 0)
-  }), { chapterTimeSeconds: 0, assessmentTimeSeconds: 0, courseTimeSeconds: 0 });
-  res.json({
-    data: rows,
-    total: rows.length,
-    eventCount: learningTimeEvents.filter((event) => visibleUserIdsFor(req.user).includes(event.userId)).length,
-    summary
-  });
-});
 
-app.get("/api/analytics/time/events", authenticate, requireRole("Admin", "Manager"), (req, res) => {
-  const visibleUserIds = visibleUserIdsFor(req.user);
-  const limit = Math.min(Number(req.query.limit || 100), 500);
-  const data = learningTimeEvents.filter((event) => visibleUserIds.includes(event.userId)).slice(0, limit);
-  res.json({ data, total: data.length });
-});
 
 app.get("/api/ai/generation-feedback", authenticate, requireRole("Admin", "Manager"), (req, res) => {
   res.json({ data: acharyaFeedbackMemory.slice(0, 25) });
@@ -2565,108 +2565,43 @@ app.get("/api/app-data", authenticate, (req, res) => {
   const admin = isAdmin(req.user.role);
   const superAdmin = req.user.role === "Super Admin";
   const visibleUserIds = new Set(visibleUserIdsFor(req.user));
-  const scopedAttempts = admin ? attempts : attempts.filter((a) => visibleUserIds.has(a.userId));
-  const scopedProctoring = admin ? proctoringLogs : proctoringLogs.filter((p) => visibleUserIds.has(p.userId));
-  const scopedReports = admin ? reportExports : reportExports.filter((r) => r.requestedBy === req.user.id);
-  const scopedCertificates = admin ? issuedCertificates : issuedCertificates.filter((c) => visibleUserIds.has(c.employeeId));
+  const visibleCourses = coursesVisibleTo(req.user);
+  const visibleCourseIds = new Set(visibleCourses.map((course) => course.id));
+  const scopedAssignments = assignments.filter((assignment) => assignmentVisibleTo(assignment, req.user) && (admin || visibleCourseIds.has(assignment.courseId)));
+  const scopedAttempts = attempts.filter((attempt) => admin || visibleUserIds.has(attempt.userId));
+  const scopedProctoring = proctoringLogs.filter((event) => admin || visibleUserIds.has(event.userId));
+  const scopedReports = admin ? reportExports : reportExports.filter((report) => report.requestedBy === req.user.id);
+  const scopedCertificates = issuedCertificates.filter((cert) => admin || visibleUserIds.has(cert.employeeId));
+  const scopedChapters = chapters.filter((chapter) => visibleCourseIds.has(chapter.courseId));
+  const scopedAssessments = assessmentsVisibleTo(req.user).map((assessment) => assessmentForUser(assessment, req.user));
+  const scopedUsers = users.filter((user) => visibleUserIds.has(user.id)).map(publicUser);
   res.json({
-    users: users.map(publicUser),
-    courses,
-    chapters,
-    assessments: assessments.map((a) => assessmentForUser(a, req.user)),
-    assignments,
+    users: scopedUsers,
+    courses: visibleCourses,
+    chapters: scopedChapters,
+    assessments: scopedAssessments,
+    assignments: scopedAssignments,
     attempts: scopedAttempts,
     proctoringLogs: scopedProctoring,
     auditLogs: admin ? auditLogs : [],
-    learningTimeEvents: admin ? learningTimeEvents : learningTimeEvents.filter((e) => visibleUserIds.has(e.userId)),
+    securityEvents: admin ? securityEvents.slice(0, 500) : [],
+    learningTimeEvents: learningTimeEvents.filter((event) => admin || visibleUserIds.has(event.userId)),
     acharyaFeedbackMemory: admin ? acharyaFeedbackMemory : [],
     reportExports: scopedReports,
-    settings,
+    settings: admin ? settings : {},
     issuedCertificates: scopedCertificates,
     archives: superAdmin ? archives : [],
     skills,
-    targetSkills,
-    skillRatings,
-    chapterFeedbacks
+    targetSkills: targetSkills.filter((target) => targetSkillVisibleTo(target, req.user)),
+    skillRatings: skillRatings.filter((rating) => admin || visibleUserIds.has(rating.userId)),
+    chapterFeedbacks: chapterFeedbacks.filter((feedback) => admin || feedback.userId === req.user.id || visibleCourseIds.has(feedback.courseId))
   });
 });
 
 // ── Skills Endpoints ──
-app.post("/api/skills", authenticate, requireRole("Admin"), (req, res) => {
-  const schema = z.object({
-    name: z.string().min(1),
-    category: z.enum(["Technical", "Functional", "Leadership", "Compliance", "Behavioral"]),
-    description: z.string().default("")
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  
-  const skill = {
-    id: `SKILL-${Math.floor(1000 + Math.random() * 9000)}`,
-    ...parsed.data,
-    status: "Active",
-    createdAt: now()
-  };
-  skills.push(skill);
-  audit(req.user.id, "CREATE_SKILL", "SKILL", skill.id);
-  res.status(201).json({ data: skill });
-});
 
-app.patch("/api/skills/:id", authenticate, requireRole("Admin"), (req, res) => {
-  const skill = skills.find((s) => s.id === req.params.id);
-  if (!skill) return res.status(404).json({ error: "Skill not found" });
-  if (req.body.status) skill.status = req.body.status;
-  audit(req.user.id, "UPDATE_SKILL_STATUS", "SKILL", skill.id);
-  res.json({ data: skill });
-});
 
-// ── Target Skills Endpoints ──
-app.post("/api/target-skills", authenticate, requireRole("Admin"), (req, res) => {
-  const schema = z.object({
-    skillId: z.string(),
-    scope: z.enum(["Organization", "Department", "Role", "Employee"]),
-    department: z.string().optional(),
-    designation: z.string().optional(),
-    userId: z.string().optional(),
-    targetLevel: z.enum(["Beginner", "Intermediate", "Advanced", "Expert"]),
-    targetScore: z.number().min(0).max(100),
-    priority: z.enum(["Low", "Medium", "High"])
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  
-  const target = {
-    id: `TS-${Math.floor(1000 + Math.random() * 9000)}`,
-    ...parsed.data
-  };
-  targetSkills.push(target);
-  audit(req.user.id, "CREATE_TARGET_SKILL", "TARGET_SKILL", target.id);
-  res.status(201).json({ data: target });
-});
 
-// ── Chapter Feedbacks Endpoints ──
-app.post("/api/chapter-feedbacks", authenticate, (req, res) => {
-  const schema = z.object({
-    chapterId: z.string(),
-    courseId: z.string(),
-    rating: z.number().min(1).max(5),
-    clarity: z.number().min(1).max(5),
-    relevance: z.number().min(1).max(5),
-    comments: z.string()
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  
-  const fb = {
-    id: `CF-${Math.floor(1000 + Math.random() * 9000)}`,
-    ...parsed.data,
-    userId: req.user.id,
-    submittedAt: now()
-  };
-  chapterFeedbacks.push(fb);
-  audit(req.user.id, "CHAPTER_FEEDBACK", "FEEDBACK", fb.id);
-  res.status(201).json({ data: fb });
-});
 
 // ── Serve Frontend Production Build ──
 const frontendDistPath = path.resolve(__dirname, "../frontend/dist");
