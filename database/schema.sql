@@ -44,7 +44,7 @@ CREATE INDEX idx_users_manager ON users(manager_id);
 CREATE INDEX idx_users_department ON users(department_id);
 
 COMMENT ON COLUMN users.login_id IS 'Super Admin signs in with "Super Admin"; all other users sign in with their email address.';
-COMMENT ON COLUMN users.password_hash IS 'Store bcrypt hashes only. Demo password policy: Super Admin=Sadmin@2026, Admin=Admin@2026, Manager=Passwrod@2026, Employee=Password@123.';
+COMMENT ON COLUMN users.password_hash IS 'Store bcrypt hashes only. Seed/demo passwords are supplied via SEED_*_PASSWORD environment variables and must be rotated before production use.';
 
 -- Every Active -> Inactive transition invalidates all previously issued JWTs.
 -- Tokens carry the user's session_version claim and the API rejects mismatches.

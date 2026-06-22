@@ -12,6 +12,8 @@ import { loadEnvFile } from "node:process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import crypto from "node:crypto";
+import { createStorage } from "./db.js";
 
 try {
   loadEnvFile();
@@ -39,9 +41,44 @@ const loadLocalEnv = () => {
 loadLocalEnv();
 
 const app = express();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1024 * 1024 * 500 } });
+app.set("trust proxy", 1);
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const PORT = process.env.PORT || 8080;
-const JWT_SECRET = process.env.JWT_SECRET || "dev-only-change-me";
+
+// File uploads are buffered in memory, so cap size aggressively and validate type.
+const ALLOWED_UPLOAD_MIME = new Set([
+  "application/pdf", "video/mp4", "video/webm",
+  "image/png", "image/jpeg", "image/webp", "image/gif",
+]);
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024, files: 5 },
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_UPLOAD_MIME.has(file.mimetype)) return cb(null, true);
+    return cb(new Error("Unsupported file type"));
+  },
+});
+
+// ── Secrets & cookie policy ──
+const DEFAULT_DEV_SECRET = "dev-only-change-me";
+const resolveJwtSecret = () => {
+  const fromEnv = process.env.JWT_SECRET;
+  if (IS_PRODUCTION) {
+    if (!fromEnv || fromEnv === DEFAULT_DEV_SECRET || fromEnv.length < 32) {
+      console.error("FATAL: JWT_SECRET must be set to a strong (>= 32 chars), non-default value in production.");
+      process.exit(1);
+    }
+    return fromEnv;
+  }
+  if (!fromEnv || fromEnv === DEFAULT_DEV_SECRET) {
+    console.warn("[security] JWT_SECRET is missing or default — using an ephemeral development secret. Set a strong JWT_SECRET for stable sessions.");
+    return crypto.randomBytes(48).toString("hex");
+  }
+  return fromEnv;
+};
+const JWT_SECRET = resolveJwtSecret();
+const COOKIE_SECURE = IS_PRODUCTION;
+const COOKIE_SAMESITE = "lax";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const getGeminiApiKey = () => {
   if (!process.env.GEMINI_API_KEY) loadLocalEnv();
@@ -58,23 +95,83 @@ const geminiErrorMessage = (err) => {
   return "Gemini failed to generate a response. Please try again.";
 };
 
+// Bound any provider call so a slow/hung upstream cannot pin a request open.
+const withTimeout = (promise, ms, label = "operation") => Promise.race([
+  promise,
+  new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms)),
+]);
+
 app.use(helmet());
-app.use(cors({ origin: true, credentials: true }));
+
+// ── CORS allow-list ──
+// In production the SPA is served from the same origin, so cross-origin
+// requests are denied unless explicitly allow-listed via ALLOWED_ORIGINS.
+const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "")
+  .split(",").map((o) => o.trim()).filter(Boolean);
+const DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8080"];
+const corsOrigin = (origin, cb) => {
+  if (!origin) return cb(null, true); // same-origin / non-browser clients
+  const allow = ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS : (IS_PRODUCTION ? [] : DEV_ORIGINS);
+  if (allow.includes(origin)) return cb(null, true);
+  return cb(new Error("Origin not allowed by CORS"));
+};
+app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
 app.use(cookieParser());
 
-// ── CSRF token store (server-side validated) ──
-const csrfTokens = new Set();
-
+// ── CSRF protection (double-submit cookie) ──
+// A random token is delivered in an HttpOnly cookie AND echoed to the client in
+// the JSON body; the client returns it via the X-CSRF-Token header. An attacker
+// on another origin can read neither the cookie nor the (CORS-protected) JSON
+// response, so they cannot forge a matching header. The token is bound to the
+// browser session rather than shared in a global set.
+const CSRF_COOKIE = "csrfToken";
+const timingSafeEqual = (a, b) => {
+  const bufA = Buffer.from(String(a || ""));
+  const bufB = Buffer.from(String(b || ""));
+  if (bufA.length === 0 || bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+};
 const verifyCsrf = (req, res, next) => {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
-  const tokenFromHeader = req.headers["x-csrf-token"];
-  if (!tokenFromHeader || !csrfTokens.has(tokenFromHeader)) {
+  const headerToken = req.headers["x-csrf-token"];
+  const cookieToken = req.cookies?.[CSRF_COOKIE];
+  if (!headerToken || !cookieToken || !timingSafeEqual(headerToken, cookieToken)) {
     return res.status(403).json({ error: "Invalid CSRF token" });
   }
   next();
 };
 app.use(verifyCsrf);
+
+// ── In-memory sliding-window rate limiter ──
+const rateBuckets = new Map();
+const RATE_BUCKET_LIMIT = 50000;
+const rateLimit = ({ windowMs = 60_000, max = 600, scope = "ip", name = "" } = {}) => (req, res, next) => {
+  const who = scope === "user" ? (req.user?.id || req.ip || "anon") : (req.ip || "anon");
+  const key = `${name}|${scope}|${who}`;
+  const cutoff = Date.now() - windowMs;
+  const hits = (rateBuckets.get(key) || []).filter((t) => t > cutoff);
+  if (hits.length >= max) {
+    res.setHeader("Retry-After", String(Math.ceil(windowMs / 1000)));
+    return res.status(429).json({ error: "Too many requests. Please slow down and try again shortly." });
+  }
+  hits.push(Date.now());
+  rateBuckets.set(key, hits);
+  if (rateBuckets.size > RATE_BUCKET_LIMIT) rateBuckets.clear();
+  next();
+};
+// Stricter per-user budget for cost-bearing AI endpoints; applied after authenticate.
+const aiRateLimit = rateLimit({ windowMs: 60_000, max: 15, scope: "user", name: "ai" });
+app.use("/api", rateLimit({ windowMs: 60_000, max: 600, scope: "ip", name: "global" }));
+
+app.use((req, res, next) => {
+  if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") {
+    res.on("finish", () => {
+      persist();
+    });
+  }
+  next();
+});
 
 const roles = ["Super Admin", "Admin", "Manager", "Employee"];
 const adminRoles = ["Super Admin", "Admin"];
@@ -107,7 +204,18 @@ const rateLimitRecord = (ip, endpoint) => {
   while (rateLimitLog.length > 0 && rateLimitLog[0].at < cutoff) rateLimitLog.shift();
 };
 
+// Seed/demo credentials are env-driven. In production, accounts without a
+// configured SEED_*_PASSWORD get a random unknown password (no shipped creds);
+// the documented values below are development conveniences only.
 const rolePassword = (role) => {
+  const envKey = {
+    "Super Admin": "SEED_SUPERADMIN_PASSWORD",
+    "Admin": "SEED_ADMIN_PASSWORD",
+    "Manager": "SEED_MANAGER_PASSWORD",
+    "Employee": "SEED_EMPLOYEE_PASSWORD",
+  }[role];
+  if (envKey && process.env[envKey]) return process.env[envKey];
+  if (IS_PRODUCTION) return crypto.randomBytes(18).toString("base64url");
   if (role === "Super Admin") return "Sadmin@2026";
   if (role === "Admin") return "Admin@2026";
   if (role === "Manager") return "Passwrod@2026";
@@ -141,29 +249,153 @@ const users = [
   demoUser({ id: "EMP-1008", name: "Vikram Shah", email: "vikram@nalanda.local", department: "People Ops", team: "HR Operations", designation: "HR Business Partner", role: "Admin", managerId: "EMP-1001", status: "Active", joinedAt: "2024-04-22" }),
 ];
 
+if (IS_PRODUCTION && !process.env.SEED_SUPERADMIN_PASSWORD) {
+  console.warn("[security] No SEED_*_PASSWORD set in production — seeded accounts use random unknown passwords. Set SEED_SUPERADMIN_PASSWORD (and peers) to bootstrap access.");
+}
+
+const skills = [
+  { id: "SKILL-SEC", name: "Security", category: "Technical", description: "Secure coding, OWASP controls, and threat modeling.", status: "Active", createdAt: now() },
+  { id: "SKILL-LEAD", name: "Leadership", category: "Leadership", description: "Feedback, coaching, and team development practices.", status: "Active", createdAt: now() },
+  { id: "SKILL-ANL", name: "Analytics", category: "Functional", description: "Data interpretation, storytelling, and business review skills.", status: "Active", createdAt: now() },
+  { id: "SKILL-COMM", name: "Communication", category: "Behavioral", description: "Clear stakeholder communication and presentation skills.", status: "Active", createdAt: now() },
+  { id: "SKILL-COMP", name: "Compliance", category: "Compliance", description: "Policy, risk, and regulatory readiness.", status: "Active", createdAt: now() },
+  { id: "SKILL-QA", name: "QA Automation", category: "Technical", description: "Automated test strategy, UI/API automation, regression quality gates, and release evidence.", status: "Active", createdAt: now() },
+  { id: "SKILL-PYFS", name: "Python Full Stack", category: "Technical", description: "Python APIs, frontend integration, databases, authentication, and deployment-ready full stack delivery.", status: "Active", createdAt: now() },
+];
+
+const targetSkills = [
+  { id: "TS-001", skillId: "SKILL-SEC", scope: "Department", department: "Engineering", targetLevel: "Advanced", targetScore: 85, priority: "High" },
+  { id: "TS-002", skillId: "SKILL-ANL", scope: "Department", department: "Sales", targetLevel: "Intermediate", targetScore: 75, priority: "Medium" },
+  { id: "TS-003", skillId: "SKILL-LEAD", scope: "Role", designation: "Sales Lead", targetLevel: "Advanced", targetScore: 85, priority: "High" },
+  { id: "TS-004", skillId: "SKILL-COMP", scope: "Organization", targetLevel: "Intermediate", targetScore: 70, priority: "High" },
+  { id: "TS-005", skillId: "SKILL-SEC", scope: "Employee", userId: "EMP-1004", targetLevel: "Advanced", targetScore: 90, priority: "High" },
+  { id: "TS-006", skillId: "SKILL-QA", scope: "Department", department: "Team:QA Automation", targetLevel: "Advanced", targetScore: 85, priority: "High" },
+  { id: "TS-007", skillId: "SKILL-PYFS", scope: "Department", department: "Team:Platform", targetLevel: "Intermediate", targetScore: 80, priority: "High" },
+];
+
+const skillRatings = [
+  { id: "SK-001", userId: "EMP-1004", skill: "Security", score: 87, assessmentsBased: 2, trend: "up", lastUpdated: now() },
+  { id: "SK-002", userId: "EMP-1004", skill: "Leadership", score: 42, assessmentsBased: 0, trend: "stable", lastUpdated: now() },
+  { id: "SK-003", userId: "EMP-1004", skill: "Analytics", score: 55, assessmentsBased: 0, trend: "stable", lastUpdated: now() },
+  { id: "SK-004", userId: "EMP-1004", skill: "Communication", score: 70, assessmentsBased: 1, trend: "up", lastUpdated: now() },
+  { id: "SK-005", userId: "EMP-1004", skill: "Compliance", score: 63, assessmentsBased: 1, trend: "stable", lastUpdated: now() },
+  { id: "SK-006", userId: "EMP-1005", skill: "Leadership", score: 78, assessmentsBased: 1, trend: "up", lastUpdated: now() },
+  { id: "SK-007", userId: "EMP-1005", skill: "Security", score: 35, assessmentsBased: 0, trend: "stable", lastUpdated: now() },
+  { id: "SK-008", userId: "EMP-1005", skill: "Communication", score: 82, assessmentsBased: 1, trend: "up", lastUpdated: now() },
+  { id: "SK-009", userId: "EMP-1006", skill: "Leadership", score: 91, assessmentsBased: 2, trend: "up", lastUpdated: now() },
+  { id: "SK-010", userId: "EMP-1002", skill: "Security", score: 72, assessmentsBased: 1, trend: "up", lastUpdated: now() },
+  { id: "SK-011", userId: "EMP-1002", skill: "Leadership", score: 88, assessmentsBased: 2, trend: "up", lastUpdated: now() },
+];
+
+const chapterFeedbacks = [
+  { id: "CF-001", chapterId: "CH-001", courseId: "CRS-001", userId: "EMP-1004", rating: 5, clarity: 5, relevance: 4, comments: "Very clear and practical content.", submittedAt: now() },
+];
+
 const courses = [
-  { id: "NLD-SC-2048", title: "Secure Coding for Cloud Teams", description: "Threat modeling, OWASP controls, and secure release patterns.", skill: "Security", tags: ["OWASP", "Cloud"], contentTypes: ["PDF", "Rich Text", "Video Link"], approval: "Approved", status: "Active", ownerId: "EMP-1001", version: 3, createdAt: now(), updatedAt: now() },
-  { id: "NLD-LD-1130", title: "Manager Essentials: Feedback Systems", description: "Coaching rituals and measurable development plans.", skill: "Leadership", tags: ["People", "Coaching"], contentTypes: ["Rich Text", "Uploaded Video"], approval: "Pending", status: "Active", ownerId: "EMP-1002", version: 1, createdAt: now(), updatedAt: now() },
+  { id: "CRS-001", title: "Secure Coding for Cloud Teams", description: "Threat modeling, OWASP controls, and secure release patterns.", skill: "Security", skillIds: ["SKILL-SEC"], targetLevel: "Advanced", prerequisites: [], category: "Technical", tags: ["OWASP", "Cloud"], thumbnailColor: "#22d3ee", ownerId: "EMP-1003", approval: "Approved", status: "Active", version: 2, difficulty: "Advanced", estimatedHours: 6, createdAt: now(), updatedAt: now() },
+  { id: "CRS-002", title: "Manager Essentials: Feedback Systems", description: "Practical rituals for coaching and performance reviews.", skill: "Leadership", skillIds: ["SKILL-LEAD", "SKILL-COMM"], targetLevel: "Intermediate", prerequisites: [], category: "Soft Skills", tags: ["Coaching", "People"], thumbnailColor: "#a78bfa", ownerId: "EMP-1002", approval: "Approved", status: "Active", version: 1, difficulty: "Intermediate", estimatedHours: 4, createdAt: now(), updatedAt: now() },
+  { id: "CRS-003", title: "Data Storytelling for Business Reviews", description: "Build executive narratives with evidence and charts.", skill: "Analytics", skillIds: ["SKILL-ANL"], targetLevel: "Beginner", prerequisites: [], category: "Business", tags: ["BI", "Charts"], thumbnailColor: "#34d399", ownerId: "EMP-1003", approval: "Pending", status: "Active", version: 1, difficulty: "Beginner", estimatedHours: 3, createdAt: now(), updatedAt: now() },
+  { id: "CRS-QA-001", title: "QA Automation Foundations", description: "Build a practical base in automation strategy, selectors, test design, and stable UI validation.", skill: "QA Automation", skillIds: ["SKILL-QA"], targetLevel: "Intermediate", prerequisites: [], category: "QA Automation", tags: ["Selenium", "Playwright", "Regression"], thumbnailColor: "#38bdf8", ownerId: "EMP-1003", approval: "Approved", status: "Active", version: 1, difficulty: "Intermediate", estimatedHours: 6, createdAt: now(), updatedAt: now() },
+  { id: "CRS-PY-001", title: "Python Full Stack Essentials", description: "Create full stack applications with Python APIs, React interfaces, authentication, and database workflows.", skill: "Python Full Stack", skillIds: ["SKILL-PYFS"], targetLevel: "Intermediate", prerequisites: [], category: "Full Stack", tags: ["Python", "FastAPI", "React"], thumbnailColor: "#34d399", ownerId: "EMP-1003", approval: "Approved", status: "Active", version: 1, difficulty: "Intermediate", estimatedHours: 7, createdAt: now(), updatedAt: now() },
+  { id: "CRS-QAPY-001", title: "Python API Test Automation", description: "Use Python to validate APIs, contract behavior, fixtures, CI execution, and evidence-ready automation reports.", skill: "QA Automation", skillIds: ["SKILL-QA", "SKILL-PYFS"], targetLevel: "Advanced", prerequisites: ["CRS-QA-001"], category: "QA Automation", tags: ["Pytest", "API", "CI"], thumbnailColor: "#f59e0b", ownerId: "EMP-1003", approval: "Approved", status: "Active", version: 1, difficulty: "Advanced", estimatedHours: 6, createdAt: now(), updatedAt: now() },
 ];
 
 const chapters = [
-  { id: "CH-SC-001", courseId: "NLD-SC-2048", sequence: 1, title: "Threat Model Primer", description: "Identify assets, actors, and trust boundaries.", contentType: "Rich Text", body: "A threat model identifies assets, actors, trust boundaries, and failure modes before a release.", durationMinutes: 25, minimumTimeMinutes: 15, createdAt: now(), updatedAt: now() },
-  { id: "CH-SC-002", courseId: "NLD-SC-2048", sequence: 2, title: "OWASP Controls", description: "Apply OWASP controls to common cloud application risks.", contentType: "PDF", body: "Map OWASP risks to release controls and validation evidence.", fileName: "owasp-controls.pdf", durationMinutes: 35, minimumTimeMinutes: 25, createdAt: now(), updatedAt: now() },
-  { id: "CH-LD-001", courseId: "NLD-LD-1130", sequence: 1, title: "SBI Feedback Method", description: "Practice feedback using Situation, Behavior, and Impact.", contentType: "Rich Text", body: "Use SBI to make feedback observable, specific, and actionable.", durationMinutes: 20, minimumTimeMinutes: 12, createdAt: now(), updatedAt: now() },
+  { id: "CH-001", courseId: "CRS-001", sequence: 1, title: "Threat Model Primer", description: "Identify assets, actors, and trust boundaries.", contentType: "Rich Text", body: "A threat model identifies what you're protecting (assets), who might attack (threat actors), where trust changes (boundaries), and what could go wrong (threats). Document controls and validation evidence before every release.", durationMinutes: 25, minimumTimeMinutes: 15, createdAt: now(), updatedAt: now() },
+  { id: "CH-002", courseId: "CRS-001", sequence: 2, title: "OWASP Top 10 Deep Dive", description: "Master the OWASP Top 10 vulnerabilities.", contentType: "PDF", body: "Comprehensive walkthrough of all OWASP Top 10 items with real-world exploit examples and mitigation strategies.", fileName: "owasp-top10.pdf", durationMinutes: 35, minimumTimeMinutes: 25, createdAt: now(), updatedAt: now() },
+  { id: "CH-003", courseId: "CRS-001", sequence: 3, title: "Secret Scanning & CI/CD", description: "Automated secret detection in pipelines.", contentType: "Video Link", body: "Learn to configure secret scanning tools in your CI/CD pipeline.", url: "https://www.youtube.com/embed/dQw4w9WgXcQ", durationMinutes: 20, minimumTimeMinutes: 10, createdAt: now(), updatedAt: now() },
+  { id: "CH-004", courseId: "CRS-002", sequence: 1, title: "SBI Feedback Method", description: "Situation, Behavior, Impact framework.", contentType: "Rich Text", body: "The SBI model structures feedback around observable Situations, specific Behaviors, and measurable Impact. This makes feedback concrete and actionable rather than vague.", durationMinutes: 20, minimumTimeMinutes: 12, createdAt: now(), updatedAt: now() },
+  { id: "CH-005", courseId: "CRS-002", sequence: 2, title: "Coaching Conversations", description: "Running effective 1:1 coaching sessions.", contentType: "Rich Text", body: "Structure your coaching around GROW: Goal, Reality, Options, Will. Ask powerful questions instead of giving answers.", durationMinutes: 30, minimumTimeMinutes: 15, createdAt: now(), updatedAt: now() },
+  { id: "CH-006", courseId: "CRS-003", sequence: 1, title: "Narrative Flow Fundamentals", description: "Start with the decision, show signal, explain risk.", contentType: "Rich Text", body: "Every data story should answer: What decision does this inform? What does the data signal? What's the risk of inaction?", durationMinutes: 20, minimumTimeMinutes: 10, createdAt: now(), updatedAt: now() },
+  { id: "CH-007", courseId: "CRS-003", sequence: 2, title: "Chart Selection Patterns", description: "Choosing the right visualization for your data.", contentType: "PDF", body: "Guide to selecting appropriate chart types based on data relationships.", fileName: "chart-patterns.pdf", durationMinutes: 25, minimumTimeMinutes: 15, createdAt: now(), updatedAt: now() },
+  { id: "CH-QA-001", courseId: "CRS-QA-001", sequence: 1, title: "Automation Strategy & Scope", description: "Define what should be automated and how to prioritize regression coverage.", contentType: "Rich Text", body: "Effective QA automation starts with choosing stable, high-value workflows. Classify tests by risk, frequency, business impact, and data setup complexity before writing scripts.", durationMinutes: 35, minimumTimeMinutes: 20, createdAt: now(), updatedAt: now() },
+  { id: "CH-QA-002", courseId: "CRS-QA-001", sequence: 2, title: "Locator Design & Page Objects", description: "Create maintainable selectors and reusable page-level actions.", contentType: "Rich Text", body: "Reliable automation depends on stable locators, clear page objects, and test code that describes user behavior instead of DOM implementation details.", durationMinutes: 40, minimumTimeMinutes: 25, createdAt: now(), updatedAt: now() },
+  { id: "CH-QA-003", courseId: "CRS-QA-001", sequence: 3, title: "Regression Execution & Reporting", description: "Run suites, manage failures, and produce actionable test evidence.", contentType: "Rich Text", body: "A regression suite should produce fast feedback, isolate flaky failures, and publish artifacts that make release decisions easier.", durationMinutes: 40, minimumTimeMinutes: 25, createdAt: now(), updatedAt: now() },
+  { id: "CH-PY-001", courseId: "CRS-PY-001", sequence: 1, title: "Python Backend Foundations", description: "Structure services, routes, validation, and clean business logic.", contentType: "Rich Text", body: "Python backend applications need clear route boundaries, schema validation, service layers, and predictable error handling.", durationMinutes: 45, minimumTimeMinutes: 30, createdAt: now(), updatedAt: now() },
+  { id: "CH-PY-002", courseId: "CRS-PY-001", sequence: 2, title: "Frontend Integration Patterns", description: "Connect React interfaces to Python APIs with state and error handling.", contentType: "Rich Text", body: "A full stack feature connects UI state, API contracts, loading states, validation feedback, and secure persistence into one workflow.", durationMinutes: 45, minimumTimeMinutes: 30, createdAt: now(), updatedAt: now() },
+  { id: "CH-PY-003", courseId: "CRS-PY-001", sequence: 3, title: "Auth, Database & Deployment", description: "Secure the app, persist data, and prepare production deployment.", contentType: "Rich Text", body: "Production full stack systems need authentication, authorization, migrations, environment configuration, and repeatable deployment checks.", durationMinutes: 50, minimumTimeMinutes: 35, createdAt: now(), updatedAt: now() },
+  { id: "CH-QAPY-001", courseId: "CRS-QAPY-001", sequence: 1, title: "Pytest API Foundations", description: "Write API tests with fixtures, assertions, and reusable clients.", contentType: "Rich Text", body: "API automation with pytest relies on reusable clients, focused fixtures, deterministic data setup, and assertions that verify contracts.", durationMinutes: 35, minimumTimeMinutes: 20, createdAt: now(), updatedAt: now() },
+  { id: "CH-QAPY-002", courseId: "CRS-QAPY-001", sequence: 2, title: "Contract & Negative Testing", description: "Validate schemas, status codes, edge cases, and failure behavior.", contentType: "Rich Text", body: "Strong API quality includes positive, negative, boundary, authorization, and contract tests that catch behavior drift early.", durationMinutes: 40, minimumTimeMinutes: 25, createdAt: now(), updatedAt: now() },
+  { id: "CH-QAPY-003", courseId: "CRS-QAPY-001", sequence: 3, title: "CI Evidence & Quality Gates", description: "Run automated checks in CI and publish audit-friendly evidence.", contentType: "Rich Text", body: "CI quality gates should execute reliable tests, capture reports, fail on critical regressions, and expose evidence for release review.", durationMinutes: 40, minimumTimeMinutes: 25, createdAt: now(), updatedAt: now() },
 ];
 
+const questionTemplates = [
+  ["What is the main goal of {topic}?", ["Create reliable delivery evidence", "Avoid all documentation", "Skip validation", "Reduce team communication"], 0],
+  ["Which practice improves {topic} most?", ["Stable design and clear ownership", "Random naming", "Manual-only checks", "Ignoring failures"], 0],
+  ["What should be reviewed before approving {topic} work?", ["Risk, coverage, and evidence", "Only color choices", "Lunch schedule", "Browser bookmarks"], 0],
+  ["Which metric best supports monitoring {topic}?", ["Completion and quality trend", "Number of meetings only", "Window size", "Keyboard brand"], 0],
+  ["What is a common failure mode in {topic}?", ["Unstable data or unclear scope", "Too much evidence", "Clear ownership", "Version control"], 0],
+  ["How should defects found during {topic} be handled?", ["Log with steps, evidence, and impact", "Hide until release", "Delete the test", "Rename the course"], 0],
+  ["Which artifact helps audit {topic}?", ["Traceable test report", "Personal notes only", "Unlabeled screenshot", "Empty checklist"], 0],
+  ["What makes {topic} maintainable?", ["Reusable patterns and readable naming", "Duplicated scripts everywhere", "Hard-coded secrets", "No review process"], 0],
+  ["When should {topic} be updated?", ["When product behavior or risk changes", "Never", "Only after an outage", "Only yearly"], 0],
+  ["Who benefits from clear {topic} outcomes?", ["Learners, managers, and auditors", "No one", "Only external vendors", "Only designers"], 0],
+];
+
+function makeQuestions(prefix, topic) {
+  return [1, 2, 3].flatMap((setNo) => questionTemplates.map(([prompt, options, answer], index) => ({
+    id: `${prefix}-Q${String((setNo - 1) * questionTemplates.length + index + 1).padStart(2, "0")}`,
+    type: "MCQ",
+    prompt: `${prompt.replace("{topic}", topic)} ${setNo === 1 ? "" : `(Scenario ${setNo})`}`.trim(),
+    options: [...options],
+    answer,
+    points: 10,
+  })));
+}
+
+const generatedAssessments = chapters.filter(ch => ch.id.startsWith("CH-QA-") || ch.id.startsWith("CH-PY-") || ch.id.startsWith("CH-QAPY-")).map((chapter) => ({
+  id: `ASM-${chapter.id.replace("CH-", "")}`,
+  title: `${chapter.title} Assessment`,
+  chapterId: chapter.id,
+  courseId: chapter.courseId,
+  type: "MCQ",
+  ownerId: "EMP-1003",
+  approval: "Approved",
+  difficulty: "Intermediate",
+  durationMinutes: 20,
+  passScore: 70,
+  questionLimit: 10,
+  questions: makeQuestions(`Q-${chapter.id.replace("CH-", "")}`, chapter.title),
+  createdAt: now(),
+  updatedAt: now(),
+}));
+
 const assessments = [
-  { id: "ASM-9001", title: "Secure Release Readiness", courseId: "NLD-SC-2048", chapterId: "CH-SC-001", type: "Timed Quiz", approval: "Approved", strictMode: true, questions: [{ id: "Q1", type: "MCQ", prompt: "Best control for leaked API key prevention?", options: ["Manual approval", "CI secret scanning", "Newsletter", "Post audit"], answer: 1, points: 100 }], durationMinutes: 45, passScore: 80, ownerId: "EMP-1001", createdAt: now(), updatedAt: now() },
-  { id: "ASM-9038", title: "Feedback Scenario Review", courseId: "NLD-LD-1130", chapterId: "CH-LD-001", type: "Descriptive", approval: "Pending", strictMode: true, questions: [{ id: "Q1", type: "Descriptive", prompt: "Write feedback for a missed target using SBI.", points: 100 }], durationMinutes: 60, passScore: 70, ownerId: "EMP-1002", createdAt: now(), updatedAt: now() },
+  { id: "ASM-001", title: "Threat Model Assessment", chapterId: "CH-001", courseId: "CRS-001", type: "MCQ", ownerId: "EMP-1003", approval: "Approved", durationMinutes: 15, passScore: 70, questions: [
+    { id: "Q-001", type: "MCQ", prompt: "What should be documented first in a threat model?", options: ["Team lunch plan", "Assets and trust boundaries", "Marketing launch", "Sprint velocity"], answer: 1, points: 25 },
+    { id: "Q-002", type: "MCQ", prompt: "Which control prevents API key exposure in production?", options: ["Manual approval", "CI secret scanning", "Quarterly email", "Post-release audit"], answer: 1, points: 25 },
+  ], createdAt: now(), updatedAt: now() },
+  { id: "ASM-002", title: "OWASP Knowledge Check", chapterId: "CH-002", courseId: "CRS-001", type: "MCQ", ownerId: "EMP-1003", approval: "Approved", durationMinutes: 20, passScore: 75, questions: [
+    { id: "Q-003", type: "MCQ", prompt: "Which OWASP category covers injection attacks?", options: ["A01 Broken Access", "A03 Injection", "A05 Misconfiguration", "A09 Logging"], answer: 1, points: 50 },
+  ], createdAt: now(), updatedAt: now() },
+  { id: "ASM-003", title: "Secret Scanning Quiz", chapterId: "CH-003", courseId: "CRS-001", type: "Mixed", ownerId: "EMP-1003", approval: "Approved", durationMinutes: 15, passScore: 60, questions: [
+    { id: "Q-004", type: "MCQ", prompt: "Where should secrets be stored?", options: ["Source code", "Environment variables / vault", "README file", "Slack channel"], answer: 1, points: 30 },
+    { id: "Q-005", type: "Descriptive", prompt: "Describe your ideal CI/CD secret scanning setup.", points: 20 },
+  ], createdAt: now(), updatedAt: now() },
+  { id: "ASM-004", title: "SBI Feedback Check", chapterId: "CH-004", courseId: "CRS-002", type: "Descriptive", ownerId: "EMP-1002", approval: "Approved", durationMinutes: 20, passScore: 60, questions: [
+    { id: "Q-006", type: "Descriptive", prompt: "Write a feedback note using Situation, Behavior, and Impact.", points: 50 },
+  ], createdAt: now(), updatedAt: now() },
+  { id: "ASM-005", title: "Coaching Assessment", chapterId: "CH-005", courseId: "CRS-002", type: "MCQ", ownerId: "EMP-1002", approval: "Pending", durationMinutes: 15, passScore: 70, questions: [
+    { id: "Q-007", type: "MCQ", prompt: "What does GROW stand for?", options: ["Goal Reality Options Will", "Growth Review Outcome Work", "Guide Reflect Observe Write", "Goal Results Objectives Win"], answer: 0, points: 50 },
+  ], createdAt: now(), updatedAt: now() },
+  ...generatedAssessments,
 ];
 
 const assignments = [
-  { id: uuid(), courseId: "NLD-SC-2048", userId: "EMP-1004", assignedBy: "EMP-1003", progress: 76, timeSpentSeconds: 11200, timeSpentMinutes: 187, chapterTimeSpentSeconds: { "CH-SC-001": 5400, "CH-SC-002": 4200 }, completedChapters: ["CH-SC-001"], completedAt: null, createdAt: now() },
+  { id: "ENR-001", courseId: "CRS-001", userId: "EMP-1004", assignedBy: "EMP-1003", dueAt: "2026-05-20", priority: "High", mandatory: true, progress: 66, completedChapters: ["CH-001", "CH-002"], timeSpentSeconds: 5040, timeSpentMinutes: 84, chapterTimeSpentSeconds: { "CH-001": 2400, "CH-002": 2640 }, completedAt: null, createdAt: now() },
+  { id: "ENR-002", courseId: "CRS-002", userId: "EMP-1005", assignedBy: "EMP-1002", dueAt: "2026-05-18", priority: "Medium", mandatory: true, progress: 50, completedChapters: ["CH-004"], timeSpentSeconds: 2700, timeSpentMinutes: 45, chapterTimeSpentSeconds: { "CH-004": 2700 }, completedAt: null, createdAt: now() },
+  { id: "ENR-003", courseId: "CRS-001", userId: "EMP-1002", assignedBy: "EMP-1001", dueAt: "2026-05-25", priority: "Medium", mandatory: false, progress: 33, completedChapters: ["CH-001"], timeSpentSeconds: 1800, timeSpentMinutes: 30, chapterTimeSpentSeconds: { "CH-001": 1800 }, completedAt: null, createdAt: now() },
+  { id: "ENR-004", courseId: "CRS-002", userId: "EMP-1006", assignedBy: "EMP-1002", dueAt: "2026-05-10", priority: "Low", mandatory: false, progress: 100, completedChapters: ["CH-004", "CH-005"], timeSpentSeconds: 3900, timeSpentMinutes: 65, chapterTimeSpentSeconds: { "CH-004": 1800, "CH-005": 2100 }, completedAt: now(), createdAt: now() },
 ];
 
-const attempts = [];
+const attempts = [
+  { id: "ATT-001", assessmentId: "ASM-001", chapterId: "CH-001", courseId: "CRS-001", userId: "EMP-1004", status: "Passed", score: 85, maxScore: 100, feedback: "Excellent understanding of threat modeling.", answers: { "Q-001": 1, "Q-002": 1 }, startedAt: now(), submittedAt: now(), selectedQuestionIds: ["Q-001", "Q-002"], tabSwitchWarnings: 0, autoSubmittedReason: null, flags: [], timeSpentSeconds: 340 },
+  { id: "ATT-002", assessmentId: "ASM-002", chapterId: "CH-002", courseId: "CRS-001", userId: "EMP-1004", status: "Passed", score: 90, maxScore: 100, feedback: "Strong OWASP knowledge.", answers: { "Q-003": 1 }, startedAt: now(), submittedAt: now(), selectedQuestionIds: ["Q-003"], tabSwitchWarnings: 0, autoSubmittedReason: null, flags: [], timeSpentSeconds: 420 },
+  { id: "ATT-003", assessmentId: "ASM-004", chapterId: "CH-004", courseId: "CRS-002", userId: "EMP-1005", status: "Passed", score: 78, maxScore: 100, feedback: "Good use of SBI framework.", answers: { "Q-006": "In yesterday's standup (S), you interrupted two team members (B), which made them hesitant to share updates (I)." }, startedAt: now(), submittedAt: now(), selectedQuestionIds: ["Q-006"], tabSwitchWarnings: 0, autoSubmittedReason: null, flags: [], timeSpentSeconds: 680 },
+];
+
 const proctoringLogs = [];
-const auditLogs = [];
+const auditLogs = [{ id: "AUD-001", actorId: "EMP-1001", action: "System initialized", entity: "SYSTEM", at: now() }];
 const learningTimeEvents = [];
 const acharyaFeedbackMemory = [];
 const reportExports = [];
@@ -172,14 +404,121 @@ let settings = { fullscreenRequired: true, cameraRequired: true, microphoneRequi
 // Video progress store (temporary before PostgreSQL migration)
 const videoProgress = {}; // { "userId-courseId-chapterId": { currentTime, updatedAt } }
 
+// ── Durable persistence (PostgreSQL when DATABASE_URL is set, else JSON file) ──
+const dbPath = path.resolve(__dirname, "..", "database", "db.json");
+const storage = createStorage({ filePath: dbPath, databaseUrl: process.env.DATABASE_URL });
+
+const snapshot = () => ({
+  users,
+  courses,
+  chapters,
+  assessments,
+  assignments,
+  attempts,
+  proctoringLogs,
+  auditLogs,
+  learningTimeEvents,
+  acharyaFeedbackMemory,
+  reportExports,
+  settings,
+  videoProgress,
+  loginSecurity,
+  sessionVersions,
+  issuedCertificates,
+  archives,
+  skills,
+  targetSkills,
+  skillRatings,
+  chapterFeedbacks
+});
+
+const saveDb = async () => {
+  try {
+    await storage.save(snapshot());
+  } catch (err) {
+    console.error("[persist] save failed:", err?.message || err);
+  }
+};
+
+// Coalesce concurrent save requests: while a save is running, mark a single
+// follow-up so rapid mutations collapse into at most one extra write.
+let saving = false;
+let savePending = false;
+const persist = () => {
+  if (saving) { savePending = true; return; }
+  saving = true;
+  saveDb().finally(() => {
+    saving = false;
+    if (savePending) { savePending = false; persist(); }
+  });
+};
+
+const loadDb = async () => {
+  try {
+    const data = await storage.load();
+    if (!data) {
+      await saveDb(); // Seed storage with the initial dataset.
+      return;
+    }
+    if (data.users) { users.length = 0; users.push(...data.users); }
+    if (data.courses) { courses.length = 0; courses.push(...data.courses); }
+    if (data.chapters) { chapters.length = 0; chapters.push(...data.chapters); }
+    if (data.assessments) { assessments.length = 0; assessments.push(...data.assessments); }
+    if (data.assignments) { assignments.length = 0; assignments.push(...data.assignments); }
+    if (data.attempts) { attempts.length = 0; attempts.push(...data.attempts); }
+    if (data.proctoringLogs) { proctoringLogs.length = 0; proctoringLogs.push(...data.proctoringLogs); }
+    if (data.auditLogs) { auditLogs.length = 0; auditLogs.push(...data.auditLogs); }
+    if (data.learningTimeEvents) { learningTimeEvents.length = 0; learningTimeEvents.push(...data.learningTimeEvents); }
+    if (data.acharyaFeedbackMemory) { acharyaFeedbackMemory.length = 0; acharyaFeedbackMemory.push(...data.acharyaFeedbackMemory); }
+    if (data.reportExports) { reportExports.length = 0; reportExports.push(...data.reportExports); }
+    if (data.settings) { Object.assign(settings, data.settings); }
+    if (data.videoProgress) { Object.assign(videoProgress, data.videoProgress); }
+    if (data.loginSecurity) { Object.assign(loginSecurity, data.loginSecurity); }
+    if (data.sessionVersions) { Object.assign(sessionVersions, data.sessionVersions); }
+    if (data.issuedCertificates) { issuedCertificates.length = 0; issuedCertificates.push(...data.issuedCertificates); }
+    if (data.archives) { archives.length = 0; archives.push(...data.archives); }
+    if (data.skills) { skills.length = 0; skills.push(...data.skills); }
+    if (data.targetSkills) { targetSkills.length = 0; targetSkills.push(...data.targetSkills); }
+    if (data.skillRatings) { skillRatings.length = 0; skillRatings.push(...data.skillRatings); }
+    if (data.chapterFeedbacks) { chapterFeedbacks.length = 0; chapterFeedbacks.push(...data.chapterFeedbacks); }
+  } catch (err) {
+    console.error("[persist] load failed:", err?.message || err);
+    throw err;
+  }
+};
+
 const publicUser = (user) => {
   const { passwordHash, ...safe } = user;
   const sessionVersion = sessionVersions[user.id] || 0;
   return { ...safe, sessionVersion, sv: sessionVersion };
 };
 
+const AUDIT_LOG_CAP = 5000;
 const audit = (actorId, action, entityType, entityId, metadata = {}) => {
   auditLogs.unshift({ id: uuid(), actorId, action, entityType, entityId, metadata, createdAt: now() });
+  if (auditLogs.length > AUDIT_LOG_CAP) auditLogs.length = AUDIT_LOG_CAP;
+};
+
+// ── Server-side HTML sanitizer (no external deps) ──
+// Defense-in-depth for stored rich-text / AI chapter bodies that the client
+// renders with dangerouslySetInnerHTML. Removes dangerous elements, inline
+// event handlers, unsafe URL schemes, and style attributes.
+const HTML_DANGEROUS_TAGS = [
+  "script", "style", "iframe", "object", "embed", "svg", "math", "link",
+  "meta", "base", "form", "input", "button", "textarea", "select",
+  "noscript", "template", "frame", "frameset", "applet",
+];
+const sanitizeHtmlServer = (html = "") => {
+  let out = String(html);
+  for (const tag of HTML_DANGEROUS_TAGS) {
+    out = out.replace(new RegExp(`<${tag}[\\s\\S]*?</${tag}>`, "gi"), "");
+    out = out.replace(new RegExp(`<${tag}\\b[^>]*>`, "gi"), "");
+  }
+  out = out.replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  out = out.replace(/(href|src)\s*=\s*("|')\s*javascript:[^"']*\2/gi, "$1=$2#$2");
+  out = out.replace(/(href|src)\s*=\s*("|')\s*data:(?!image\/)[^"']*\2/gi, "$1=$2#$2");
+  out = out.replace(/\sstyle\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  return out;
 };
 
 const signToken = (user) => {
@@ -226,6 +565,19 @@ const questionPointsTotal = (assessment) => {
   const questions = assessment?.questions || [];
   return questions.length ? questions.reduce((sum, question) => sum + Number(question.points || 0), 0) || 100 : 100;
 };
+
+// Strip answer keys before returning an assessment to a non-owner learner.
+// Scoring is done server-side, so the client never needs the correct answers.
+const stripAnswerKeys = (assessment) => {
+  if (!assessment || !Array.isArray(assessment.questions)) return assessment;
+  const questions = assessment.questions.map((q) => {
+    const { answer, correctAnswer, expectedAnswer, rubric, ...safe } = q;
+    return safe;
+  });
+  return { ...assessment, questions };
+};
+const assessmentForUser = (assessment, user) =>
+  (isAdmin(user.role) || assessment.ownerId === user.id) ? assessment : stripAnswerKeys(assessment);
 
 const tokenize = (text = "") => new Set(String(text).toLowerCase().match(/[a-z0-9]+/g) || []);
 
@@ -313,6 +665,7 @@ const addLearningTimeEvent = ({ userId, courseId, chapterId = null, assessmentId
   if (!seconds || seconds <= 0) return null;
   const event = { id: uuid(), userId, courseId, chapterId, assessmentId, eventType, secondsSpent: seconds, recordedAt: now() };
   learningTimeEvents.unshift(event);
+  if (learningTimeEvents.length > 20000) learningTimeEvents.length = 20000;
   return event;
 };
 
@@ -431,13 +784,13 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/csrf-token", (req, res) => {
-  const token = uuid();
-  csrfTokens.add(token);
-  // Cleanup: keep set from growing unbounded (max 1000 tokens)
-  if (csrfTokens.size > 1000) {
-    const first = csrfTokens.values().next().value;
-    csrfTokens.delete(first);
-  }
+  const token = crypto.randomBytes(32).toString("hex");
+  res.cookie(CSRF_COOKIE, token, {
+    httpOnly: true,
+    secure: COOKIE_SECURE,
+    sameSite: COOKIE_SAMESITE,
+    maxAge: 8 * 60 * 60 * 1000,
+  });
   res.json({ csrfToken: token });
 });
 
@@ -454,7 +807,7 @@ app.post("/api/auth/login", (req, res) => {
 
   const identifier = parsed.data.email.trim();
   const normalizedIdentifier = identifier.toLowerCase();
-  const security = loginSecurity[identifier] || { failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
+  const security = loginSecurity[normalizedIdentifier] || { failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
 
   if (security.lockedUntil && new Date(security.lockedUntil).getTime() > Date.now()) {
     return res.status(403).json({ error: "Account locked due to too many failed attempts", lockedUntil: security.lockedUntil });
@@ -470,24 +823,47 @@ app.post("/api/auth/login", (req, res) => {
     if (security.failedAttempts >= MAX_LOGIN_ATTEMPTS) {
       security.lockedUntil = new Date(Date.now() + LOCKOUT_MS).toISOString();
     }
-    loginSecurity[identifier] = security;
+    loginSecurity[normalizedIdentifier] = security;
     return res.status(401).json({ error: "Invalid credentials", failedAttempts: security.failedAttempts, lockedUntil: security.lockedUntil });
   }
 
-  loginSecurity[identifier] = { failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
+  loginSecurity[normalizedIdentifier] = { failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
   audit(user.id, "LOGIN", "USER", user.id);
-  res.cookie("token", signToken(user), { httpOnly: true, secure: false, sameSite: "lax", maxAge: 30 * 60 * 1000 });
+  res.cookie("token", signToken(user), { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE, maxAge: 30 * 60 * 1000 });
   return res.json({ user: publicUser(user) });
 });
 
 app.post("/api/auth/logout", (_req, res) => {
-  res.clearCookie("token");
-  res.clearCookie("csrfToken");
+  res.clearCookie("token", { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
+  res.clearCookie(CSRF_COOKIE, { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
   res.json({ ok: true });
 });
 
 app.get("/api/auth/me", authenticate, (req, res) => {
   res.json({ user: publicUser(req.user), permissions: req.user.role });
+});
+
+app.patch("/api/users/me/preferences", authenticate, (req, res) => {
+  const schema = z.object({
+    theme: z.enum(["dark", "light", "system"]).optional(),
+    fontSize: z.enum(["small", "medium", "large"]).optional(),
+    language: z.enum(["en", "hi", "ta"]).optional(),
+    emailNotifications: z.boolean().optional(),
+    pushNotifications: z.boolean().optional(),
+    weeklyDigest: z.boolean().optional(),
+    courseReminders: z.boolean().optional(),
+    reducedMotion: z.boolean().optional(),
+    highContrast: z.boolean().optional()
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  
+  const user = users.find((item) => item.id === req.user.id);
+  if (!user) return res.status(404).json({ error: "User not found" });
+  
+  user.preferences = { ...(user.preferences || {}), ...parsed.data };
+  audit(req.user.id, "UPDATE_PREFERENCES", "USER", user.id, parsed.data);
+  res.json({ data: publicUser(user) });
 });
 
 app.get("/api/users", authenticate, requireRole("Admin", "Manager"), (req, res) => {
@@ -515,6 +891,9 @@ app.post("/api/users", authenticate, requireRole("Admin"), (req, res) => {
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (parsed.data.role === "Super Admin" && req.user.role !== "Super Admin") {
+    return res.status(403).json({ error: "Only a Super Admin can assign the Super Admin role" });
+  }
   const requestedId = parsed.data.id || `EMP-${Math.floor(1000 + Math.random() * 9000)}`;
   if (users.some((item) => item.id === requestedId || item.email === parsed.data.email)) {
     return res.status(409).json({ error: "User ID or email already exists" });
@@ -543,11 +922,24 @@ app.patch("/api/users/:id", authenticate, requireRole("Admin"), (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const user = users.find((item) => item.id === req.params.id);
   if (!user) return res.status(404).json({ error: "User not found" });
-  
+
+  if (user.role === "Super Admin" && req.user.role !== "Super Admin") {
+    return res.status(403).json({ error: "Only a Super Admin can modify a Super Admin account" });
+  }
+  if (parsed.data.role === "Super Admin" && req.user.role !== "Super Admin") {
+    return res.status(403).json({ error: "Only a Super Admin can grant the Super Admin role" });
+  }
+  if (user.id === req.user.id && parsed.data.role && parsed.data.role !== user.role) {
+    return res.status(403).json({ error: "You cannot change your own role" });
+  }
+  if (user.id === req.user.id && parsed.data.status === "Inactive") {
+    return res.status(403).json({ error: "You cannot deactivate your own account" });
+  }
+
   if (parsed.data.status === "Inactive" && user.status === "Active") {
     sessionVersions[user.id] = (sessionVersions[user.id] || 0) + 1;
   }
-  
+
   const patch = { ...parsed.data };
   if (patch.password) {
     patch.passwordHash = bcrypt.hashSync(patch.password, 10);
@@ -564,12 +956,19 @@ app.patch("/api/users/:id/status", authenticate, requireRole("Admin"), (req, res
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const user = users.find((item) => item.id === req.params.id);
   if (!user) return res.status(404).json({ error: "User not found" });
-  
+
+  if (user.role === "Super Admin" && req.user.role !== "Super Admin") {
+    return res.status(403).json({ error: "Only a Super Admin can modify a Super Admin account" });
+  }
+  if (user.id === req.user.id && parsed.data.status === "Inactive") {
+    return res.status(403).json({ error: "You cannot deactivate your own account" });
+  }
+
   if (parsed.data.status === "Inactive" && user.status === "Active") {
     sessionVersions[user.id] = (sessionVersions[user.id] || 0) + 1;
   }
   user.status = parsed.data.status;
-  
+
   audit(req.user.id, "CHANGE_USER_STATUS", "USER", user.id, parsed.data);
   res.json({ data: publicUser(user), note: "Session revoked if inactivated." });
 });
@@ -601,6 +1000,78 @@ app.delete("/api/users/:id", authenticate, requireRole("Super Admin"), (req, res
   audit(req.user.id, "DELETE_USER", "USER", user.id);
   res.json({ success: true, message: "User permanently deleted and archived" });
 });
+app.post("/api/skills", authenticate, requireRole("Admin"), (req, res) => {
+  const schema = z.object({
+    name: z.string().min(2),
+    category: z.enum(["Technical", "Functional", "Leadership", "Compliance", "Behavioral"]),
+    description: z.string().default("")
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  
+  const skill = {
+    id: `SKILL-${Math.floor(1000 + Math.random() * 9000)}`,
+    name: parsed.data.name.trim(),
+    category: parsed.data.category,
+    description: parsed.data.description,
+    status: "Active",
+    createdAt: now()
+  };
+  
+  if (skills.some((item) => item.name.toLowerCase() === skill.name.toLowerCase())) {
+    return res.status(409).json({ error: "Skill name already exists" });
+  }
+  
+  skills.unshift(skill);
+  audit(req.user.id, "CREATE_SKILL", "SKILL", skill.id);
+  res.status(201).json({ data: skill });
+});
+
+app.patch("/api/skills/:id/status", authenticate, requireRole("Admin"), (req, res) => {
+  const schema = z.object({ status: z.enum(["Active", "Inactive"]) });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  
+  const skill = skills.find((item) => item.id === req.params.id);
+  if (!skill) return res.status(404).json({ error: "Skill not found" });
+  
+  skill.status = parsed.data.status;
+  audit(req.user.id, "SKILL_STATUS", "SKILL", skill.id, parsed.data);
+  res.json({ data: skill });
+});
+
+app.post("/api/skills/targets", authenticate, requireRole("Admin"), (req, res) => {
+  const schema = z.object({
+    skillId: z.string(),
+    scope: z.enum(["Organization", "Department", "Role", "Employee"]),
+    department: z.string().optional(),
+    designation: z.string().optional(),
+    userId: z.string().optional(),
+    targetLevel: z.enum(["Beginner", "Intermediate", "Advanced", "Expert"]),
+    targetScore: z.coerce.number().min(1).max(100),
+    priority: z.enum(["Low", "Medium", "High"])
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  
+  const target = {
+    id: `TS-${Math.floor(1000 + Math.random() * 9000)}`,
+    skillId: parsed.data.skillId,
+    scope: parsed.data.scope,
+    department: parsed.data.scope === "Department" ? parsed.data.department : undefined,
+    designation: parsed.data.scope === "Role" ? parsed.data.designation : undefined,
+    userId: parsed.data.scope === "Employee" ? parsed.data.userId : undefined,
+    targetLevel: parsed.data.targetLevel,
+    targetScore: parsed.data.targetScore,
+    priority: parsed.data.priority,
+    createdAt: now()
+  };
+  
+  targetSkills.unshift(target);
+  audit(req.user.id, "CREATE_TARGET_SKILL", "TARGET_SKILL", target.id);
+  res.status(201).json({ data: target });
+});
+
 
 app.get("/api/courses", authenticate, (req, res) => {
   const { skill, approval, status = "Active" } = req.query;
@@ -614,11 +1085,38 @@ app.get("/api/courses", authenticate, (req, res) => {
 });
 
 app.post("/api/courses", authenticate, requireRole("Admin", "Manager"), upload.fields([{ name: "pdf" }, { name: "video" }]), (req, res) => {
-  const body = typeof req.body.payload === "string" ? JSON.parse(req.body.payload) : req.body;
-  const schema = z.object({ title: z.string().min(4), description: z.string().min(10), skill: z.string().min(2), tags: z.array(z.string()).default([]), contentTypes: z.array(z.string()).default(["Rich Text"]) });
+  let body;
+  try {
+    body = typeof req.body.payload === "string" ? JSON.parse(req.body.payload) : req.body;
+  } catch {
+    return res.status(400).json({ error: "Invalid course payload JSON" });
+  }
+  const schema = z.object({
+    title: z.string().min(4),
+    description: z.string().min(10),
+    skill: z.string().min(2),
+    skillIds: z.array(z.string()).default([]),
+    targetLevel: z.string().default("Beginner"),
+    difficulty: z.string().default("Beginner"),
+    estimatedHours: z.number().default(4),
+    category: z.string().default("Technical"),
+    prerequisites: z.array(z.string()).default([]),
+    tags: z.array(z.string()).default([]),
+    contentTypes: z.array(z.string()).default(["Rich Text"])
+  });
   const parsed = schema.safeParse(body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const course = { id: nextCourseId(parsed.data.skill), ...parsed.data, approval: req.user.role === "Admin" ? "Approved" : "Pending", status: "Active", ownerId: req.user.id, version: 1, createdAt: now(), updatedAt: now(), storage: { files: Object.keys(req.files || {}) } };
+  const course = {
+    id: nextCourseId(parsed.data.skill),
+    ...parsed.data,
+    approval: req.user.role === "Admin" ? "Approved" : "Pending",
+    status: "Active",
+    ownerId: req.user.id,
+    version: 1,
+    createdAt: now(),
+    updatedAt: now(),
+    storage: { files: Object.keys(req.files || {}) }
+  };
   courses.unshift(course);
   audit(req.user.id, "CREATE_COURSE", "COURSE", course.id, { approval: course.approval });
   res.status(201).json({ data: course });
@@ -628,7 +1126,23 @@ app.put("/api/courses/:id", authenticate, requireRole("Admin", "Manager"), (req,
   const course = courses.find((item) => item.id === req.params.id);
   if (!course) return res.status(404).json({ error: "Course not found" });
   if (!canManageCourse(req.user, course)) return res.status(403).json({ error: "Forbidden" });
-  Object.assign(course, req.body, { version: course.version + 1, approval: req.user.role === "Admin" ? "Approved" : "Pending", updatedAt: now() });
+  const schema = z.object({
+    title: z.string().min(4).optional(),
+    description: z.string().min(10).optional(),
+    skill: z.string().min(2).optional(),
+    skillIds: z.array(z.string()).optional(),
+    targetLevel: z.string().optional(),
+    difficulty: z.string().optional(),
+    estimatedHours: z.coerce.number().optional(),
+    category: z.string().optional(),
+    prerequisites: z.array(z.string()).optional(),
+    tags: z.array(z.string()).optional(),
+    thumbnailColor: z.string().optional(),
+    contentTypes: z.array(z.string()).optional(),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  Object.assign(course, parsed.data, { version: course.version + 1, approval: req.user.role === "Admin" ? "Approved" : "Pending", updatedAt: now() });
   audit(req.user.id, "UPDATE_COURSE", "COURSE", course.id, { version: course.version });
   res.json({ data: course });
 });
@@ -663,6 +1177,53 @@ app.patch("/api/courses/:id/status", authenticate, requireRole("Admin"), (req, r
   course.status = parsed.data.status;
   audit(req.user.id, "COURSE_STATUS", "COURSE", course.id, parsed.data);
   res.json({ data: course });
+});
+
+app.delete("/api/courses/:id", authenticate, requireRole("Admin", "Manager"), (req, res) => {
+  const schema = z.object({ deletionComment: z.string().min(10) });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  
+  const idx = courses.findIndex((c) => c.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: "Course not found" });
+  const course = courses[idx];
+  if (!canManageCourse(req.user, course)) return res.status(403).json({ error: "Forbidden" });
+
+  const relatedChapters = chapters.filter((ch) => ch.courseId === course.id);
+  const relatedAssessments = assessments.filter((a) => a.courseId === course.id);
+  const relatedAssignments = assignments.filter((e) => e.courseId === course.id);
+
+  const archived = {
+    id: uuid(),
+    entityType: "Course",
+    entityId: course.id,
+    entityData: { ...course },
+    relatedData: {
+      chapters: relatedChapters,
+      assessments: relatedAssessments,
+      enrollments: relatedAssignments,
+    },
+    deletedBy: req.user.id,
+    deletedByName: req.user.name,
+    deletionComment: parsed.data.deletionComment,
+    deletedAt: now()
+  };
+
+  archives.unshift(archived);
+
+  courses.splice(idx, 1);
+  for (let i = chapters.length - 1; i >= 0; i--) {
+    if (chapters[i].courseId === course.id) chapters.splice(i, 1);
+  }
+  for (let i = assessments.length - 1; i >= 0; i--) {
+    if (assessments[i].courseId === course.id) assessments.splice(i, 1);
+  }
+  for (let i = assignments.length - 1; i >= 0; i--) {
+    if (assignments[i].courseId === course.id) assignments.splice(i, 1);
+  }
+
+  audit(req.user.id, "DELETE_COURSE", "COURSE", course.id);
+  res.json({ success: true, message: "Course permanently deleted and archived" });
 });
 
 app.get("/api/courses/:courseId/chapters", authenticate, (req, res) => {
@@ -705,7 +1266,7 @@ app.post("/api/courses/:courseId/chapters", authenticate, requireRole("Admin", "
     title: parsed.data.title,
     description: parsed.data.description,
     contentType: parsed.data.contentType,
-    body: parsed.data.body,
+    body: sanitizeHtmlServer(parsed.data.body),
     url: parsed.data.url,
     fileName: parsed.data.fileName,
     durationMinutes: parsed.data.durationMinutes,
@@ -742,6 +1303,7 @@ app.put("/api/courses/:courseId/chapters/:chapterId", authenticate, requireRole(
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
+  if (typeof parsed.data.body === "string") parsed.data.body = sanitizeHtmlServer(parsed.data.body);
   Object.assign(chapter, parsed.data, { updatedAt: now() });
   course.updatedAt = now();
   audit(req.user.id, "UPDATE_CHAPTER", "CHAPTER", chapter.id, parsed.data);
@@ -749,10 +1311,31 @@ app.put("/api/courses/:courseId/chapters/:chapterId", authenticate, requireRole(
 });
 
 app.post("/api/assignments", authenticate, requireRole("Admin", "Manager"), (req, res) => {
-  const schema = z.object({ courseId: z.string(), userIds: z.array(z.string()).min(1) });
+  const schema = z.object({
+    courseId: z.string(),
+    userIds: z.array(z.string()).min(1),
+    dueAt: z.string().nullable().optional(),
+    priority: z.enum(["Low", "Medium", "High"]).default("Medium"),
+    mandatory: z.boolean().default(false)
+  });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const created = parsed.data.userIds.map((userId) => ({ id: uuid(), courseId: parsed.data.courseId, userId, assignedBy: req.user.id, progress: 0, completedChapters: [], timeSpentMinutes: 0, timeSpentSeconds: 0, chapterTimeSpentSeconds: {}, completedAt: null, createdAt: now() }));
+  const created = parsed.data.userIds.map((userId) => ({
+    id: `ENR-${Math.floor(1000 + Math.random() * 9000)}`,
+    courseId: parsed.data.courseId,
+    userId,
+    assignedBy: req.user.id,
+    progress: 0,
+    completedChapters: [],
+    timeSpentMinutes: 0,
+    timeSpentSeconds: 0,
+    chapterTimeSpentSeconds: {},
+    dueAt: parsed.data.dueAt || null,
+    priority: parsed.data.priority,
+    mandatory: parsed.data.mandatory,
+    completedAt: null,
+    createdAt: now()
+  }));
   assignments.push(...created);
   audit(req.user.id, "ASSIGN_COURSE", "COURSE", parsed.data.courseId, { count: created.length });
   res.status(201).json({ data: created });
@@ -762,7 +1345,7 @@ app.get("/api/assessments", authenticate, (req, res) => {
   let visible = assessments;
   if (req.user.role === "Manager") visible = visible.filter((item) => item.ownerId === req.user.id || item.approval === "Approved");
   if (req.user.role === "Employee") visible = visible.filter((item) => item.approval === "Approved");
-  res.json({ data: visible, total: visible.length });
+  res.json({ data: visible.map((item) => assessmentForUser(item, req.user)), total: visible.length });
 });
 
 app.post("/api/assessments", authenticate, requireRole("Admin", "Manager"), (req, res) => {
@@ -792,6 +1375,73 @@ app.post("/api/assessments", authenticate, requireRole("Admin", "Manager"), (req
   audit(req.user.id, "CREATE_ASSESSMENT", "ASSESSMENT", assessment.id, { approval: assessment.approval });
   res.status(201).json({ data: assessment });
 });
+app.put("/api/assessments/:id", authenticate, requireRole("Admin", "Manager"), (req, res) => {
+  const schema = z.object({
+    title: z.string().min(4).optional(),
+    courseId: z.string().optional(),
+    chapterId: z.string().optional(),
+    difficulty: z.string().optional(),
+    durationMinutes: z.coerce.number().min(1).optional(),
+    passScore: z.coerce.number().min(1).max(100).optional(),
+    questionLimit: z.coerce.number().int().positive().optional(),
+    questions: z.array(z.record(z.string(), z.any())).min(1).optional()
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  
+  const assessment = assessments.find((item) => item.id === req.params.id);
+  if (!assessment) return res.status(404).json({ error: "Assessment not found" });
+  
+  const course = courses.find((item) => item.id === (parsed.data.courseId || assessment.courseId));
+  if (!course) return res.status(404).json({ error: "Course not found" });
+  if (!canManageCourse(req.user, course)) return res.status(403).json({ error: "Forbidden" });
+
+  Object.assign(assessment, parsed.data, { updatedAt: now() });
+  audit(req.user.id, "UPDATE_ASSESSMENT", "ASSESSMENT", assessment.id, parsed.data);
+  res.json({ data: assessment });
+});
+
+app.patch("/api/assessments/:id/status", authenticate, requireRole("Admin", "Manager"), (req, res) => {
+  const schema = z.object({ status: z.enum(["Active", "Inactive"]) });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  
+  const assessment = assessments.find((item) => item.id === req.params.id);
+  if (!assessment) return res.status(404).json({ error: "Assessment not found" });
+  
+  assessment.status = parsed.data.status;
+  audit(req.user.id, "ASSESSMENT_STATUS", "ASSESSMENT", assessment.id, parsed.data);
+  res.json({ data: assessment });
+});
+
+app.delete("/api/assessments/:id", authenticate, requireRole("Admin", "Manager"), (req, res) => {
+  const schema = z.object({ deletionComment: z.string().min(10) });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  
+  const idx = assessments.findIndex((item) => item.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: "Assessment not found" });
+  const assessment = assessments[idx];
+  
+  const course = courses.find((item) => item.id === assessment.courseId);
+  if (course && !canManageCourse(req.user, course)) return res.status(403).json({ error: "Forbidden" });
+
+  archives.unshift({
+    id: uuid(),
+    entityType: "Assessment",
+    entityId: assessment.id,
+    entityData: { ...assessment },
+    deletedBy: req.user.id,
+    deletedByName: req.user.name,
+    deletionComment: parsed.data.deletionComment,
+    deletedAt: now()
+  });
+
+  assessments.splice(idx, 1);
+  audit(req.user.id, "DELETE_ASSESSMENT", "ASSESSMENT", assessment.id);
+  res.json({ success: true, message: "Assessment permanently deleted and archived" });
+});
+
 
 app.patch("/api/assessments/:id/approval", authenticate, requireRole("Admin"), (req, res) => {
   const schema = z.object({ approval: z.enum(["Approved", "Rejected"]), feedback: z.string().optional() });
@@ -855,11 +1505,16 @@ app.post("/api/proctoring/events", authenticate, (req, res) => {
   const schema = z.object({ attemptId: z.string(), eventType: z.enum(["FULLSCREEN_EXIT", "TAB_SWITCH", "NOISE", "CAMERA_OFF", "MIC_OFF", "FACE_MISMATCH"]), severity: z.enum(["low", "medium", "high"]), metadata: z.record(z.string(), z.any()).optional() });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const attempt = attempts.find((item) => item.id === parsed.data.attemptId);
+  if (!attempt || attempt.userId !== req.user.id) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
   const event = { id: uuid(), userId: req.user.id, ...parsed.data, createdAt: now() };
   proctoringLogs.unshift(event);
-  const attempt = attempts.find((item) => item.id === parsed.data.attemptId);
-  if (attempt) attempt.flags.push(event);
-  if (settings.tabSwitchAutoSubmit && parsed.data.eventType === "TAB_SWITCH" && attempt && !attempt.submittedAt) {
+  if (proctoringLogs.length > 5000) proctoringLogs.length = 5000;
+  attempt.flags = attempt.flags || [];
+  attempt.flags.push(event);
+  if (settings.tabSwitchAutoSubmit && parsed.data.eventType === "TAB_SWITCH" && !attempt.submittedAt) {
     const assessment = assessments.find((item) => item.id === attempt.assessmentId);
     const submittedAt = now();
     const timeSpentSeconds = Math.max(1, Math.round((new Date(submittedAt).getTime() - new Date(attempt.startedAt).getTime()) / 1000));
@@ -934,9 +1589,16 @@ app.post("/api/archive/:id/restore", authenticate, requireRole("Super Admin"), (
   if (idx === -1) return res.status(404).json({ error: "Archived record not found" });
   
   const record = archives[idx];
-  if (record.entityType === "User") users.unshift(record.entityData);
-  else if (record.entityType === "Course") courses.unshift(record.entityData);
-  else if (record.entityType === "Assessment") assessments.unshift(record.entityData);
+  if (record.entityType === "User") {
+    users.unshift(record.entityData);
+  } else if (record.entityType === "Course") {
+    courses.unshift(record.entityData);
+    if (record.relatedData?.chapters) chapters.unshift(...record.relatedData.chapters);
+    if (record.relatedData?.assessments) assessments.unshift(...record.relatedData.assessments);
+    if (record.relatedData?.enrollments) assignments.unshift(...record.relatedData.enrollments);
+  } else if (record.entityType === "Assessment") {
+    assessments.unshift(record.entityData);
+  }
 
   archives.splice(idx, 1);
   audit(req.user.id, "RESTORE_ARCHIVE", record.entityType.toUpperCase(), record.entityId);
@@ -1065,11 +1727,6 @@ app.get("/api/courses/:courseId/chapters/:chapterId/progress", authenticate, (re
   });
 });
 
-app.use((err, _req, res, _next) => {
-  console.error(err);
-  res.status(500).json({ error: "Internal server error" });
-});
-
 // ── AI Copilot Endpoint ──────────────────────────────────────────────────────
 
 const SOFTWARE_EXPERT_SYSTEM_PROMPT = `You are **Nalanda AI Copilot** — a world-class Software Engineering expert and senior technical mentor embedded inside the Nalanda Learning & Development Platform.
@@ -1113,11 +1770,14 @@ const capCopilotReply = (reply = "", maxWords = 30) => {
   return `${words.slice(0, maxWords).join(" ").replace(/[.,;:!?-]+$/, "")}.`;
 };
 
-app.post("/api/ai/chat", authenticate, async (req, res) => {
+app.post("/api/ai/chat", authenticate, aiRateLimit, async (req, res) => {
   const { message, history = [], context } = req.body;
 
   if (!message || typeof message !== "string" || message.trim().length === 0) {
     return res.status(400).json({ error: "Message is required" });
+  }
+  if (message.length > 4000) {
+    return res.status(400).json({ error: "Message too long (max 4000 characters)." });
   }
 
   let systemPrompt = SOFTWARE_EXPERT_SYSTEM_PROMPT;
@@ -1147,7 +1807,7 @@ app.post("/api/ai/chat", authenticate, async (req, res) => {
   try {
     const model = GEMINI_MODEL;
     const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
+    const response = await withTimeout(ai.models.generateContent({
       model,
       contents: chatPrompt,
       config: {
@@ -1155,7 +1815,7 @@ app.post("/api/ai/chat", authenticate, async (req, res) => {
         topP: 0.9,
         maxOutputTokens: 2048,
       },
-    });
+    }), 25000, "AI chat");
     // Longer replies are allowed only when the learner explicitly asks for detail.
     const reply = allowsLongCopilotReply(message) ? (response.text || "").trim() : capCopilotReply(response.text || "");
     if (!reply.trim()) throw new Error("Empty response from Gemini");
@@ -1163,7 +1823,7 @@ app.post("/api/ai/chat", authenticate, async (req, res) => {
     audit(req.user.id, "AI_CHAT", "AI_COPILOT", "session", { model, contextProvided: !!context?.chapterTitle });
     return res.json({ reply, model, source: "gemini" });
   } catch (err) {
-    console.error("[AI Copilot] Gemini error:", err);
+    console.error("[AI Copilot] Gemini error:", err?.message || err);
     return res.status(err?.status === 429 ? 429 : 502).json({ error: geminiErrorMessage(err) });
   }
 });
@@ -1371,7 +2031,7 @@ const writeNdjson = (res, event) => {
   res.write(`${JSON.stringify({ at: now(), ...event })}\n`);
 };
 
-app.post("/api/ai/generate-course-stream", authenticate, requireRole("Admin", "Manager"), async (req, res) => {
+app.post("/api/ai/generate-course-stream", authenticate, requireRole("Admin", "Manager"), aiRateLimit, async (req, res) => {
   const startedAt = Date.now();
   const { text, skillId = "", skillName = "General", courseLevel = "Beginner" } = req.body;
   const chapterCount = Math.max(1, Math.min(20, Number(req.body.chapterCount || 3)));
@@ -1589,14 +2249,14 @@ ${JSON.stringify(chapters.map((chapter, i) => ({ index: i, title: chapter.title,
     audit(req.user.id, "ACHARYA_GENERATE_DRAFT_STREAM", "ACHARYA", "draft", { skillName, courseLevel, chapterCount, repairedSections });
     writeNdjson(res, { type: "final", message: "Acharya draft completed and ready for review.", draft });
   } catch (err) {
-    console.error("[Acharya Stream Error]", err);
+    console.error("[Acharya Stream Error]", err?.message || err);
     writeNdjson(res, { type: "error", message: geminiErrorMessage(err), detail: err?.message || "Unknown error" });
   } finally {
     res.end();
   }
 });
 
-app.post("/api/ai/generate-course", authenticate, requireRole("Admin", "Manager"), async (req, res, next) => {
+app.post("/api/ai/generate-course", authenticate, requireRole("Admin", "Manager"), aiRateLimit, async (req, res, next) => {
   if (req.body?.skillId || req.body?.chapterCount || req.body?.courseLevel) {
     const startedAt = Date.now();
     const { text, skillId = "", skillName = "General", courseLevel = "Beginner" } = req.body;
@@ -1668,7 +2328,7 @@ Use skill "${skillName}" and course level "${courseLevel}". Source text: ${text}
   return next();
 });
 
-app.post("/api/ai/generate-course", authenticate, requireRole("Admin", "Manager"), async (req, res) => {
+app.post("/api/ai/generate-course", authenticate, requireRole("Admin", "Manager"), aiRateLimit, async (req, res) => {
   const { text } = req.body;
   if (!text || text.trim().length < 50) {
     return res.status(400).json({ error: "Please provide sufficient educational text (min 50 characters) to generate a course." });
@@ -1855,7 +2515,7 @@ ${text}
       title: ch.title || "Untitled Chapter",
       description: ch.description || "",
       contentType: "Rich Text",
-      body: ch.body || "",
+      body: sanitizeHtmlServer(ch.body || ""),
       durationMinutes: ch.durationMinutes || 10,
       minimumTimeMinutes: Math.floor((ch.durationMinutes || 10) * 0.7),
       createdAt: now(),
@@ -1900,6 +2560,114 @@ ${text}
   }
 });
 
+// ── App Data Endpoint ──
+app.get("/api/app-data", authenticate, (req, res) => {
+  const admin = isAdmin(req.user.role);
+  const superAdmin = req.user.role === "Super Admin";
+  const visibleUserIds = new Set(visibleUserIdsFor(req.user));
+  const scopedAttempts = admin ? attempts : attempts.filter((a) => visibleUserIds.has(a.userId));
+  const scopedProctoring = admin ? proctoringLogs : proctoringLogs.filter((p) => visibleUserIds.has(p.userId));
+  const scopedReports = admin ? reportExports : reportExports.filter((r) => r.requestedBy === req.user.id);
+  const scopedCertificates = admin ? issuedCertificates : issuedCertificates.filter((c) => visibleUserIds.has(c.employeeId));
+  res.json({
+    users: users.map(publicUser),
+    courses,
+    chapters,
+    assessments: assessments.map((a) => assessmentForUser(a, req.user)),
+    assignments,
+    attempts: scopedAttempts,
+    proctoringLogs: scopedProctoring,
+    auditLogs: admin ? auditLogs : [],
+    learningTimeEvents: admin ? learningTimeEvents : learningTimeEvents.filter((e) => visibleUserIds.has(e.userId)),
+    acharyaFeedbackMemory: admin ? acharyaFeedbackMemory : [],
+    reportExports: scopedReports,
+    settings,
+    issuedCertificates: scopedCertificates,
+    archives: superAdmin ? archives : [],
+    skills,
+    targetSkills,
+    skillRatings,
+    chapterFeedbacks
+  });
+});
+
+// ── Skills Endpoints ──
+app.post("/api/skills", authenticate, requireRole("Admin"), (req, res) => {
+  const schema = z.object({
+    name: z.string().min(1),
+    category: z.enum(["Technical", "Functional", "Leadership", "Compliance", "Behavioral"]),
+    description: z.string().default("")
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  
+  const skill = {
+    id: `SKILL-${Math.floor(1000 + Math.random() * 9000)}`,
+    ...parsed.data,
+    status: "Active",
+    createdAt: now()
+  };
+  skills.push(skill);
+  audit(req.user.id, "CREATE_SKILL", "SKILL", skill.id);
+  res.status(201).json({ data: skill });
+});
+
+app.patch("/api/skills/:id", authenticate, requireRole("Admin"), (req, res) => {
+  const skill = skills.find((s) => s.id === req.params.id);
+  if (!skill) return res.status(404).json({ error: "Skill not found" });
+  if (req.body.status) skill.status = req.body.status;
+  audit(req.user.id, "UPDATE_SKILL_STATUS", "SKILL", skill.id);
+  res.json({ data: skill });
+});
+
+// ── Target Skills Endpoints ──
+app.post("/api/target-skills", authenticate, requireRole("Admin"), (req, res) => {
+  const schema = z.object({
+    skillId: z.string(),
+    scope: z.enum(["Organization", "Department", "Role", "Employee"]),
+    department: z.string().optional(),
+    designation: z.string().optional(),
+    userId: z.string().optional(),
+    targetLevel: z.enum(["Beginner", "Intermediate", "Advanced", "Expert"]),
+    targetScore: z.number().min(0).max(100),
+    priority: z.enum(["Low", "Medium", "High"])
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  
+  const target = {
+    id: `TS-${Math.floor(1000 + Math.random() * 9000)}`,
+    ...parsed.data
+  };
+  targetSkills.push(target);
+  audit(req.user.id, "CREATE_TARGET_SKILL", "TARGET_SKILL", target.id);
+  res.status(201).json({ data: target });
+});
+
+// ── Chapter Feedbacks Endpoints ──
+app.post("/api/chapter-feedbacks", authenticate, (req, res) => {
+  const schema = z.object({
+    chapterId: z.string(),
+    courseId: z.string(),
+    rating: z.number().min(1).max(5),
+    clarity: z.number().min(1).max(5),
+    relevance: z.number().min(1).max(5),
+    comments: z.string()
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  
+  const fb = {
+    id: `CF-${Math.floor(1000 + Math.random() * 9000)}`,
+    ...parsed.data,
+    userId: req.user.id,
+    submittedAt: now()
+  };
+  chapterFeedbacks.push(fb);
+  audit(req.user.id, "CHAPTER_FEEDBACK", "FEEDBACK", fb.id);
+  res.status(201).json({ data: fb });
+});
+
 // ── Serve Frontend Production Build ──
 const frontendDistPath = path.resolve(__dirname, "../frontend/dist");
 app.use(express.static(frontendDistPath));
@@ -1912,6 +2680,51 @@ app.get("*splat", (req, res) => {
   res.sendFile(path.join(frontendDistPath, "index.html"));
 });
 
-app.listen(PORT, () => {
-  console.log(`Nalanda API listening on http://localhost:${PORT}`);
+// ── Centralized error handler (registered last) ──
+app.use((err, _req, res, _next) => {
+  if (err?.message === "Origin not allowed by CORS") {
+    if (!res.headersSent) res.status(403).json({ error: "Origin not allowed" });
+    return;
+  }
+  if (err?.code === "LIMIT_FILE_SIZE") {
+    if (!res.headersSent) res.status(413).json({ error: "Uploaded file is too large (max 15MB)." });
+    return;
+  }
+  if (err?.message === "Unsupported file type") {
+    if (!res.headersSent) res.status(415).json({ error: "Unsupported file type." });
+    return;
+  }
+  console.error("[error]", err?.message || err);
+  if (!res.headersSent) res.status(500).json({ error: "Internal server error" });
 });
+
+// ── Startup & graceful shutdown ──
+let httpServer = null;
+
+const start = async () => {
+  try {
+    await storage.init();
+    await loadDb();
+  } catch (err) {
+    console.error(`FATAL: storage initialization failed (${storage.describe?.() || "unknown"}):`, err?.message || err);
+    process.exit(1);
+  }
+  httpServer = app.listen(PORT, () => {
+    console.log(`Nalanda API listening on http://localhost:${PORT} — storage: ${storage.describe?.() || "unknown"}`);
+  });
+};
+
+let shuttingDown = false;
+const shutdown = async (signal) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} received — flushing state and closing connections...`);
+  if (httpServer) await new Promise((resolve) => httpServer.close(resolve)).catch(() => {});
+  try { await saveDb(); } catch (err) { console.error("[shutdown] final save failed:", err?.message || err); }
+  try { await storage.close(); } catch { /* ignore */ }
+  process.exit(0);
+};
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+
+start();
