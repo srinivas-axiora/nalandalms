@@ -1,0 +1,132 @@
+# Nalanda — PostgreSQL Data-Layer Migration (Phase 2)
+
+Status: **in progress — kickoff slice delivered.** Owner: Engineering.
+Date: 2026-06-23.
+
+> ⚠️ **This code is UNVERIFIED by the author.** It was written without a live
+> PostgreSQL to execute against (per the agreed "build it blind, I'll test"
+> approach). All JavaScript is syntax-checked; the SQL and runtime behavior MUST
+> be validated against a real database using the steps in §4 before any cutover.
+> It is **purely additive** — the running app still uses the existing in-memory /
+> JSON-blob store and is unaffected until each entity is wired in (§5).
+
+---
+
+## 1. Background
+
+- **Phase 1 (done):** durable storage adapter (`backend/db.js`) — persists the whole
+  in-memory state as JSONB-per-collection in Postgres when `DATABASE_URL` is set,
+  else an atomic JSON file. This removed the single-file corruption risk but keeps
+  the entire dataset in process memory (no horizontal scale, no per-row queries).
+- **Phase 2 (this):** move to **normalized relational tables** with per-row SQL,
+  so the app can scale horizontally and query/aggregate in the database.
+
+## 2. What's in this kickoff slice
+
+```
+backend/src/db/pool.js                      pooled pg client + query()/withTransaction()
+backend/src/db/migrate.js                   forward-only migration runner (schema_migrations)
+backend/src/db/backfill.js                  copy existing skills/target_skills into SQL
+backend/src/db/verify-skills.mjs            one-command verification of the pilot
+backend/src/repositories/skills.repository.pg.js   SQL repository (API-shaped output)
+database/migrations/0001_skills.sql         reconciled skills + target_skills tables
+```
+
+The **skills** bounded context is the pilot (like the certificates pilot for the
+module refactor): small, low-risk, exercises the full pattern (schema → migration
+→ repository → backfill → verify → cutover).
+
+## 3. Schema reconciliation decisions
+
+The original `database/schema.sql` diverged from the running app. Decisions for
+the relational target:
+
+| Topic | Original schema | App reality | Decision |
+|---|---|---|---|
+| IDs | `UUID DEFAULT gen_random_uuid()` | string ids (`SKILL-SEC`, `TS-001`, `EMP-1001`) | **TEXT ids** — migrate storage, keep identifiers + API contract |
+| Timestamps | `TIMESTAMPTZ` | ISO strings via `now()` | TIMESTAMPTZ columns; repo maps `created_at` ⇄ `createdAt` (ISO) |
+| `attempt_status` | ENUM without `Passed`/`Failed` | app writes `Passed`/`Failed` (seed) + `Submitted`/`PendingManualReview`/`AutoSubmitted` | use **TEXT + CHECK** covering all observed values (avoid brittle ENUM) — *applies when attempts are migrated* |
+| `enrollments` vs `assignments` | table `enrollments` | code uses `assignments` | table named `enrollments`; repository exposes `assignment`-shaped objects — *applies later* |
+| Questions / answers | normalized `questions` table | inline `questions[]` array on assessment | **hybrid**: relational tables for entities, **JSONB columns** for genuinely document-like nested fields (`questions`, `answers`, `chapterTimeSpentSeconds`, proctor `flags`) — *applies later* |
+| Enums (category/scope/priority/level/status) | PG ENUM types | zod enums in app | **TEXT + CHECK** mirroring the zod enums (simpler evolution, same guarantees) |
+
+Naming: snake_case columns in SQL, camelCase in JS — repositories own the mapping.
+
+## 4. How to run & verify (you do this against your Postgres)
+
+```bash
+# 1. Point at a throwaway/staging Postgres
+export DATABASE_URL='postgres://user:pass@host:5432/nalanda'
+export PGSSL=require        # 'require' (verify cert) | 'no-verify' (managed self-signed) | unset (local)
+
+# 2. Apply migrations (idempotent)
+node backend/src/db/migrate.js
+
+# 3. Backfill existing skills/target_skills (idempotent upserts)
+node backend/src/db/backfill.js
+
+# 4. One-command pilot verification (migrate + backfill + exercise repo + cleanup)
+node backend/src/db/verify-skills.mjs
+#    Expect all lines to start with "ok"; any "FAIL" is a real problem to fix.
+```
+
+If `verify-skills.mjs` prints all `ok`, the pilot pattern is sound and we proceed
+to wire it into the app (§5). If anything fails, tell me the output and I'll fix.
+
+## 5. Cutover for the skills module (after verification)
+
+The skills module currently mutates the in-memory `skills`/`targetSkills` arrays.
+To switch it to Postgres, change its handlers to call the repository — example:
+
+```js
+// backend/src/modules/skills/skills.routes.js  (illustrative)
+import * as skillsRepo from "../../repositories/skills.repository.pg.js";
+
+app.post("/api/skills", authenticate, requireRole("Admin"), async (req, res) => {
+  // ...validate with zod (unchanged)...
+  const existing = await skillsRepo.findSkillByName(skill.name);
+  if (existing) return res.status(409).json({ error: "Skill name already exists" });
+  const saved = await skillsRepo.insertSkill(skill);
+  audit(req.user.id, "CREATE_SKILL", "SKILL", saved.id);
+  res.status(201).json({ data: saved });
+});
+```
+
+Handlers become `async`; reads (`listSkills`) replace the array reads in
+`/api/app-data`. Because the repository returns the **same shapes**, the API
+contract and the frontend are unchanged. Verify with the existing Wave-1 smoke
+harness (`tmp-dev-logs/wave1-smoke.sh`) pointed at a server booted with
+`DATABASE_URL` set, diffed against the in-memory build.
+
+**Dual-run option:** keep both behind a flag (`USE_PG_SKILLS=1`) so you can switch
+per-entity and roll back instantly.
+
+## 6. Per-entity rollout checklist (remaining work)
+
+For each bounded context, in roughly ascending coupling:
+
+- [x] skills, target_skills  *(pilot — this slice)*
+- [ ] chapter_feedbacks
+- [ ] users  (+ login_security, session_versions)
+- [ ] courses
+- [ ] chapters  (+ chapter_time_totals / learning_time_events)
+- [ ] assessments (+ questions as JSONB)  ·  enrollments(assignments)
+- [ ] attempts (+ answers/flags as JSONB; reconcile status CHECK)
+- [ ] proctoring_logs  ·  certificates  ·  archives  ·  audit_logs / security_events
+- [ ] reports, analytics → convert aggregates to SQL (`GROUP BY`, views)
+- [ ] remove the in-memory arrays + JSON-blob adapter; externalize rate-limit /
+      session / lockout state to enable **multi-instance** horizontal scaling
+
+Each entity: add migration SQL → repository → backfill → verify → wire module
+(async) → smoke-diff → commit. Same discipline as the module refactor waves.
+
+## 7. Risks / open items
+
+- **Unverified SQL** (this slice) — must pass §4 before trusting it.
+- **`now()`-seeded timestamps** are identical across seed rows, so list ordering
+  by `created_at` is approximate; if exact order matters, add a sort key.
+- **Source for backfill** assumes `database/db.json`; if production is on the
+  Phase-1 JSONB adapter, export that collection first or adapt `backfill.js`.
+- **Transactions across entities** (e.g., course delete cascading to chapters/
+  assessments/enrollments + archive) must move into a single `withTransaction`
+  when those entities are migrated, to preserve the current all-or-nothing behavior.
