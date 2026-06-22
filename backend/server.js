@@ -25,6 +25,9 @@ import { registerAuth } from "./src/modules/auth/auth.routes.js";
 import { registerUsers } from "./src/modules/users/users.routes.js";
 import { registerEnrollments } from "./src/modules/enrollments/enrollments.routes.js";
 import { registerProctoring } from "./src/modules/proctoring/proctoring.routes.js";
+import { registerCourses } from "./src/modules/courses/courses.routes.js";
+import { registerChapters } from "./src/modules/chapters/chapters.routes.js";
+import { registerAssessments } from "./src/modules/assessments/assessments.routes.js";
 
 try {
   loadEnvFile();
@@ -901,6 +904,11 @@ const moduleCtx = {
   rateLimitCheck, rateLimitRecord, loginSecurity, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS,
   COOKIE_SECURE, COOKIE_SAMESITE, CSRF_COOKIE, STEP_UP_COOKIE,
   coursesVisibleTo, addAssessmentTime,
+  // courses/chapters/assessments deps
+  nextCourseId, canManageCourse, upload, sanitizeHtmlServer, videoProgress,
+  addChapterTime, chapterTimeFor, assessmentTimeFor, assessmentsVisibleTo,
+  assessmentForUser, questionPointsTotal,
+  MAX_CHAPTER_TIME_INCREMENT_SECONDS, ASSESSMENT_TIME_GRACE_SECONDS,
 };
 
 registerGovernance(app, moduleCtx);
@@ -912,6 +920,9 @@ registerAuth(app, moduleCtx);
 registerUsers(app, moduleCtx);
 registerEnrollments(app, moduleCtx);
 registerProctoring(app, moduleCtx);
+registerCourses(app, moduleCtx);
+registerChapters(app, moduleCtx);
+registerAssessments(app, moduleCtx);
 
 app.get("/api/health", (_req, res) => {
   const apiKey = getGeminiApiKey();
@@ -942,411 +953,24 @@ app.get("/api/csrf-token", (req, res) => {
 
 
 
-app.get("/api/courses", authenticate, (req, res) => {
-  const { skill, approval, status = "Active" } = req.query;
-  let visible = coursesVisibleTo(req.user);
-  if (skill) visible = visible.filter((course) => course.skill === skill);
-  if (approval) visible = visible.filter((course) => course.approval === approval);
-  if (status !== "All") visible = visible.filter((course) => course.status === status);
-  res.json({ data: visible, total: visible.length });
-});
-
-app.post("/api/courses", authenticate, requireRole("Admin", "Manager"), upload.fields([{ name: "pdf" }, { name: "video" }]), (req, res) => {
-  let body;
-  try {
-    body = typeof req.body.payload === "string" ? JSON.parse(req.body.payload) : req.body;
-  } catch {
-    return res.status(400).json({ error: "Invalid course payload JSON" });
-  }
-  const schema = z.object({
-    title: z.string().min(4),
-    description: z.string().min(10),
-    skill: z.string().min(2),
-    skillIds: z.array(z.string()).default([]),
-    targetLevel: z.string().default("Beginner"),
-    difficulty: z.string().default("Beginner"),
-    estimatedHours: z.number().default(4),
-    category: z.string().default("Technical"),
-    prerequisites: z.array(z.string()).default([]),
-    tags: z.array(z.string()).default([]),
-    contentTypes: z.array(z.string()).default(["Rich Text"])
-  });
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const course = {
-    id: nextCourseId(parsed.data.skill),
-    ...parsed.data,
-    approval: req.user.role === "Admin" ? "Approved" : "Pending",
-    status: "Active",
-    ownerId: req.user.id,
-    version: 1,
-    createdAt: now(),
-    updatedAt: now(),
-    storage: { files: Object.keys(req.files || {}) }
-  };
-  courses.unshift(course);
-  audit(req.user.id, "CREATE_COURSE", "COURSE", course.id, { approval: course.approval });
-  res.status(201).json({ data: course });
-});
-
-app.put("/api/courses/:id", authenticate, requireRole("Admin", "Manager"), (req, res) => {
-  const course = courses.find((item) => item.id === req.params.id);
-  if (!course) return res.status(404).json({ error: "Course not found" });
-  if (!canManageCourse(req.user, course)) return res.status(403).json({ error: "Forbidden" });
-  const schema = z.object({
-    title: z.string().min(4).optional(),
-    description: z.string().min(10).optional(),
-    skill: z.string().min(2).optional(),
-    skillIds: z.array(z.string()).optional(),
-    targetLevel: z.string().optional(),
-    difficulty: z.string().optional(),
-    estimatedHours: z.coerce.number().optional(),
-    category: z.string().optional(),
-    prerequisites: z.array(z.string()).optional(),
-    tags: z.array(z.string()).optional(),
-    thumbnailColor: z.string().optional(),
-    contentTypes: z.array(z.string()).optional(),
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  Object.assign(course, parsed.data, { version: course.version + 1, approval: req.user.role === "Admin" ? "Approved" : "Pending", updatedAt: now() });
-  audit(req.user.id, "UPDATE_COURSE", "COURSE", course.id, { version: course.version });
-  res.json({ data: course });
-});
-
-app.post("/api/courses/:id/duplicate", authenticate, requireRole("Admin", "Manager"), (req, res) => {
-  const source = courses.find((item) => item.id === req.params.id);
-  if (!source) return res.status(404).json({ error: "Course not found" });
-  const copy = { ...source, id: nextCourseId(source.skill), title: `${source.title} Copy`, approval: req.user.role === "Admin" ? "Approved" : "Pending", ownerId: req.user.id, version: 1, createdAt: now(), updatedAt: now() };
-  courses.unshift(copy);
-  audit(req.user.id, "DUPLICATE_COURSE", "COURSE", copy.id, { sourceId: source.id });
-  res.status(201).json({ data: copy });
-});
-
-app.patch("/api/courses/:id/approval", authenticate, requireRole("Admin"), (req, res) => {
-  const schema = z.object({ approval: z.enum(["Approved", "Rejected"]), reason: z.string().optional() });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const course = courses.find((item) => item.id === req.params.id);
-  if (!course) return res.status(404).json({ error: "Course not found" });
-  course.approval = parsed.data.approval;
-  if (parsed.data.approval === "Rejected") course.status = "Inactive";
-  audit(req.user.id, "COURSE_APPROVAL", "COURSE", course.id, parsed.data);
-  res.json({ data: course });
-});
-
-app.patch("/api/courses/:id/status", authenticate, requireRole("Admin"), requireStepUp, (req, res) => {
-  const schema = z.object({ status: z.enum(["Active", "Inactive"]) });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const course = courses.find((item) => item.id === req.params.id);
-  if (!course) return res.status(404).json({ error: "Course not found" });
-  course.status = parsed.data.status;
-  audit(req.user.id, "COURSE_STATUS", "COURSE", course.id, parsed.data);
-  res.json({ data: course });
-});
-
-app.delete("/api/courses/:id", authenticate, requireRole("Admin", "Manager"), requireStepUp, (req, res) => {
-  const schema = z.object({ deletionComment: z.string().min(10) });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  
-  const idx = courses.findIndex((c) => c.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: "Course not found" });
-  const course = courses[idx];
-  if (!canManageCourse(req.user, course)) return res.status(403).json({ error: "Forbidden" });
-
-  const relatedChapters = chapters.filter((ch) => ch.courseId === course.id);
-  const relatedAssessments = assessments.filter((a) => a.courseId === course.id);
-  const relatedAssignments = assignments.filter((e) => e.courseId === course.id);
-
-  const archived = {
-    id: uuid(),
-    entityType: "Course",
-    entityId: course.id,
-    entityData: { ...course },
-    relatedData: {
-      chapters: relatedChapters,
-      assessments: relatedAssessments,
-      enrollments: relatedAssignments,
-    },
-    deletedBy: req.user.id,
-    deletedByName: req.user.name,
-    deletionComment: parsed.data.deletionComment,
-    deletedAt: now()
-  };
-
-  archives.unshift(archived);
-
-  courses.splice(idx, 1);
-  for (let i = chapters.length - 1; i >= 0; i--) {
-    if (chapters[i].courseId === course.id) chapters.splice(i, 1);
-  }
-  for (let i = assessments.length - 1; i >= 0; i--) {
-    if (assessments[i].courseId === course.id) assessments.splice(i, 1);
-  }
-  for (let i = assignments.length - 1; i >= 0; i--) {
-    if (assignments[i].courseId === course.id) assignments.splice(i, 1);
-  }
-
-  audit(req.user.id, "DELETE_COURSE", "COURSE", course.id);
-  res.json({ success: true, message: "Course permanently deleted and archived" });
-});
-
-app.get("/api/courses/:courseId/chapters", authenticate, (req, res) => {
-  const course = courses.find((item) => item.id === req.params.courseId);
-  if (!course) return res.status(404).json({ error: "Course not found" });
-  if (!coursesVisibleTo(req.user).some((item) => item.id === course.id)) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-  const data = chapters
-    .filter((chapter) => chapter.courseId === req.params.courseId)
-    .sort((a, b) => a.sequence - b.sequence);
-  res.json({ data, total: data.length });
-});
-
-app.post("/api/courses/:courseId/chapters", authenticate, requireRole("Admin", "Manager"), (req, res) => {
-  const course = courses.find((item) => item.id === req.params.courseId);
-  if (!course) return res.status(404).json({ error: "Course not found" });
-  if (!canManageCourse(req.user, course)) return res.status(403).json({ error: "Forbidden" });
-
-  const schema = z.object({
-    id: z.string().min(2).optional(),
-    sequence: z.coerce.number().int().positive().optional(),
-    title: z.string().min(2),
-    description: z.string().default(""),
-    contentType: z.enum(["Rich Text", "PDF", "Video Link"]).default("Rich Text"),
-    body: z.string().default(""),
-    url: z.string().optional(),
-    fileName: z.string().optional(),
-    durationMinutes: z.coerce.number().int().min(0).default(10),
-    minimumTimeMinutes: z.coerce.number().int().min(0).optional()
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-
-  const courseChapters = chapters.filter((chapter) => chapter.courseId === course.id);
-  const chapter = {
-    id: parsed.data.id || `CH-${Math.floor(1000 + Math.random() * 9000)}`,
-    courseId: course.id,
-    sequence: parsed.data.sequence || courseChapters.length + 1,
-    title: parsed.data.title,
-    description: parsed.data.description,
-    contentType: parsed.data.contentType,
-    body: sanitizeHtmlServer(parsed.data.body),
-    url: parsed.data.url,
-    fileName: parsed.data.fileName,
-    durationMinutes: parsed.data.durationMinutes,
-    minimumTimeMinutes: parsed.data.minimumTimeMinutes ?? parsed.data.durationMinutes ?? 1,
-    createdAt: now(),
-    updatedAt: now()
-  };
-
-  if (chapters.some((item) => item.id === chapter.id)) return res.status(409).json({ error: "Chapter ID already exists" });
-  chapters.push(chapter);
-  course.updatedAt = now();
-  audit(req.user.id, "CREATE_CHAPTER", "CHAPTER", chapter.id, { courseId: course.id, minimumTimeMinutes: chapter.minimumTimeMinutes });
-  res.status(201).json({ data: chapter });
-});
-
-app.put("/api/courses/:courseId/chapters/:chapterId", authenticate, requireRole("Admin", "Manager"), (req, res) => {
-  const course = courses.find((item) => item.id === req.params.courseId);
-  if (!course) return res.status(404).json({ error: "Course not found" });
-  if (!canManageCourse(req.user, course)) return res.status(403).json({ error: "Forbidden" });
-  const chapter = chapters.find((item) => item.id === req.params.chapterId && item.courseId === course.id);
-  if (!chapter) return res.status(404).json({ error: "Chapter not found" });
-
-  const schema = z.object({
-    sequence: z.coerce.number().int().positive().optional(),
-    title: z.string().min(2).optional(),
-    description: z.string().optional(),
-    contentType: z.enum(["Rich Text", "PDF", "Video Link"]).optional(),
-    body: z.string().optional(),
-    url: z.string().nullable().optional(),
-    fileName: z.string().nullable().optional(),
-    durationMinutes: z.coerce.number().int().min(0).optional(),
-    minimumTimeMinutes: z.coerce.number().int().min(0).optional()
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-
-  if (typeof parsed.data.body === "string") parsed.data.body = sanitizeHtmlServer(parsed.data.body);
-  Object.assign(chapter, parsed.data, { updatedAt: now() });
-  course.updatedAt = now();
-  audit(req.user.id, "UPDATE_CHAPTER", "CHAPTER", chapter.id, parsed.data);
-  res.json({ data: chapter });
-});
 
 
-app.get("/api/assessments", authenticate, (req, res) => {
-  const visible = assessmentsVisibleTo(req.user);
-  res.json({ data: visible.map((item) => assessmentForUser(item, req.user)), total: visible.length });
-});
-
-app.post("/api/assessments", authenticate, requireRole("Admin", "Manager"), (req, res) => {
-  const schema = z.object({
-    title: z.string().min(4),
-    courseId: z.string(),
-    chapterId: z.string().optional(),
-    type: z.enum(["MCQ", "Descriptive", "Timed Quiz", "Mixed"]),
-    strictMode: z.boolean().default(true),
-    questions: z.array(z.record(z.string(), z.any())).min(1),
-    durationMinutes: z.coerce.number().min(1),
-    passScore: z.coerce.number().min(1).max(100),
-    questionLimit: z.coerce.number().int().positive().optional(),
-    difficulty: z.string().optional()
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const course = courses.find((item) => item.id === parsed.data.courseId);
-  if (!course) return res.status(404).json({ error: "Course not found" });
-  if (!canManageCourse(req.user, course)) return res.status(403).json({ error: "Forbidden" });
-  if (parsed.data.chapterId && !chapters.some((item) => item.id === parsed.data.chapterId && item.courseId === parsed.data.courseId)) {
-    return res.status(400).json({ error: "Chapter does not belong to course" });
-  }
-
-  const assessment = { id: `ASM-${Math.floor(1000 + Math.random() * 9000)}`, ...parsed.data, approval: req.user.role === "Admin" ? "Approved" : "Pending", status: "Active", ownerId: req.user.id, createdAt: now(), updatedAt: now() };
-  assessments.unshift(assessment);
-  audit(req.user.id, "CREATE_ASSESSMENT", "ASSESSMENT", assessment.id, { approval: assessment.approval });
-  res.status(201).json({ data: assessment });
-});
-app.put("/api/assessments/:id", authenticate, requireRole("Admin", "Manager"), (req, res) => {
-  const schema = z.object({
-    title: z.string().min(4).optional(),
-    courseId: z.string().optional(),
-    chapterId: z.string().optional(),
-    difficulty: z.string().optional(),
-    durationMinutes: z.coerce.number().min(1).optional(),
-    passScore: z.coerce.number().min(1).max(100).optional(),
-    questionLimit: z.coerce.number().int().positive().optional(),
-    questions: z.array(z.record(z.string(), z.any())).min(1).optional()
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  
-  const assessment = assessments.find((item) => item.id === req.params.id);
-  if (!assessment) return res.status(404).json({ error: "Assessment not found" });
-  
-  const course = courses.find((item) => item.id === (parsed.data.courseId || assessment.courseId));
-  if (!course) return res.status(404).json({ error: "Course not found" });
-  if (!canManageCourse(req.user, course)) return res.status(403).json({ error: "Forbidden" });
-
-  Object.assign(assessment, parsed.data, { updatedAt: now() });
-  audit(req.user.id, "UPDATE_ASSESSMENT", "ASSESSMENT", assessment.id, parsed.data);
-  res.json({ data: assessment });
-});
-
-app.patch("/api/assessments/:id/status", authenticate, requireRole("Admin", "Manager"), requireStepUp, (req, res) => {
-  const schema = z.object({ status: z.enum(["Active", "Inactive"]) });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  
-  const assessment = assessments.find((item) => item.id === req.params.id);
-  if (!assessment) return res.status(404).json({ error: "Assessment not found" });
-  
-  assessment.status = parsed.data.status;
-  audit(req.user.id, "ASSESSMENT_STATUS", "ASSESSMENT", assessment.id, parsed.data);
-  res.json({ data: assessment });
-});
-
-app.delete("/api/assessments/:id", authenticate, requireRole("Admin", "Manager"), requireStepUp, (req, res) => {
-  const schema = z.object({ deletionComment: z.string().min(10) });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  
-  const idx = assessments.findIndex((item) => item.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: "Assessment not found" });
-  const assessment = assessments[idx];
-  
-  const course = courses.find((item) => item.id === assessment.courseId);
-  if (course && !canManageCourse(req.user, course)) return res.status(403).json({ error: "Forbidden" });
-
-  archives.unshift({
-    id: uuid(),
-    entityType: "Assessment",
-    entityId: assessment.id,
-    entityData: { ...assessment },
-    deletedBy: req.user.id,
-    deletedByName: req.user.name,
-    deletionComment: parsed.data.deletionComment,
-    deletedAt: now()
-  });
-
-  assessments.splice(idx, 1);
-  audit(req.user.id, "DELETE_ASSESSMENT", "ASSESSMENT", assessment.id);
-  res.json({ success: true, message: "Assessment permanently deleted and archived" });
-});
 
 
-app.patch("/api/assessments/:id/approval", authenticate, requireRole("Admin"), (req, res) => {
-  const schema = z.object({ approval: z.enum(["Approved", "Rejected"]), feedback: z.string().optional() });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const assessment = assessments.find((item) => item.id === req.params.id);
-  if (!assessment) return res.status(404).json({ error: "Assessment not found" });
-  assessment.approval = parsed.data.approval;
-  audit(req.user.id, "ASSESSMENT_APPROVAL", "ASSESSMENT", assessment.id, parsed.data);
-  res.json({ data: assessment });
-});
 
-app.post("/api/assessments/:id/attempts/start", authenticate, requireRole("Employee", "Manager", "Admin"), (req, res) => {
-  const assessment = assessments.find((item) => item.id === req.params.id && item.approval === "Approved" && item.status === "Active");
-  if (!assessment) return res.status(404).json({ error: "Approved assessment not found" });
-  const course = courses.find((item) => item.id === assessment.courseId);
-  if (!course || course.approval !== "Approved" || course.status !== "Active") {
-    return res.status(403).json({ error: "Assessment is not available" });
-  }
-  if (!isAdmin(req.user.role)) {
-    const assigned = assignments.some((assignment) => assignment.userId === req.user.id && assignment.courseId === assessment.courseId);
-    if (!assigned) return res.status(403).json({ error: "You are not assigned to this course" });
-  }
-  const attempt = { id: uuid(), assessmentId: assessment.id, courseId: assessment.courseId, chapterId: assessment.chapterId || null, userId: req.user.id, startedAt: now(), submittedAt: null, status: "InProgress", score: null, maxScore: questionPointsTotal(assessment), feedback: "", answers: {}, selectedQuestionIds: [], tabSwitchWarnings: 0, autoSubmittedReason: null, timeSpentSeconds: 0, flags: [] };
-  attempts.unshift(attempt);
-  audit(req.user.id, "START_ATTEMPT", "ASSESSMENT_ATTEMPT", attempt.id);
-  res.status(201).json({ data: attempt, strictRules: assessment.strictMode ? settings : null });
-});
 
-app.post("/api/assessments/attempts/:attemptId/submit", authenticate, (req, res) => {
-  const schema = z.object({
-    answers: z.record(z.string(), z.any()).default({}),
-    selectedQuestionIds: z.array(z.string()).optional(),
-    tabSwitchWarnings: z.coerce.number().int().min(0).optional(),
-    autoSubmittedReason: z.string().nullable().optional(),
-    timeSpentSeconds: z.coerce.number().int().min(0).optional()
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const attempt = attempts.find((item) => item.id === req.params.attemptId && item.userId === req.user.id);
-  if (!attempt) return res.status(404).json({ error: "Attempt not found" });
-  if (attempt.submittedAt) return res.status(409).json({ error: "Attempt already submitted", data: attempt });
-  const assessment = assessments.find((item) => item.id === attempt.assessmentId);
-  if (!assessment) return res.status(404).json({ error: "Assessment not found" });
-  const mcqQuestions = assessment.questions.filter((question) => question.type === "MCQ");
-  const mcqScore = mcqQuestions.length ? Math.round((mcqQuestions.filter((question) => parsed.data.answers?.[question.id] === question.answer).length / mcqQuestions.length) * 100) : null;
-  const submittedAt = now();
-  const elapsedSeconds = Math.max(1, Math.round((new Date(submittedAt).getTime() - new Date(attempt.startedAt).getTime()) / 1000));
-  const requestedTimeSpentSeconds = parsed.data.timeSpentSeconds || elapsedSeconds;
-  const timeSpentSeconds = Math.min(requestedTimeSpentSeconds, elapsedSeconds + ASSESSMENT_TIME_GRACE_SECONDS);
-  if (requestedTimeSpentSeconds > elapsedSeconds + ASSESSMENT_TIME_GRACE_SECONDS) {
-    audit(req.user.id, "ASSESSMENT_TIME_CLAMPED", "ASSESSMENT_ATTEMPT", attempt.id, { requestedTimeSpentSeconds, elapsedSeconds });
-  }
-  Object.assign(attempt, {
-    answers: parsed.data.answers,
-    selectedQuestionIds: parsed.data.selectedQuestionIds || attempt.selectedQuestionIds || [],
-    tabSwitchWarnings: parsed.data.tabSwitchWarnings ?? attempt.tabSwitchWarnings ?? 0,
-    autoSubmittedReason: parsed.data.autoSubmittedReason ?? null,
-    submittedAt,
-    status: mcqScore === null ? "PendingManualReview" : "Submitted",
-    score: mcqScore,
-    maxScore: questionPointsTotal(assessment),
-    feedback: mcqScore === null ? "Manual evaluation required" : mcqScore >= assessment.passScore ? "Passed" : "Needs improvement",
-    timeSpentSeconds
-  });
-  const assignment = addAssessmentTime({ attempt, assessment, seconds: timeSpentSeconds });
-  audit(req.user.id, "SUBMIT_ATTEMPT", "ASSESSMENT_ATTEMPT", attempt.id, { score: mcqScore, timeSpentSeconds });
-  res.json({ data: attempt, feedback: mcqScore === null ? "Manual evaluation required" : mcqScore >= assessment.passScore ? "Passed" : "Needs improvement" });
-});
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1366,43 +990,7 @@ registerCertificates(app, { store: { issuedCertificates, users, courses }, audit
 
 // ── Video Progress Endpoints ──
 
-app.post("/api/courses/:courseId/chapters/:chapterId/progress", authenticate, (req, res) => {
-  const { currentTime } = req.body;
-  if (typeof currentTime !== "number") return res.status(400).json({ error: "Invalid currentTime" });
-  
-  const key = `${req.user.id}-${req.params.courseId}-${req.params.chapterId}`;
-  videoProgress[key] = { currentTime, updatedAt: now() };
-  
-  res.json({ ok: true, currentTime });
-});
 
-app.post("/api/courses/:courseId/chapters/:chapterId/time", authenticate, (req, res) => {
-  const schema = z.object({ seconds: z.number().int().positive().max(MAX_CHAPTER_TIME_INCREMENT_SECONDS) });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-
-  const course = courses.find((item) => item.id === req.params.courseId);
-  if (!course) return res.status(404).json({ error: "Course not found" });
-  const chapter = chapters.find((item) => item.id === req.params.chapterId && item.courseId === req.params.courseId);
-  if (!chapter) return res.status(404).json({ error: "Chapter not found" });
-
-  const assignment = addChapterTime({ courseId: req.params.courseId, chapterId: req.params.chapterId, userId: req.user.id, seconds: parsed.data.seconds });
-  const chapterTimeSeconds = chapterTimeFor(assignment, req.params.chapterId);
-  const minimumTimeSeconds = Math.max(0, Math.round((chapter.minimumTimeMinutes || 0) * 60));
-
-  res.json({
-    ok: true,
-    data: assignment,
-    totals: {
-      chapterId: req.params.chapterId,
-      chapterTimeSeconds,
-      minimumTimeSeconds,
-      minimumTimeMet: chapterTimeSeconds >= minimumTimeSeconds,
-      assessmentTimeSeconds: assessmentTimeFor({ userId: req.user.id, courseId: req.params.courseId, chapterId: req.params.chapterId }),
-      courseTimeSeconds: assignment.timeSpentSeconds || 0
-    }
-  });
-});
 
 
 
@@ -1433,20 +1021,6 @@ app.post("/api/ai/generation-feedback", authenticate, requireRole("Admin", "Mana
   return res.status(201).json({ data: item });
 });
 
-app.get("/api/courses/:courseId/chapters/:chapterId/progress", authenticate, (req, res) => {
-  const key = `${req.user.id}-${req.params.courseId}-${req.params.chapterId}`;
-  const record = videoProgress[key];
-  const assignment = assignments.find((item) => item.courseId === req.params.courseId && item.userId === req.user.id);
-  const chapter = chapters.find((item) => item.id === req.params.chapterId && item.courseId === req.params.courseId);
-  const chapterTimeSeconds = assignment ? chapterTimeFor(assignment, req.params.chapterId) : 0;
-  const minimumTimeSeconds = Math.max(0, Math.round((chapter?.minimumTimeMinutes || 0) * 60));
-  res.json({
-    currentTime: record ? record.currentTime : 0,
-    chapterTimeSeconds,
-    minimumTimeSeconds,
-    minimumTimeMet: chapterTimeSeconds >= minimumTimeSeconds
-  });
-});
 
 // ── AI Copilot Endpoint ──────────────────────────────────────────────────────
 
