@@ -6,6 +6,8 @@ import { Panel, StatusPill, ProgressBar, Input, Select, Modal, cn } from "../com
 import type { AppData, Skill, SkillLevel, TargetSkill, User } from "../types";
 import { isAdminRole } from "../types";
 import { now, uid } from "../types";
+import { toast } from "../toast";
+import { apiFetch } from "../api";
 
 const levels: SkillLevel[] = ["Beginner", "Intermediate", "Advanced", "Expert"];
 const categories: Skill["category"][] = ["Technical", "Functional", "Leadership", "Compliance", "Behavioral"];
@@ -70,31 +72,64 @@ export default function Skills({ data, currentUser, setData }: { data: AppData; 
   const saveSkill = (event: FormEvent) => {
     event.preventDefault();
     if (!skillForm.name.trim()) return;
-    const skill: Skill = { id: uid("SKILL"), name: skillForm.name.trim(), category: skillForm.category, description: skillForm.description, status: "Active", createdAt: now() };
-    setData(addAudit({ ...data, skills: [skill, ...data.skills] }, "Created skill", skill.id));
-    setSkillForm({ name: "", category: "Technical", description: "" });
-    setSkillOpen(false);
+    apiFetch("/skills", {
+      method: "POST",
+      body: JSON.stringify({
+        name: skillForm.name.trim(),
+        category: skillForm.category,
+        description: skillForm.description
+      })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        const skill = resData.data;
+        setData(addAudit({ ...data, skills: [skill, ...data.skills] }, "Created skill", skill.id));
+        setSkillForm({ name: "", category: "Technical", description: "" });
+        setSkillOpen(false);
+        toast("Skill created successfully");
+      })
+      .catch(() => toast("Failed to create skill"));
   };
 
   const saveTarget = (event: FormEvent) => {
     event.preventDefault();
-    const target: TargetSkill = {
-      id: uid("TS"),
-      skillId: targetForm.skillId,
-      scope: targetForm.scope,
-      department: targetForm.scope === "Department" ? targetForm.department : undefined,
-      designation: targetForm.scope === "Role" ? targetForm.designation : undefined,
-      userId: targetForm.scope === "Employee" ? targetForm.userId : undefined,
-      targetLevel: targetForm.targetLevel,
-      targetScore: Number(targetForm.targetScore),
-      priority: targetForm.priority,
-    };
-    setData(addAudit({ ...data, targetSkills: [target, ...data.targetSkills] }, "Created target skill", target.id));
-    setTargetOpen(false);
+    apiFetch("/skills/targets", {
+      method: "POST",
+      body: JSON.stringify({
+        skillId: targetForm.skillId,
+        scope: targetForm.scope,
+        department: targetForm.scope === "Department" ? targetForm.department : undefined,
+        designation: targetForm.scope === "Role" ? targetForm.designation : undefined,
+        userId: targetForm.scope === "Employee" ? targetForm.userId : undefined,
+        targetLevel: targetForm.targetLevel,
+        targetScore: Number(targetForm.targetScore),
+        priority: targetForm.priority
+      })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        const target = resData.data;
+        setData(addAudit({ ...data, targetSkills: [target, ...data.targetSkills] }, "Created target skill", target.id));
+        setTargetOpen(false);
+        toast("Target skill rule created successfully");
+      })
+      .catch(() => toast("Failed to create target skill"));
   };
 
   const toggleSkill = (skillId: string) => {
-    setData(addAudit({ ...data, skills: data.skills.map((skill) => skill.id === skillId ? { ...skill, status: skill.status === "Active" ? "Inactive" : "Active" } : skill) }, "Updated skill status", skillId));
+    const skill = data.skills.find((s) => s.id === skillId);
+    if (!skill) return;
+    const newStatus = skill.status === "Active" ? "Inactive" : "Active";
+    apiFetch(`/skills/${skillId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: newStatus })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        setData(addAudit({ ...data, skills: data.skills.map((s) => s.id === skillId ? resData.data : s) }, "Updated skill status", skillId));
+        toast(`Skill status updated to ${newStatus}`);
+      })
+      .catch(() => toast("Failed to update skill status"));
   };
 
   return (

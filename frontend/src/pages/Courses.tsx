@@ -542,32 +542,85 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
   const saveCourse = () => {
     const selectedSkill = data.skills.find((skill) => skill.id === form.skillId);
     if (!selectedSkill) return;
-    const c: Course = { id: uid("CRS"), title: form.title, description: form.description, skill: selectedSkill.name, skillIds: [selectedSkill.id], targetLevel: form.targetLevel, prerequisites: [], category: form.category, tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean), thumbnailColor: "#22d3ee", ownerId: currentUser.id, approval: "Pending", status: "Active", version: 1, difficulty: form.difficulty, estimatedHours: Number(form.estimatedHours), createdAt: now(), updatedAt: now() };
-    setData(addAudit({ ...data, courses: [c, ...data.courses] }, "Created course", c.id));
-    setCreateOpen(false);
-    setForm({ title: "", description: "", skillId: data.skills[0]?.id || "", category: "Technical", tags: "", targetLevel: "Beginner", difficulty: "Beginner", estimatedHours: "4" });
-    toast("Course created successfully");
+    apiFetch("/courses", {
+      method: "POST",
+      body: JSON.stringify({
+        title: form.title,
+        description: form.description,
+        skill: selectedSkill.name,
+        skillIds: [selectedSkill.id],
+        targetLevel: form.targetLevel,
+        difficulty: form.difficulty,
+        estimatedHours: Number(form.estimatedHours),
+        category: form.category,
+        tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
+        contentTypes: ["Rich Text"]
+      })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        const c = resData.data;
+        setData(addAudit({ ...data, courses: [c, ...data.courses] }, "Created course", c.id));
+        setCreateOpen(false);
+        setForm({ title: "", description: "", skillId: data.skills[0]?.id || "", category: "Technical", tags: "", targetLevel: "Beginner", difficulty: "Beginner", estimatedHours: "4" });
+        toast("Course created successfully");
+      })
+      .catch(() => toast("Failed to create course"));
   };
 
   const approve = (id: string) => {
     const course = data.courses.find((c) => c.id === id);
     if (!course || !getReadiness(course).ready) return;
-    setData(addAudit({ ...data, courses: data.courses.map((c) => c.id === id ? { ...c, approval: "Approved" as const, updatedAt: now() } : c) }, "Approved course", id));
-    toast("Course approved successfully");
+    apiFetch(`/courses/${id}/approval`, {
+      method: "PATCH",
+      body: JSON.stringify({ approval: "Approved" })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        setData(addAudit({ ...data, courses: data.courses.map((c) => c.id === id ? resData.data : c) }, "Approved course", id));
+        toast("Course approved successfully");
+      })
+      .catch(() => toast("Failed to approve course"));
+
   };
-  const reject = (id: string) => { setData(addAudit({ ...data, courses: data.courses.map((c) => c.id === id ? { ...c, approval: "Rejected" as const, status: "Inactive" as const, updatedAt: now() } : c) }, "Rejected course", id)); toast("Course rejected"); };
+  const reject = (id: string) => {
+    apiFetch(`/courses/${id}/approval`, {
+      method: "PATCH",
+      body: JSON.stringify({ approval: "Rejected" })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        setData(addAudit({ ...data, courses: data.courses.map((c) => c.id === id ? resData.data : c) }, "Rejected course", id));
+        toast("Course rejected");
+      })
+      .catch(() => toast("Failed to reject course"));
+  };
 
   const toggleCourseStatus = (course: Course) => {
     const newStatus = course.status === "Active" ? "Inactive" : "Active";
-    setData(addAudit({
-      ...data,
-      courses: data.courses.map((c) => c.id === course.id ? { ...c, status: newStatus as any, updatedAt: now() } : c),
-    }, newStatus === "Inactive" ? "Deactivated course" : "Activated course", course.id));
-    toast(newStatus === "Inactive" ? "Course deactivated successfully" : "Course activated successfully");
+    apiFetch(`/courses/${course.id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: newStatus })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        setData(addAudit({
+          ...data,
+          courses: data.courses.map((c) => c.id === course.id ? resData.data : c),
+        }, newStatus === "Inactive" ? "Deactivated course" : "Activated course", course.id));
+        toast(newStatus === "Inactive" ? "Course deactivated successfully" : "Course activated successfully");
+      })
+      .catch(() => toast("Failed to update status"));
   };
 
   const handleDeleteCourse = (comment: string) => {
     if (!deleteTarget) return;
+    apiFetch(`/courses/${deleteTarget.id}`, {
+      method: "DELETE",
+      body: JSON.stringify({ deletionComment: comment })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then(() => {
     const relatedChapters = data.chapters.filter((ch) => ch.courseId === deleteTarget.id);
     const relatedAssessments = data.assessments.filter((a) => a.courseId === deleteTarget.id);
     const relatedEnrollments = data.enrollments.filter((e) => e.courseId === deleteTarget.id);
@@ -595,16 +648,17 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
       archive: [archived, ...(data.archive || [])],
     }, "Permanently deleted course", deleteTarget.id));
     setDeleteTarget(null);
-    toast("Course deleted successfully");
+        toast("Course deleted successfully");
+      })
+      .catch(() => toast("Failed to delete course"));
   };
   const saveCourseEdits = () => {
     if (!editCourse) return;
     const selectedSkill = data.skills.find((skill) => skill.id === editForm.skillId);
     if (!selectedSkill) return;
-    setData(addAudit({
-      ...data,
-      courses: data.courses.map((course) => course.id === editCourse.id ? {
-        ...course,
+    apiFetch(`/courses/${editCourse.id}`, {
+      method: "PUT",
+      body: JSON.stringify({
         title: editForm.title,
         description: editForm.description,
         skill: selectedSkill.name,
@@ -614,31 +668,47 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
         tags: editForm.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
         difficulty: editForm.difficulty,
         estimatedHours: Number(editForm.estimatedHours),
-        approval: course.approval === "Approved" ? "Pending" : course.approval,
-        updatedAt: now(),
-      } : course),
-    }, "Updated course", editCourse.id));
+      })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        setData(addAudit({
+          ...data,
+          courses: data.courses.map((course) => course.id === editCourse.id ? resData.data : course),
+        }, "Updated course", editCourse.id));
+        toast("Course updated successfully");
+      })
+      .catch(() => toast("Failed to update course"));
   };
 
   const saveChapter = () => {
     if (!editCourse || !chapterForm.title.trim()) return;
-    const courseChapters = data.chapters.filter((chapter) => chapter.courseId === editCourse.id);
-    const chapter: Chapter = {
-      id: chapterForm.id || uid("CH"),
-      courseId: editCourse.id,
-      sequence: chapterForm.id ? data.chapters.find((item) => item.id === chapterForm.id)?.sequence || courseChapters.length + 1 : courseChapters.length + 1,
-      title: chapterForm.title,
-      description: chapterForm.description,
-      contentType: chapterForm.contentType,
-      body: chapterForm.body,
-      url: chapterForm.url || undefined,
-      fileName: chapterForm.fileName || undefined,
-      durationMinutes: Number(chapterForm.durationMinutes),
-      minimumTimeMinutes: Number(chapterForm.minimumTimeMinutes) || Number(chapterForm.durationMinutes) || 1,
-    };
-    const chapters = chapterForm.id ? data.chapters.map((item) => item.id === chapter.id ? chapter : item) : [...data.chapters, chapter];
-    setData(addAudit({ ...data, chapters }, chapterForm.id ? "Updated chapter" : "Created chapter", chapter.id));
-    resetChapterForm();
+    const isEditing = Boolean(chapterForm.id);
+    const url = isEditing ? `/courses/${editCourse.id}/chapters/${chapterForm.id}` : `/courses/${editCourse.id}/chapters`;
+    apiFetch(url, {
+      method: isEditing ? "PUT" : "POST",
+      body: JSON.stringify({
+        title: chapterForm.title,
+        description: chapterForm.description,
+        contentType: chapterForm.contentType,
+        body: chapterForm.body,
+        url: chapterForm.url || undefined,
+        fileName: chapterForm.fileName || undefined,
+        durationMinutes: Number(chapterForm.durationMinutes),
+        minimumTimeMinutes: Number(chapterForm.minimumTimeMinutes) || Number(chapterForm.durationMinutes) || 1,
+      })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        const chapter = resData.data;
+        const chapters = isEditing
+          ? data.chapters.map((item) => item.id === chapter.id ? chapter : item)
+          : [...data.chapters, chapter];
+        setData(addAudit({ ...data, chapters }, isEditing ? "Updated chapter" : "Created chapter", chapter.id));
+        resetChapterForm();
+        toast(isEditing ? "Chapter updated successfully" : "Chapter created successfully");
+      })
+      .catch(() => toast("Failed to save chapter"));
   };
 
   const editChapter = (chapter: Chapter) => {
@@ -666,7 +736,22 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
 
   const assign = (courseId: string, userId: string) => {
     if (data.enrollments.some((e) => e.courseId === courseId && e.userId === userId)) return;
-    setData(addAudit({ ...data, enrollments: [{ id: uid("ENR"), courseId, userId, assignedBy: currentUser.id, dueAt: assignmentForm.dueAt || null, priority: assignmentForm.priority, mandatory: assignmentForm.mandatory, progress: 0, completedChapters: [], timeSpentMinutes: 0, timeSpentSeconds: 0, chapterTimeSpentSeconds: {}, startedAt: now(), completedAt: null }, ...data.enrollments] }, "Assigned course", `${courseId}→${userId}`));
+    apiFetch("/assignments", {
+      method: "POST",
+      body: JSON.stringify({
+        courseId,
+        userIds: [userId],
+        dueAt: assignmentForm.dueAt || null,
+        priority: assignmentForm.priority,
+        mandatory: assignmentForm.mandatory
+      })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        setData(addAudit({ ...data, enrollments: [...resData.data, ...data.enrollments] }, "Assigned course", `${courseId}→${userId}`));
+        toast("Course assigned successfully");
+      })
+      .catch(() => toast("Failed to assign course"));
   };
 
   const handleProgress = (chId: string, seconds: number) => {
@@ -713,29 +798,74 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
       body: JSON.stringify({ seconds }),
     }).catch(() => {});
   };
-  const handleFeedback = (fb: ChapterFeedback) => setData(addAudit({ ...data, chapterFeedbacks: [fb, ...data.chapterFeedbacks] }, "Submitted feedback", fb.chapterId));
+  const handleFeedback = (fb: ChapterFeedback) => {
+    apiFetch("/chapter-feedbacks", {
+      method: "POST",
+      body: JSON.stringify({
+        chapterId: fb.chapterId,
+        courseId: fb.courseId,
+        rating: fb.rating,
+        clarity: fb.clarity,
+        relevance: fb.relevance,
+        comments: fb.comments
+      })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        setData(addAudit({ ...data, chapterFeedbacks: [resData.data, ...data.chapterFeedbacks] }, "Submitted feedback", fb.chapterId));
+        toast("Feedback submitted successfully");
+      })
+      .catch(() => toast("Failed to submit feedback"));
+  };
+
   const handleAttempt = (att: any) => {
-    const next = addAudit({ ...data, attempts: [att, ...data.attempts] }, "Submitted assessment", att.assessmentId);
-    const assessmentSeconds = att.timeSpentSeconds || 0;
-    if (assessmentSeconds > 0) {
-      next.enrollments = next.enrollments.map((enrollment) => enrollment.courseId === att.courseId && enrollment.userId === att.userId ? {
-        ...enrollment,
-        timeSpentSeconds: (enrollment.timeSpentSeconds || 0) + assessmentSeconds,
-        timeSpentMinutes: Math.ceil(((enrollment.timeSpentSeconds || 0) + assessmentSeconds) / 60),
-      } : enrollment);
-    }
-    if (att.status === "Passed") {
-      const skill = data.courses.find((c) => c.id === att.courseId)?.skill;
-      if (skill) {
-        const existing = next.skillRatings.find((r) => r.userId === currentUser.id && r.skill === skill);
-        if (existing) {
-          next.skillRatings = next.skillRatings.map((r) => r.id === existing.id ? { ...r, score: Math.min(100, Math.round((r.score * r.assessmentsBased + att.score) / (r.assessmentsBased + 1))), assessmentsBased: r.assessmentsBased + 1, trend: "up" as const, lastUpdated: now() } : r);
-        } else {
-          next.skillRatings = [{ id: uid("SK"), userId: currentUser.id, skill, score: att.score, assessmentsBased: 1, trend: "up" as const, lastUpdated: now() }, ...next.skillRatings];
+    apiFetch(`/assessments/${att.assessmentId}/attempts/start`, { method: "POST" })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((startData) => {
+        const attemptId = startData.data.id;
+        return apiFetch(`/assessments/attempts/${attemptId}/submit`, {
+          method: "POST",
+          body: JSON.stringify({
+            answers: att.answers,
+            selectedQuestionIds: att.selectedQuestionIds,
+            tabSwitchWarnings: att.tabSwitchWarnings,
+            autoSubmittedReason: att.autoSubmittedReason,
+            timeSpentSeconds: att.timeSpentSeconds
+          })
+        });
+      })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((submitData) => {
+        const serverAttempt = submitData.data;
+        const next = addAudit({ ...data, attempts: [serverAttempt, ...data.attempts] }, "Submitted assessment", serverAttempt.assessmentId);
+        
+        const assessmentSeconds = serverAttempt.timeSpentSeconds || 0;
+        if (assessmentSeconds > 0) {
+          next.enrollments = next.enrollments.map((enrollment) => enrollment.courseId === serverAttempt.courseId && enrollment.userId === serverAttempt.userId ? {
+            ...enrollment,
+            timeSpentSeconds: (enrollment.timeSpentSeconds || 0) + assessmentSeconds,
+            timeSpentMinutes: Math.ceil(((enrollment.timeSpentSeconds || 0) + assessmentSeconds) / 60),
+          } : enrollment);
         }
-      }
-    }
-    setData(next);
+        
+        if (serverAttempt.status === "Passed" || serverAttempt.status === "Submitted") {
+          const skill = data.courses.find((c) => c.id === serverAttempt.courseId)?.skill;
+          if (skill) {
+            const existing = next.skillRatings.find((r) => r.userId === currentUser.id && r.skill === skill);
+            if (existing) {
+              next.skillRatings = next.skillRatings.map((r) => r.id === existing.id ? { ...r, score: Math.min(100, Math.round((r.score * r.assessmentsBased + serverAttempt.score) / (r.assessmentsBased + 1))), assessmentsBased: r.assessmentsBased + 1, trend: "up" as const, lastUpdated: now() } : r);
+            } else {
+              next.skillRatings = [{ id: uid("SK"), userId: currentUser.id, skill, score: serverAttempt.score || 0, assessmentsBased: 1, trend: "up" as const, lastUpdated: now() }, ...next.skillRatings];
+            }
+          }
+        }
+        setData(next);
+        toast("Assessment attempt submitted successfully");
+      })
+      .catch((err) => {
+        console.error("Error submitting assessment:", err);
+        toast("Failed to submit assessment to server");
+      });
   };
 
   return (

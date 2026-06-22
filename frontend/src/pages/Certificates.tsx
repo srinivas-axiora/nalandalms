@@ -4,6 +4,7 @@ import { Panel, Input, Select, Metric, StatusPill, EmptyState } from "../compone
 import type { AppData, User, IssuedCertificate } from "../types";
 import { isAdminRole, now, uid } from "../types";
 import { toast } from "../toast";
+import { apiFetch } from "../api";
 
 type Template = "Executive" | "Classic" | "Modern" | "Minimal";
 
@@ -120,31 +121,34 @@ function CertificateBuilder({ data, currentUser, setData }: { data: AppData; cur
     if (!employee || !course) return;
     const html = getCertHtml();
 
-    const cert: IssuedCertificate = {
-      id: uid("CERT"),
-      employeeId: employee.id,
-      courseId: course.id,
-      title,
-      template,
-      accent,
-      duration,
-      subtitle,
-      footer,
-      issuedBy: currentUser.id,
-      issuedByName: currentUser.name,
-      issuedAt: now(),
-      htmlSnapshot: html,
-    };
+    apiFetch("/certificates", {
+      method: "POST",
+      body: JSON.stringify({
+        employeeId: employee.id,
+        courseId: course.id,
+        title,
+        template,
+        accent,
+        duration,
+        subtitle,
+        footer,
+        htmlSnapshot: html
+      })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        const cert = resData.data;
+        setData({
+          ...data,
+          issuedCertificates: [cert, ...(data.issuedCertificates || [])],
+          audit: [{ id: uid("AUD"), actorId: currentUser.id, action: `Issued certificate to ${employee.name} for "${course.title}"`, entity: cert.id, at: now() }, ...data.audit],
+        });
 
-    setData({
-      ...data,
-      issuedCertificates: [cert, ...(data.issuedCertificates || [])],
-      audit: [{ id: uid("AUD"), actorId: currentUser.id, action: `Issued certificate to ${employee.name} for "${course.title}"`, entity: cert.id, at: now() }, ...data.audit],
-    });
-
-    setSendSuccess(employee.name);
-    toast(`Certificate sent to ${employee.name}'s account`);
-    setTimeout(() => setSendSuccess(null), 3000);
+        setSendSuccess(employee.name);
+        toast(`Certificate sent to ${employee.name}'s account`);
+        setTimeout(() => setSendSuccess(null), 3000);
+      })
+      .catch(() => toast("Failed to issue certificate"));
   };
 
   return (

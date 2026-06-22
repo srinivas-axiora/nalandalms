@@ -6,6 +6,7 @@ import type { AppData, User, Assessment, AssessmentType, Question, ArchivedRecor
 import { isAdminRole } from "../types";
 import { now, uid } from "../types";
 import { toast } from "../toast";
+import { apiFetch } from "../api";
 
 type BulkQuestion = { prompt: string; type: "MCQ" | "Descriptive"; options: string[]; answer: number; points: number };
 
@@ -129,52 +130,58 @@ export default function Assessments({ data, currentUser, setData }: { data: AppD
   const save = (e: FormEvent) => {
     e.preventDefault();
     const chapter = data.chapters.find((item) => item.id === form.chapterId);
-    const course = data.courses.find((item) => item.id === chapter?.courseId);
     if (!chapter) return;
     const questionLimit = Number(form.questionLimit) || 10;
-    const payload: Assessment = {
-      id: uid("ASM"),
-      title: form.title,
-      chapterId: form.chapterId,
-      courseId: chapter.courseId,
-      type: form.type,
-      ownerId: currentUser.id,
-      approval: isAdminRole(currentUser.role) ? "Approved" : "Pending",
-      difficulty: course?.difficulty || "Beginner",
-      durationMinutes: Number(form.durationMinutes),
-      passScore: Number(form.passScore),
-      questionLimit,
-      questions: ensureQuestionBank(buildQuestions(), questionLimit),
-      createdAt: now(),
-      updatedAt: now(),
-    };
-    setData(addAudit({ ...data, assessments: [payload, ...data.assessments] }, "Created assessment", payload.id));
-    setCreateOpen(false);
-    setBulkQuestions([]);
-    setUploadMode(false);
-    toast("Assessment created successfully");
+    apiFetch("/assessments", {
+      method: "POST",
+      body: JSON.stringify({
+        title: form.title,
+        courseId: chapter.courseId,
+        chapterId: form.chapterId,
+        type: form.type,
+        durationMinutes: Number(form.durationMinutes),
+        passScore: Number(form.passScore),
+        questionLimit,
+        questions: ensureQuestionBank(buildQuestions(), questionLimit)
+      })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        setData(addAudit({ ...data, assessments: [resData.data, ...data.assessments] }, "Created assessment", resData.data.id));
+        setCreateOpen(false);
+        setBulkQuestions([]);
+        setUploadMode(false);
+        toast("Assessment created successfully");
+      })
+      .catch(() => toast("Failed to create assessment"));
   };
 
   const saveEdit = () => {
     if (!editing) return;
     const chapter = data.chapters.find((item) => item.id === editMeta.chapterId);
     if (!chapter) return;
-    const updated: Assessment = {
-      ...editing,
-      title: editMeta.title,
-      courseId: chapter.courseId,
-      chapterId: editMeta.chapterId,
-      difficulty: editMeta.difficulty,
-      durationMinutes: Number(editMeta.durationMinutes),
-      passScore: Number(editMeta.passScore),
-      questionLimit: Number(editMeta.questionLimit) || 10,
-      questions: ensureQuestionBank(editQuestions, Number(editMeta.questionLimit) || 10),
-      updatedAt: now(),
-    };
-    const assessments = data.assessments.map((item) => item.id === editing.id ? updated : item);
-    setData(addAudit({ ...data, assessments }, "Updated assessment", editing.id));
-    setEditing(updated);
-    toast("Assessment saved successfully");
+    apiFetch(`/assessments/${editing.id}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        title: editMeta.title,
+        courseId: chapter.courseId,
+        chapterId: editMeta.chapterId,
+        difficulty: editMeta.difficulty,
+        durationMinutes: Number(editMeta.durationMinutes),
+        passScore: Number(editMeta.passScore),
+        questionLimit: Number(editMeta.questionLimit) || 10,
+        questions: ensureQuestionBank(editQuestions, Number(editMeta.questionLimit) || 10)
+      })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        const updated = resData.data;
+        const assessments = data.assessments.map((item) => item.id === editing.id ? updated : item);
+        setData(addAudit({ ...data, assessments }, "Updated assessment", editing.id));
+        setEditing(updated);
+        toast("Assessment saved successfully");
+      })
+      .catch(() => toast("Failed to update assessment"));
   };
 
   const updateQuestion = (questionId: string, patch: Partial<Question>) => {
@@ -218,37 +225,75 @@ export default function Assessments({ data, currentUser, setData }: { data: AppD
     const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = "assessment-template.csv"; link.click();
   };
 
-  const approve = (id: string) => { setData(addAudit({ ...data, assessments: data.assessments.map((a) => a.id === id ? { ...a, approval: "Approved" as const, updatedAt: now() } : a) }, "Approved assessment", id)); toast("Assessment approved successfully"); };
-  const reject = (id: string) => { setData(addAudit({ ...data, assessments: data.assessments.map((a) => a.id === id ? { ...a, approval: "Rejected" as const, updatedAt: now() } : a) }, "Rejected assessment", id)); toast("Assessment rejected"); };
+  const approve = (id: string) => {
+    apiFetch(`/assessments/${id}/approval`, {
+      method: "PATCH",
+      body: JSON.stringify({ approval: "Approved" })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        setData(addAudit({ ...data, assessments: data.assessments.map((a) => a.id === id ? resData.data : a) }, "Approved assessment", id));
+        toast("Assessment approved successfully");
+      })
+      .catch(() => toast("Failed to approve assessment"));
+  };
+  const reject = (id: string) => {
+    apiFetch(`/assessments/${id}/approval`, {
+      method: "PATCH",
+      body: JSON.stringify({ approval: "Rejected" })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        setData(addAudit({ ...data, assessments: data.assessments.map((a) => a.id === id ? resData.data : a) }, "Rejected assessment", id));
+        toast("Assessment rejected");
+      })
+      .catch(() => toast("Failed to reject assessment"));
+  };
 
   const toggleAssessmentStatus = (assessment: Assessment) => {
     const newStatus = (assessment.status || "Active") === "Active" ? "Inactive" : "Active";
-    setData(addAudit({
-      ...data,
-      assessments: data.assessments.map((a) => a.id === assessment.id ? { ...a, status: newStatus as any, updatedAt: now() } : a),
-    }, newStatus === "Inactive" ? "Deactivated assessment" : "Activated assessment", assessment.id));
-    toast(newStatus === "Inactive" ? "Assessment deactivated successfully" : "Assessment activated successfully");
+    apiFetch(`/assessments/${assessment.id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: newStatus })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        setData(addAudit({
+          ...data,
+          assessments: data.assessments.map((a) => a.id === assessment.id ? resData.data : a),
+        }, newStatus === "Inactive" ? "Deactivated assessment" : "Activated assessment", assessment.id));
+        toast(newStatus === "Inactive" ? "Assessment deactivated successfully" : "Assessment activated successfully");
+      })
+      .catch(() => toast("Failed to toggle status"));
   };
 
   const handleDeleteAssessment = (comment: string) => {
     if (!deleteTarget) return;
-    const archived: ArchivedRecord = {
-      id: uid("ARC"),
-      entityType: "Assessment",
-      entityId: deleteTarget.id,
-      entityData: { ...deleteTarget },
-      deletedBy: currentUser.id,
-      deletedByName: currentUser.name,
-      deletionComment: comment,
-      deletedAt: now(),
-    };
-    setData(addAudit({
-      ...data,
-      assessments: data.assessments.filter((a) => a.id !== deleteTarget.id),
-      archive: [archived, ...(data.archive || [])],
-    }, "Permanently deleted assessment", deleteTarget.id));
-    setDeleteTarget(null);
-    toast("Assessment deleted successfully");
+    apiFetch(`/assessments/${deleteTarget.id}`, {
+      method: "DELETE",
+      body: JSON.stringify({ deletionComment: comment })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then(() => {
+        const archived: ArchivedRecord = {
+          id: uid("ARC"),
+          entityType: "Assessment",
+          entityId: deleteTarget.id,
+          entityData: { ...deleteTarget },
+          deletedBy: currentUser.id,
+          deletedByName: currentUser.name,
+          deletionComment: comment,
+          deletedAt: now(),
+        };
+        setData(addAudit({
+          ...data,
+          assessments: data.assessments.filter((a) => a.id !== deleteTarget.id),
+          archive: [archived, ...(data.archive || [])],
+        }, "Permanently deleted assessment", deleteTarget.id));
+        setDeleteTarget(null);
+        toast("Assessment deleted successfully");
+      })
+      .catch(() => toast("Failed to delete assessment"));
   };
 
   if (currentUser.role === "Employee") {

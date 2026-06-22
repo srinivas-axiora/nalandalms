@@ -4,6 +4,7 @@ import { Panel, StatusPill, Input, Metric, EmptyState, cn } from "../components"
 import type { AppData, User, Course, Assessment, ArchivedRecord } from "../types";
 import { uid, now } from "../types";
 import { toast } from "../toast";
+import { apiFetch } from "../api";
 
 const entityColors: Record<string, "cyan" | "amber" | "violet"> = { User: "cyan", Course: "amber", Assessment: "violet" };
 const formatDate = (v: string) => { try { return new Date(v).toLocaleString(); } catch { return v; } };
@@ -104,22 +105,29 @@ export default function Archive({ data, currentUser, setData }: { data: AppData;
   });
 
   const restore = (record: ArchivedRecord) => {
-    let next = { ...data };
+    apiFetch(`/archive/${record.id}/restore`, {
+      method: "POST"
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then(() => {
+        let next = { ...data };
 
-    if (record.entityType === "User") {
-      next.users = [record.entityData as User, ...next.users];
-    } else if (record.entityType === "Course") {
-      next.courses = [record.entityData as Course, ...next.courses];
-      if (record.relatedData?.chapters) next.chapters = [...record.relatedData.chapters, ...next.chapters];
-      if (record.relatedData?.assessments) next.assessments = [...record.relatedData.assessments, ...next.assessments];
-      if (record.relatedData?.enrollments) next.enrollments = [...record.relatedData.enrollments, ...next.enrollments];
-    } else if (record.entityType === "Assessment") {
-      next.assessments = [record.entityData as Assessment, ...next.assessments];
-    }
+        if (record.entityType === "User") {
+          next.users = [record.entityData as User, ...next.users];
+        } else if (record.entityType === "Course") {
+          next.courses = [record.entityData as Course, ...next.courses];
+          if (record.relatedData?.chapters) next.chapters = [...record.relatedData.chapters, ...next.chapters];
+          if (record.relatedData?.assessments) next.assessments = [...record.relatedData.assessments, ...next.assessments];
+          if (record.relatedData?.enrollments) next.enrollments = [...record.relatedData.enrollments, ...next.enrollments];
+        } else if (record.entityType === "Assessment") {
+          next.assessments = [record.entityData as Assessment, ...next.assessments];
+        }
 
-    next.archive = next.archive.filter((r) => r.id !== record.id);
-    setData(addAudit(next, `Restored ${record.entityType.toLowerCase()} from archive`, record.entityId));
-    toast(`${record.entityType} restored successfully`);
+        next.archive = next.archive.filter((r) => r.id !== record.id);
+        setData(addAudit(next, `Restored ${record.entityType.toLowerCase()} from archive`, record.entityId));
+        toast(`${record.entityType} restored successfully`);
+      })
+      .catch(() => toast("Failed to restore record"));
   };
 
   return (

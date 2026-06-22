@@ -1,11 +1,24 @@
 import { Panel } from "../components";
 import type { AppData, User, UserPreferences } from "../types";
 import { now, uid } from "../types";
+import { apiFetch } from "../api";
 
 export default function Settings({ data, currentUser, setData }: { data: AppData; currentUser: User; setData: (d: AppData) => void }) {
   const prefs = currentUser.preferences;
   const updatePrefs = (p: Partial<UserPreferences>) => {
-    setData({ ...data, users: data.users.map((u) => u.id === currentUser.id ? { ...u, preferences: { ...u.preferences, ...p } } : u), audit: [{ id: uid("AUD"), actorId: currentUser.id, action: "Updated settings", entity: currentUser.id, at: now() }, ...data.audit] });
+    apiFetch("/users/me/preferences", {
+      method: "PATCH",
+      body: JSON.stringify(p)
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        setData({
+          ...data,
+          users: data.users.map((u) => u.id === currentUser.id ? resData.data : u),
+          audit: [{ id: uid("AUD"), actorId: currentUser.id, action: "Updated settings", entity: currentUser.id, at: now() }, ...data.audit]
+        });
+      })
+      .catch(() => {});
   };
 
   return (

@@ -58,20 +58,21 @@ function useLocalState<T>(key: string, init: T) {
 
 function normalizeData(data: AppData): AppData {
   // Collect all archived entity IDs to prevent re-adding deleted items from seed
-  const archivedIds = new Set((data.archive || []).map((r) => r.entityId));
-  (data.archive || []).forEach((r) => {
+  const archivedIds = new Set((data?.archive || []).map((r) => r.entityId));
+  (data?.archive || []).forEach((r) => {
     r.relatedData?.chapters?.forEach((ch) => archivedIds.add(ch.id));
     r.relatedData?.assessments?.forEach((a) => archivedIds.add(a.id));
   });
 
   const mergeById = <T extends { id: string }>(current: T[], seeded: T[]) => {
-    const currentIds = new Set(current.map((item) => item.id));
-    return [...current, ...seeded.filter((item) => !currentIds.has(item.id) && !archivedIds.has(item.id))];
+    const currentIds = new Set((current || []).map((item) => item.id));
+    return [...(current || []), ...seeded.filter((item) => !currentIds.has(item.id) && !archivedIds.has(item.id))];
   };
 
-  const existingUserIds = new Set(data.users.map((user) => user.id));
+  const usersRaw = data?.users || [];
+  const existingUserIds = new Set(usersRaw.map((user) => user.id));
   const users = [
-    ...data.users.map((user) => {
+    ...usersRaw.map((user) => {
       const seedUser = seedData.users.find((item) => item.id === user.id);
       return {
         ...user,
@@ -82,11 +83,14 @@ function normalizeData(data: AppData): AppData {
     }),
     ...seedData.users.filter((user) => !existingUserIds.has(user.id) && !archivedIds.has(user.id)),
   ];
-  const skills = mergeById(data.skills || [], seedData.skills);
-  const targetSkills = mergeById(data.targetSkills || [], seedData.targetSkills);
-  const courses = mergeById(data.courses || [], seedData.courses);
-  const chapters = mergeById(data.chapters || [], seedData.chapters);
-  const assessments = mergeById(data.assessments || [], seedData.assessments);
+  const skills = mergeById(data?.skills || [], seedData.skills);
+  const targetSkills = mergeById(data?.targetSkills || [], seedData.targetSkills);
+  const courses = mergeById(data?.courses || [], seedData.courses);
+  const chapters = mergeById(data?.chapters || [], seedData.chapters);
+  const assessments = mergeById(data?.assessments || [], seedData.assessments);
+
+  const rawEnrollments = data?.enrollments || (data as any)?.assignments || [];
+  const rawAttempts = data?.attempts || [];
 
   return {
     ...data,
@@ -107,7 +111,7 @@ function normalizeData(data: AppData): AppData {
         prerequisites: course.prerequisites || [],
       };
     }),
-    enrollments: data.enrollments.map((enrollment) => ({
+    enrollments: rawEnrollments.map((enrollment) => ({
       ...enrollment,
       dueAt: enrollment.dueAt || null,
       priority: enrollment.priority || "Medium",
@@ -128,7 +132,7 @@ function normalizeData(data: AppData): AppData {
         updatedAt: assessment.updatedAt || assessment.createdAt || now(),
       };
     }),
-    attempts: data.attempts.map((attempt) => ({
+    attempts: rawAttempts.map((attempt) => ({
       ...attempt,
       selectedQuestionIds: attempt.selectedQuestionIds || [],
       tabSwitchWarnings: attempt.tabSwitchWarnings || 0,
@@ -136,10 +140,11 @@ function normalizeData(data: AppData): AppData {
       proctorCaptures: attempt.proctorCaptures || [],
       timeSpentSeconds: attempt.timeSpentSeconds ?? (attempt.submittedAt ? Math.max(0, Math.round((new Date(attempt.submittedAt).getTime() - new Date(attempt.startedAt).getTime()) / 1000)) : 0),
     })),
-    archive: data.archive || [],
-    loginSecurity: data.loginSecurity || {},
-    sessionVersion: data.sessionVersion || {},
-    issuedCertificates: data.issuedCertificates || [],
+    archive: data?.archive || (data as any)?.archives || [],
+    loginSecurity: data?.loginSecurity || {},
+    sessionVersion: data?.sessionVersion || {},
+    issuedCertificates: data?.issuedCertificates || [],
+    audit: data?.audit || (data as any)?.auditLogs || [],
   };
 }
 
@@ -184,6 +189,24 @@ export default function App() {
     });
   }, [setDataState]);
 
+  const loadBackendData = useCallback(async () => {
+    try {
+      const res = await apiFetch("/app-data");
+      if (res.ok) {
+        const dbData = await res.json();
+        const mappedData = {
+          ...dbData,
+          enrollments: dbData.enrollments || dbData.assignments || [],
+          audit: dbData.audit || dbData.auditLogs || [],
+          archive: dbData.archive || dbData.archives || [],
+        };
+        setDataState(mappedData);
+      }
+    } catch (err) {
+      console.error("Error loading app data from backend:", err);
+    }
+  }, [setDataState]);
+
   useEffect(() => {
     setToastHandler((msg) => {
       setToastMsg(null);
@@ -200,13 +223,14 @@ export default function App() {
         syncAuthenticatedUser(data.user);
         setSessionId(data.user.id);
         setSessionVersion(data.user.sessionVersion ?? data.user.sv ?? 0);
+        loadBackendData();
       })
       .catch(() => {
         setSessionId(null);
         setSessionVersion(null);
       })
       .finally(() => setIsInitializing(false));
-  }, [syncAuthenticatedUser]);
+  }, [syncAuthenticatedUser, loadBackendData]);
 
   const currentUser = data.users.find((u) => u.id === sessionId && u.status === "Active") || null;
   const setData = (next: AppData) => setDataState(next);
@@ -217,10 +241,7 @@ export default function App() {
     setSessionId(u.id);
     setSessionVersion(ver);
     sessionRevokedRef.current = false;
-    setDataState((prev) => {
-      const normalized = normalizeData(prev);
-      return { ...normalized, audit: [{ id: uid("AUD"), actorId: u.id, action: "Signed in", entity: u.id, at: now() }, ...normalized.audit] };
-    });
+    loadBackendData();
   };
 
   const forceSignOut = useCallback(async (reason?: string) => {

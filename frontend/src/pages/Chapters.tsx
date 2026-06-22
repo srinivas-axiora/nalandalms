@@ -5,6 +5,8 @@ import { Panel, Modal, StatusPill, Input, Select, EmptyState } from "../componen
 import type { AppData, User, Chapter } from "../types";
 import { isAdminRole } from "../types";
 import { now, uid } from "../types";
+import { toast } from "../toast";
+import { apiFetch } from "../api";
 
 export default function Chapters({ data, currentUser, setData }: { data: AppData; currentUser: User; setData: (d: AppData) => void }) {
   const [createOpen, setCreateOpen] = useState(false);
@@ -18,10 +20,29 @@ export default function Chapters({ data, currentUser, setData }: { data: AppData
     e.preventDefault();
     const courseChapters = data.chapters.filter((c) => c.courseId === form.courseId);
     if (courseChapters.length >= 99) return;
-    const ch: Chapter = { id: uid("CH"), courseId: form.courseId, sequence: courseChapters.length + 1, title: form.title, description: form.description, contentType: form.contentType, body: form.body, url: form.url || undefined, fileName: form.fileName || undefined, durationMinutes: Number(form.durationMinutes), minimumTimeMinutes: Number(form.minimumTimeMinutes) || Number(form.durationMinutes) || 1 };
-    setData(addAudit({ ...data, chapters: [...data.chapters, ch] }, "Created chapter", ch.id));
-    setCreateOpen(false);
-    setForm({ courseId: "", title: "", description: "", contentType: "Rich Text", body: "", url: "", fileName: "", durationMinutes: "20", minimumTimeMinutes: "15" });
+
+    apiFetch(`/courses/${form.courseId}/chapters`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: form.title,
+        description: form.description,
+        contentType: form.contentType,
+        body: form.body,
+        url: form.url || undefined,
+        fileName: form.fileName || undefined,
+        durationMinutes: Number(form.durationMinutes),
+        minimumTimeMinutes: Number(form.minimumTimeMinutes) || Number(form.durationMinutes) || 1
+      })
+    })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
+      .then((resData) => {
+        const ch = resData.data;
+        setData(addAudit({ ...data, chapters: [...data.chapters, ch] }, "Created chapter", ch.id));
+        setCreateOpen(false);
+        setForm({ courseId: "", title: "", description: "", contentType: "Rich Text", body: "", url: "", fileName: "", durationMinutes: "20", minimumTimeMinutes: "15" });
+        toast("Chapter created successfully");
+      })
+      .catch(() => toast("Failed to create chapter"));
   };
 
   const grouped = visibleCourses.map((c) => ({ course: c, chapters: data.chapters.filter((ch) => ch.courseId === c.id).sort((a, b) => a.sequence - b.sequence) }));
