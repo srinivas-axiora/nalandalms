@@ -21,6 +21,10 @@ import { registerSettings } from "./src/modules/settings/settings.routes.js";
 import { registerSkills } from "./src/modules/skills/skills.routes.js";
 import { registerAnalytics } from "./src/modules/analytics/analytics.routes.js";
 import { registerReports } from "./src/modules/reports/reports.routes.js";
+import { registerAuth } from "./src/modules/auth/auth.routes.js";
+import { registerUsers } from "./src/modules/users/users.routes.js";
+import { registerEnrollments } from "./src/modules/enrollments/enrollments.routes.js";
+import { registerProctoring } from "./src/modules/proctoring/proctoring.routes.js";
 
 try {
   loadEnvFile();
@@ -889,8 +893,14 @@ const buildReportRows = ({ reportType, filters = {}, requester }) => {
 const moduleCtx = {
   authenticate, requireRole, requireStepUp,
   audit, now, publicUser, visibleUserIdsFor, buildReportRows, buildTimeRows,
-  users, courses, chapters, assessments, assignments, learningTimeEvents, reportExports,
-  auditLogs, securityEvents, archives, skills, targetSkills, chapterFeedbacks, settings,
+  users, courses, chapters, assessments, assignments, attempts, proctoringLogs,
+  learningTimeEvents, reportExports, auditLogs, securityEvents, archives,
+  skills, targetSkills, chapterFeedbacks, settings,
+  // auth/users/enrollments/proctoring deps
+  isAdmin, roles, sessionVersions, signToken, signStepUpToken, securityEvent,
+  rateLimitCheck, rateLimitRecord, loginSecurity, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS,
+  COOKIE_SECURE, COOKIE_SAMESITE, CSRF_COOKIE, STEP_UP_COOKIE,
+  coursesVisibleTo, addAssessmentTime,
 };
 
 registerGovernance(app, moduleCtx);
@@ -898,6 +908,10 @@ registerSettings(app, moduleCtx);
 registerSkills(app, moduleCtx);
 registerAnalytics(app, moduleCtx);
 registerReports(app, moduleCtx);
+registerAuth(app, moduleCtx);
+registerUsers(app, moduleCtx);
+registerEnrollments(app, moduleCtx);
+registerProctoring(app, moduleCtx);
 
 app.get("/api/health", (_req, res) => {
   const apiKey = getGeminiApiKey();
@@ -915,233 +929,15 @@ app.get("/api/csrf-token", (req, res) => {
   res.json({ csrfToken: token });
 });
 
-app.post("/api/auth/login", (req, res) => {
-  const ip = req.ip || req.connection.remoteAddress;
-  if (rateLimitCheck(ip, "/api/auth/login")) {
-    return res.status(429).json({ error: "Too many login attempts. Please try again later." });
-  }
-  rateLimitRecord(ip, "/api/auth/login");
 
-  const schema = z.object({ email: z.string().min(2), password: z.string().min(8) });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const identifier = parsed.data.email.trim();
-  const normalizedIdentifier = identifier.toLowerCase();
-  const security = loginSecurity[normalizedIdentifier] || { failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
 
-  if (security.lockedUntil && new Date(security.lockedUntil).getTime() > Date.now()) {
-    return res.status(403).json({ error: "Account locked due to too many failed attempts", lockedUntil: security.lockedUntil });
-  }
 
-  const user = users.find((item) => (
-    item.email.toLowerCase() === normalizedIdentifier
-    || (item.role === "Super Admin" && normalizedIdentifier === "super admin")
-  ) && item.status === "Active");
-  if (!user || !bcrypt.compareSync(parsed.data.password, user.passwordHash)) {
-    security.failedAttempts += 1;
-    security.lastFailedAt = now();
-    if (security.failedAttempts >= MAX_LOGIN_ATTEMPTS) {
-      security.lockedUntil = new Date(Date.now() + LOCKOUT_MS).toISOString();
-    }
-    loginSecurity[normalizedIdentifier] = security;
-    return res.status(401).json({ error: "Invalid credentials", failedAttempts: security.failedAttempts, lockedUntil: security.lockedUntil });
-  }
 
-  loginSecurity[normalizedIdentifier] = { failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
-  audit(user.id, "LOGIN", "USER", user.id);
-  res.cookie("token", signToken(user), { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE, maxAge: 30 * 60 * 1000 });
-  return res.json({ user: publicUser(user) });
-});
 
-app.post("/api/auth/logout", (_req, res) => {
-  res.clearCookie("token", { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
-  res.clearCookie(CSRF_COOKIE, { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
-  res.clearCookie(STEP_UP_COOKIE, { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
-  res.json({ ok: true });
-});
 
-app.post("/api/auth/reauth", authenticate, (req, res) => {
-  const schema = z.object({ password: z.string().min(8) });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  if (!bcrypt.compareSync(parsed.data.password, req.user.passwordHash)) {
-    securityEvent(req, "STEP_UP_FAILED");
-    return res.status(401).json({ error: "Invalid credentials" });
-  }
 
-  securityEvent(req, "STEP_UP_GRANTED");
-  res.cookie(STEP_UP_COOKIE, signStepUpToken(req.user), {
-    httpOnly: true,
-    secure: COOKIE_SECURE,
-    sameSite: COOKIE_SAMESITE,
-    maxAge: 10 * 60 * 1000,
-  });
-  res.json({ ok: true, expiresInSeconds: 600 });
-});
-
-app.get("/api/auth/me", authenticate, (req, res) => {
-  res.json({ user: publicUser(req.user), permissions: req.user.role });
-});
-
-app.patch("/api/users/me/preferences", authenticate, (req, res) => {
-  const schema = z.object({
-    theme: z.enum(["dark", "light", "system"]).optional(),
-    fontSize: z.enum(["small", "medium", "large"]).optional(),
-    language: z.enum(["en", "hi", "ta"]).optional(),
-    emailNotifications: z.boolean().optional(),
-    pushNotifications: z.boolean().optional(),
-    weeklyDigest: z.boolean().optional(),
-    courseReminders: z.boolean().optional(),
-    reducedMotion: z.boolean().optional(),
-    highContrast: z.boolean().optional()
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  
-  const user = users.find((item) => item.id === req.user.id);
-  if (!user) return res.status(404).json({ error: "User not found" });
-  
-  user.preferences = { ...(user.preferences || {}), ...parsed.data };
-  audit(req.user.id, "UPDATE_PREFERENCES", "USER", user.id, parsed.data);
-  res.json({ data: publicUser(user) });
-});
-
-app.get("/api/users", authenticate, requireRole("Admin", "Manager"), (req, res) => {
-  const { department, role, status = "Active" } = req.query;
-  let visible = isAdmin(req.user.role) ? users : users.filter((user) => user.managerId === req.user.id || user.id === req.user.id);
-  if (department) visible = visible.filter((user) => user.department === department);
-  if (role) visible = visible.filter((user) => user.role === role);
-  if (status !== "All") visible = visible.filter((user) => user.status === status);
-  res.json({ data: visible.map(publicUser), total: visible.length });
-});
-
-app.post("/api/users", authenticate, requireRole("Admin"), (req, res) => {
-  const schema = z.object({
-    id: z.string().min(2).optional(),
-    name: z.string().min(2),
-    email: z.string().email(),
-    department: z.string().min(2),
-    team: z.string().min(2).optional(),
-    designation: z.string().min(2).optional(),
-    role: z.enum(roles),
-    managerId: z.string().nullable().optional(),
-    status: z.enum(["Active", "Inactive"]).optional(),
-    joinedAt: z.string().optional(),
-    password: z.string().min(8)
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  if (parsed.data.role === "Super Admin" && req.user.role !== "Super Admin") {
-    return res.status(403).json({ error: "Only a Super Admin can assign the Super Admin role" });
-  }
-  const requestedId = parsed.data.id || `EMP-${Math.floor(1000 + Math.random() * 9000)}`;
-  if (users.some((item) => item.id === requestedId || item.email === parsed.data.email)) {
-    return res.status(409).json({ error: "User ID or email already exists" });
-  }
-  const user = { id: requestedId, ...parsed.data, status: parsed.data.status || "Active", passwordHash: bcrypt.hashSync(parsed.data.password, 10), createdAt: now() };
-  delete user.password;
-  users.push(user);
-  audit(req.user.id, "CREATE_USER", "USER", user.id, { role: user.role });
-  res.status(201).json({ data: publicUser(user) });
-});
-
-app.patch("/api/users/:id", authenticate, requireRole("Admin"), requireStepUp, (req, res) => {
-  const schema = z.object({
-    name: z.string().min(2).optional(),
-    email: z.string().email().optional(),
-    department: z.string().min(2).optional(),
-    team: z.string().min(2).optional(),
-    designation: z.string().min(2).optional(),
-    role: z.enum(roles).optional(),
-    managerId: z.string().nullable().optional(),
-    status: z.enum(["Active", "Inactive"]).optional(),
-    joinedAt: z.string().optional(),
-    password: z.string().min(8).optional()
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const user = users.find((item) => item.id === req.params.id);
-  if (!user) return res.status(404).json({ error: "User not found" });
-
-  if (user.role === "Super Admin" && req.user.role !== "Super Admin") {
-    return res.status(403).json({ error: "Only a Super Admin can modify a Super Admin account" });
-  }
-  if (parsed.data.role === "Super Admin" && req.user.role !== "Super Admin") {
-    return res.status(403).json({ error: "Only a Super Admin can grant the Super Admin role" });
-  }
-  if (user.id === req.user.id && parsed.data.role && parsed.data.role !== user.role) {
-    return res.status(403).json({ error: "You cannot change your own role" });
-  }
-  if (user.id === req.user.id && parsed.data.status === "Inactive") {
-    return res.status(403).json({ error: "You cannot deactivate your own account" });
-  }
-
-  if (parsed.data.status === "Inactive" && user.status === "Active") {
-    sessionVersions[user.id] = (sessionVersions[user.id] || 0) + 1;
-  }
-
-  const patch = { ...parsed.data };
-  if (patch.password) {
-    patch.passwordHash = bcrypt.hashSync(patch.password, 10);
-    delete patch.password;
-  }
-  Object.assign(user, patch);
-  audit(req.user.id, "UPDATE_USER", "USER", user.id, patch);
-  res.json({ data: publicUser(user) });
-});
-
-app.patch("/api/users/:id/status", authenticate, requireRole("Admin"), requireStepUp, (req, res) => {
-  const schema = z.object({ status: z.enum(["Active", "Inactive"]) });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const user = users.find((item) => item.id === req.params.id);
-  if (!user) return res.status(404).json({ error: "User not found" });
-
-  if (user.role === "Super Admin" && req.user.role !== "Super Admin") {
-    return res.status(403).json({ error: "Only a Super Admin can modify a Super Admin account" });
-  }
-  if (user.id === req.user.id && parsed.data.status === "Inactive") {
-    return res.status(403).json({ error: "You cannot deactivate your own account" });
-  }
-
-  if (parsed.data.status === "Inactive" && user.status === "Active") {
-    sessionVersions[user.id] = (sessionVersions[user.id] || 0) + 1;
-  }
-  user.status = parsed.data.status;
-
-  audit(req.user.id, "CHANGE_USER_STATUS", "USER", user.id, parsed.data);
-  res.json({ data: publicUser(user), note: "Session revoked if inactivated." });
-});
-
-app.delete("/api/users/:id", authenticate, requireRole("Super Admin"), requireStepUp, (req, res) => {
-  const schema = z.object({ deletionComment: z.string().min(10) });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  
-  const idx = users.findIndex((item) => item.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: "User not found" });
-  const user = users[idx];
-  
-  // Revoke session
-  sessionVersions[user.id] = (sessionVersions[user.id] || 0) + 1;
-  
-  archives.unshift({
-    id: uuid(),
-    entityType: "User",
-    entityId: user.id,
-    entityData: user,
-    deletedBy: req.user.id,
-    deletedByName: req.user.name,
-    deletionComment: parsed.data.deletionComment,
-    deletedAt: now()
-  });
-  
-  users.splice(idx, 1);
-  audit(req.user.id, "DELETE_USER", "USER", user.id);
-  res.json({ success: true, message: "User permanently deleted and archived" });
-});
 
 
 
@@ -1381,58 +1177,6 @@ app.put("/api/courses/:courseId/chapters/:chapterId", authenticate, requireRole(
   res.json({ data: chapter });
 });
 
-app.post("/api/assignments", authenticate, requireRole("Admin", "Manager"), (req, res) => {
-  const schema = z.object({
-    courseId: z.string(),
-    userIds: z.array(z.string()).min(1),
-    dueAt: z.string().nullable().optional(),
-    priority: z.enum(["Low", "Medium", "High"]).default("Medium"),
-    mandatory: z.boolean().default(false)
-  });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-
-  const course = courses.find((item) => item.id === parsed.data.courseId);
-  if (!course) return res.status(404).json({ error: "Course not found" });
-  if (req.user.role === "Manager" && !coursesVisibleTo(req.user).some((item) => item.id === course.id)) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-
-  const allowedUserIds = new Set(visibleUserIdsFor(req.user));
-  const uniqueUserIds = [...new Set(parsed.data.userIds)];
-  const invalidUserIds = uniqueUserIds.filter((userId) => {
-    const user = users.find((item) => item.id === userId && item.status === "Active");
-    return !user || !allowedUserIds.has(userId) || userId === req.user.id && req.user.role === "Manager";
-  });
-  if (invalidUserIds.length) {
-    return res.status(403).json({ error: "One or more assignees are outside your permitted scope", userIds: invalidUserIds });
-  }
-
-  const duplicates = uniqueUserIds.filter((userId) => assignments.some((assignment) => assignment.courseId === course.id && assignment.userId === userId));
-  if (duplicates.length) {
-    return res.status(409).json({ error: "One or more users are already assigned to this course", userIds: duplicates });
-  }
-
-  const created = uniqueUserIds.map((userId) => ({
-    id: `ENR-${Math.floor(1000 + Math.random() * 9000)}`,
-    courseId: course.id,
-    userId,
-    assignedBy: req.user.id,
-    progress: 0,
-    completedChapters: [],
-    timeSpentMinutes: 0,
-    timeSpentSeconds: 0,
-    chapterTimeSpentSeconds: {},
-    dueAt: parsed.data.dueAt || null,
-    priority: parsed.data.priority,
-    mandatory: parsed.data.mandatory,
-    completedAt: null,
-    createdAt: now()
-  }));
-  assignments.push(...created);
-  audit(req.user.id, "ASSIGN_COURSE", "COURSE", course.id, { count: created.length });
-  res.status(201).json({ data: created });
-});
 
 app.get("/api/assessments", authenticate, (req, res) => {
   const visible = assessmentsVisibleTo(req.user);
@@ -1604,29 +1348,6 @@ app.post("/api/assessments/attempts/:attemptId/submit", authenticate, (req, res)
   res.json({ data: attempt, feedback: mcqScore === null ? "Manual evaluation required" : mcqScore >= assessment.passScore ? "Passed" : "Needs improvement" });
 });
 
-app.post("/api/proctoring/events", authenticate, (req, res) => {
-  const schema = z.object({ attemptId: z.string(), eventType: z.enum(["FULLSCREEN_EXIT", "TAB_SWITCH", "NOISE", "CAMERA_OFF", "MIC_OFF", "FACE_MISMATCH"]), severity: z.enum(["low", "medium", "high"]), metadata: z.record(z.string(), z.any()).optional() });
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const attempt = attempts.find((item) => item.id === parsed.data.attemptId);
-  if (!attempt || attempt.userId !== req.user.id) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-  const event = { id: uuid(), userId: req.user.id, ...parsed.data, createdAt: now() };
-  proctoringLogs.unshift(event);
-  if (proctoringLogs.length > 5000) proctoringLogs.length = 5000;
-  attempt.flags = attempt.flags || [];
-  attempt.flags.push(event);
-  if (settings.tabSwitchAutoSubmit && parsed.data.eventType === "TAB_SWITCH" && !attempt.submittedAt) {
-    const assessment = assessments.find((item) => item.id === attempt.assessmentId);
-    const submittedAt = now();
-    const timeSpentSeconds = Math.max(1, Math.round((new Date(submittedAt).getTime() - new Date(attempt.startedAt).getTime()) / 1000));
-    Object.assign(attempt, { status: "AutoSubmitted", submittedAt, autoSubmittedReason: "TAB_SWITCH", timeSpentSeconds });
-    addAssessmentTime({ attempt, assessment, seconds: timeSpentSeconds });
-  }
-  audit(req.user.id, "PROCTORING_EVENT", "PROCTORING_LOG", event.id, { eventType: event.eventType });
-  res.status(201).json({ data: event, autoSubmitted: attempt?.status === "AutoSubmitted" });
-});
 
 
 
