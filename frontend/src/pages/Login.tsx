@@ -20,7 +20,7 @@ type Props = {
 
 export default function Login({ users, data, onLogin, onUpdateSecurity }: Props) {
   const [email, setEmail] = useState("Super Admin");
-  const [password, setPassword] = useState("Sadmin@2026");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [cooldownRemaining, setCooldownRemaining] = useState(0); // ms
   const [rateLimitRemaining, setRateLimitRemaining] = useState(0); // ms
@@ -101,12 +101,7 @@ export default function Login({ users, data, onLogin, onUpdateSecurity }: Props)
   };
 
   const loginIdFor = (user: User) => user.role === "Super Admin" ? "Super Admin" : user.email;
-  const passwordFor = (user: User) => {
-    if (user.role === "Super Admin") return "Sadmin@2026";
-    if (user.role === "Admin") return "Admin@2026";
-    if (user.role === "Manager") return "Passwrod@2026";
-    return "Password@123";
-  };
+  const showLoginShortcuts = import.meta.env.DEV;
 
   const isLocked = cooldownRemaining > 0;
   const isRateLimited = rateLimitRemaining > 0;
@@ -345,14 +340,16 @@ export default function Login({ users, data, onLogin, onUpdateSecurity }: Props)
             >
               {isRateLimited ? "Please wait..." : "Sign in"}
             </button>
-            <div className="mt-6 grid gap-2 text-xs text-slate-400">
-              {users.filter((u) => u.status === "Active").map((u) => (
-                <button type="button" key={u.id} onClick={() => { setEmail(loginIdFor(u)); setPassword(passwordFor(u)); }}
-                  className="rounded-2xl border border-white/10 px-3 py-2 text-left transition hover:border-cyan-300/50 hover:bg-white/5">
-                  <span className="font-semibold text-cyan-200">{u.role}</span>: {loginIdFor(u)}
-                </button>
-              ))}
-            </div>
+            {showLoginShortcuts && (
+              <div className="mt-6 grid gap-2 text-xs text-slate-400">
+                {users.filter((u) => u.status === "Active").map((u) => (
+                  <button type="button" key={u.id} onClick={() => setEmail(loginIdFor(u))}
+                    className="rounded-2xl border border-white/10 px-3 py-2 text-left transition hover:border-cyan-300/50 hover:bg-white/5">
+                    <span className="font-semibold text-cyan-200">{u.role}</span>: {loginIdFor(u)}
+                  </button>
+                ))}
+              </div>
+            )}
           </motion.form>
         </section>
       </div>

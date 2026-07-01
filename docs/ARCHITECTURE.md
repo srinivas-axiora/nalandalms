@@ -39,14 +39,11 @@ npm run preview        # Preview production build
 - **Storage**: Designed for S3, Azure Blob, GCS, or Firebase Storage through `storage_key` references.
 - **Real-time**: Proctoring alerts can be upgraded to WebSockets by broadcasting `/api/proctoring/events`.
 
-## Demo Credentials
+## Bootstrap Credentials
 
-| Role | Email / User ID | Password |
-|------|----------------|----------|
-| Super Admin | `Super Admin` | `Sadmin@2026` |
-| Admin | `admin@nalanda.local` | `Admin@2026` |
-| Manager | `aarav@nalanda.local` or `kabir@nalanda.local` | `Passwrod@2026` |
-| Employee | `diya@nalanda.local`, `meera@nalanda.local`, or `rohan@nalanda.local` | `Password@123` |
+Seeded accounts are created only with passwords supplied through `SEED_*_PASSWORD`
+environment variables. If a seed password is not provided, the backend assigns a
+random unknown password so no source-visible credential can be used to sign in.
 
 ## Core API Groups
 

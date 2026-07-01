@@ -77,7 +77,6 @@ function normalizeData(data: AppData): AppData {
       return {
         ...user,
         role: user.id === "EMP-1001" && user.email === "admin@nalanda.local" && user.role === "Super Admin" ? "Admin" : user.role,
-        password: seedUser?.password || user.password,
         team: user.team || seedUser?.team || "Unassigned",
       };
     }),

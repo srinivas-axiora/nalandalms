@@ -43,6 +43,12 @@ const sampleRows = [
   ["EMP-2002", "Sameer Khan", "sameer@nalanda.local", "2026-05-07", "Sales", "Enterprise Sales", "Account Executive", "Employee", "EMP-1002", "Active"],
 ];
 
+const temporaryPassword = () => {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(36).padStart(2, "0")).join("").slice(0, 18);
+};
+
 const defaultPermissions: Record<Role, string[]> = {
   "Super Admin": permissionLabels,
   Admin: permissionLabels.filter((item) => item !== "Manage access permissions"),
@@ -60,7 +66,7 @@ const blankForm = (managerId = ""): EmployeeForm => ({
   designation: "",
   managerId,
   status: "Active",
-  password: "Password@123",
+  password: "",
   dateOfJoining: new Date().toISOString().slice(0, 10),
 });
 
@@ -75,7 +81,7 @@ function toForm(user: User): EmployeeForm {
     designation: user.designation,
     managerId: user.managerId || "",
     status: user.status,
-    password: user.password,
+    password: "",
     dateOfJoining: user.joinedAt,
   };
 }
@@ -149,7 +155,6 @@ export default function Users({ data, currentUser, setData }: { data: AppData; c
     const baseUser = {
       name: form.name,
       email: form.email,
-      password: form.password,
       avatar: initials(form.name),
       role: form.role,
       department: form.department,
@@ -159,12 +164,13 @@ export default function Users({ data, currentUser, setData }: { data: AppData; c
       status: form.status,
       joinedAt: form.dateOfJoining,
     };
+    const payload = form.password.trim() ? { ...baseUser, password: form.password.trim() } : baseUser;
 
     if (editing) {
       try {
         await assertApiOk(await apiFetch(`/users/${editing.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ ...baseUser, joinedAt: form.dateOfJoining }),
+          body: JSON.stringify({ ...payload, joinedAt: form.dateOfJoining }),
         }));
       } catch (error) {
         toast(error instanceof Error ? error.message : "Could not update employee.");
@@ -184,11 +190,12 @@ export default function Users({ data, currentUser, setData }: { data: AppData; c
       toast("Employee updated successfully");
     } else {
       if (data.users.some((user) => user.id === form.employeeId)) return;
+      const createPassword = form.password.trim() || temporaryPassword();
       const newUser: User = { id: form.employeeId, lastActive: "Never", preferences: { theme: "dark", language: "en", emailNotifications: true, pushNotifications: true, weeklyDigest: true, courseReminders: true, fontSize: "medium", reducedMotion: false, highContrast: false }, ...baseUser };
       try {
         await assertApiOk(await apiFetch("/users", {
           method: "POST",
-          body: JSON.stringify({ id: form.employeeId, ...baseUser, joinedAt: form.dateOfJoining }),
+          body: JSON.stringify({ id: form.employeeId, ...baseUser, password: createPassword, joinedAt: form.dateOfJoining }),
         }));
       } catch (error) {
         toast(error instanceof Error ? error.message : "Could not create employee.");
@@ -308,7 +315,7 @@ export default function Users({ data, currentUser, setData }: { data: AppData; c
         id: employeeId,
         name,
         email,
-        password: "Password@123",
+        password: temporaryPassword(),
         avatar: initials(name),
         role: safeRole,
         department: department || "Unassigned",
