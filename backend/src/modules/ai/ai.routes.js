@@ -9,6 +9,7 @@ import { parseGeminiJson, geminiErrorMessage, withTimeout, sanitizeHtmlServer } 
 import { now, courses, chapters, assessments, acharyaFeedbackMemory, nextCourseId } from "../../core.js";
 import { audit, saveAcharyaFeedbackMemory, getRelevantAcharyaFeedback, buildFeedbackGuidance } from "../../domain.js";
 import { authenticate, requireRole, aiRateLimit } from "../../middleware.js";
+import { handleLocalChat } from "./localAgent.js";
 
 export function registerAI(app) {
 app.get("/api/ai/generation-feedback", authenticate, requireRole("Admin", "Manager"), (req, res) => {
@@ -92,6 +93,20 @@ app.post("/api/ai/chat", authenticate, aiRateLimit, async (req, res) => {
     return res.status(400).json({ error: "Message too long (max 4000 characters)." });
   }
 
+  const apiKey = getGeminiApiKey();
+  const useProvider = apiKey && req.body.useProvider === true;
+
+  if (!useProvider) {
+    try {
+      const localResponse = await handleLocalChat(req.user, message, history, context);
+      audit(req.user.id, "AI_CHAT", "AI_COPILOT", "session", { model: localResponse.model, contextProvided: !!context?.chapterTitle, source: "local" });
+      return res.json(localResponse);
+    } catch (localErr) {
+      console.error("[AI Copilot] Local agent error:", localErr);
+      return res.status(500).json({ error: "Local agent error processing message" });
+    }
+  }
+
   let systemPrompt = SOFTWARE_EXPERT_SYSTEM_PROMPT;
   if (context?.chapterTitle || context?.chapterBody || context?.courseTitle) {
     systemPrompt += `\n\n### Current Learning Context:\n`;
@@ -102,11 +117,6 @@ app.post("/api/ai/chat", authenticate, aiRateLimit, async (req, res) => {
       systemPrompt += `- **Chapter Content Summary:** ${trimmedBody}${context.chapterBody.length > 1200 ? "..." : ""}\n`;
     }
     systemPrompt += `\nThe learner may be asking questions specifically about this chapter. Try to relate your answer to the chapter content when relevant.`;
-  }
-
-  const apiKey = getGeminiApiKey();
-  if (!apiKey) {
-    return res.status(503).json({ error: "GEMINI_API_KEY is required for Nalanda AI Copilot." });
   }
 
   const chatPrompt = [
@@ -132,7 +142,7 @@ app.post("/api/ai/chat", authenticate, aiRateLimit, async (req, res) => {
     const reply = allowsLongCopilotReply(message) ? (response.text || "").trim() : capCopilotReply(response.text || "");
     if (!reply.trim()) throw new Error("Empty response from Gemini");
 
-    audit(req.user.id, "AI_CHAT", "AI_COPILOT", "session", { model, contextProvided: !!context?.chapterTitle });
+    audit(req.user.id, "AI_CHAT", "AI_COPILOT", "session", { model, contextProvided: !!context?.chapterTitle, source: "gemini" });
     return res.json({ reply, model, source: "gemini" });
   } catch (err) {
     console.error("[AI Copilot] Gemini error:", err?.message || err);

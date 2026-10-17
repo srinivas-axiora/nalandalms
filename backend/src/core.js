@@ -235,6 +235,59 @@ const securityEvents = [];
 const learningTimeEvents = [];
 const acharyaFeedbackMemory = [];
 const reportExports = [];
+
+// Seed Attendance: seed weekday records for Diya Sharma (EMP-1004) and Meera Iyer (EMP-1005) for mid-August 2026
+const seedAttendance = [
+  { id: "ATT-L-001", userId: "EMP-1004", date: "2026-08-17", checkInTime: "09:05:12", checkOutTime: "18:15:22", status: "Present" },
+  { id: "ATT-L-002", userId: "EMP-1004", date: "2026-08-18", checkInTime: "08:58:34", checkOutTime: "18:02:11", status: "Present" },
+  { id: "ATT-L-003", userId: "EMP-1004", date: "2026-08-19", checkInTime: "09:12:00", checkOutTime: "18:30:45", status: "Present" },
+  { id: "ATT-L-004", userId: "EMP-1004", date: "2026-08-20", checkInTime: "08:54:19", checkOutTime: "18:05:00", status: "Present" },
+  { id: "ATT-L-005", userId: "EMP-1004", date: "2026-08-21", checkInTime: "09:02:10", checkOutTime: "17:58:12", status: "Present" },
+  { id: "ATT-L-006", userId: "EMP-1004", date: "2026-08-24", checkInTime: "09:04:45", checkOutTime: "18:09:55", status: "Present" },
+  { id: "ATT-L-007", userId: "EMP-1004", date: "2026-08-25", checkInTime: "09:01:23", checkOutTime: "18:14:32", status: "Present" },
+  { id: "ATT-L-008", userId: "EMP-1004", date: "2026-08-26", checkInTime: "09:15:00", checkOutTime: "18:00:20", status: "Present" },
+  { id: "ATT-L-009", userId: "EMP-1004", date: "2026-08-27", checkInTime: "08:55:00", checkOutTime: "18:05:15", status: "Present" },
+  { id: "ATT-L-010", userId: "EMP-1004", date: "2026-08-28", checkInTime: "09:08:12", checkOutTime: "18:10:00", status: "Present" },
+  { id: "ATT-L-011", userId: "EMP-1005", date: "2026-08-24", checkInTime: "09:00:00", checkOutTime: "18:00:00", status: "Present" },
+  { id: "ATT-L-012", userId: "EMP-1005", date: "2026-08-25", checkInTime: "09:05:00", checkOutTime: "18:10:00", status: "Present" },
+  { id: "ATT-L-013", userId: "EMP-1005", date: "2026-08-26", checkInTime: "09:10:00", checkOutTime: "18:05:00", status: "Present" },
+  { id: "ATT-L-014", userId: "EMP-1005", date: "2026-08-27", checkInTime: "08:59:00", checkOutTime: "18:02:00", status: "Present" },
+  { id: "ATT-L-015", userId: "EMP-1005", date: "2026-08-28", checkInTime: "09:03:00", checkOutTime: "17:59:00", status: "Present" }
+];
+const attendanceLogs = [...seedAttendance];
+
+// Seed Performance Reviews:
+const seedPerformanceReviews = [
+  {
+    id: "PR-001",
+    userId: "EMP-1004",
+    reviewerId: "EMP-1003",
+    reviewerName: "Kabir Sethi",
+    reviewDate: "2026-06-30",
+    rating: 4.0,
+    comments: "Diya has made excellent progress in expanding automated test suites and securing application dependencies. She demonstrates a solid grasp of secure coding principles. Her primary area of improvement is communicating test reports more frequently and actively participating in technical design discussions.",
+    goals: "1. Complete advanced Python API testing course.\n2. Design and deploy regression security test suites in CI.\n3. Increase active communication during core platform architecture discussions."
+  },
+  {
+    id: "PR-002",
+    userId: "EMP-1005",
+    reviewerId: "EMP-1002",
+    reviewerName: "Aarav Menon",
+    reviewDate: "2026-06-28",
+    rating: 4.5,
+    comments: "Meera is an outstanding performer in our Enterprise Sales team. She successfully closed multiple premium accounts this quarter and exceeded her sales target by 15%. She maintains excellent relations with client technical leads. Next quarter, she should focus on scaling existing accounts and mentoring junior sales specialists.",
+    goals: "1. Expand recurring revenue within active enterprise accounts by 15%.\n2. Co-run onboarding workshops for two junior account executives."
+  }
+];
+const performanceReviews = [...seedPerformanceReviews];
+
+// Seed Communications / Announcements / Inbox messages:
+const seedCommunications = [
+  { id: "MSG-001", senderId: "SYSTEM", senderName: "Nalanda Institute", recipientId: "ALL", content: "Welcome to the new training semester! Please make sure to check your assigned courses and target skill paths.", sentAt: now() },
+  { id: "MSG-002", senderId: "SYSTEM", senderName: "Nalanda Institute", recipientId: "ALL", content: "LMS Platform security audit is scheduled for this Sunday. Expect brief backend connectivity interruptions between 02:00 AM and 04:00 AM UTC.", sentAt: now() },
+  { id: "MSG-003", senderId: "EMP-1003", senderName: "Kabir Sethi", recipientId: "EMP-1004", content: "Hi Diya, please ensure you complete the 'Secure Coding for Cloud Teams' course by the end of next week. Let me know if you run into any blockers.", sentAt: now() }
+];
+const communications = [...seedCommunications];
 let settings = { fullscreenRequired: true, cameraRequired: true, microphoneRequired: true, tabSwitchAutoSubmit: true, noiseThreshold: 70, maxAssessmentFlags: 2 };
 
 // Video progress store (temporary before PostgreSQL migration)
@@ -266,7 +319,10 @@ const snapshot = () => ({
   skills,
   targetSkills,
   skillRatings,
-  chapterFeedbacks
+  chapterFeedbacks,
+  attendanceLogs,
+  performanceReviews,
+  communications
 });
 
 const saveDb = async () => {
@@ -315,6 +371,9 @@ const loadDb = async () => {
     if (data.targetSkills) { targetSkills.length = 0; targetSkills.push(...data.targetSkills); }
     if (data.skillRatings) { skillRatings.length = 0; skillRatings.push(...data.skillRatings); }
     if (data.chapterFeedbacks) { chapterFeedbacks.length = 0; chapterFeedbacks.push(...data.chapterFeedbacks); }
+    if (data.attendanceLogs) { attendanceLogs.length = 0; attendanceLogs.push(...data.attendanceLogs); }
+    if (data.performanceReviews) { performanceReviews.length = 0; performanceReviews.push(...data.performanceReviews); }
+    if (data.communications) { communications.length = 0; communications.push(...data.communications); }
   } catch (err) {
     console.error("[persist] load failed:", err?.message || err);
     throw err;
@@ -369,4 +428,7 @@ export {
   saveDb,
   persist,
   loadDb,
+  attendanceLogs,
+  performanceReviews,
+  communications,
 };

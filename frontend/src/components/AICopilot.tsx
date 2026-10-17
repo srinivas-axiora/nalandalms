@@ -18,11 +18,11 @@ type CopilotContext = {
 };
 
 const QUICK_PROMPTS = [
-  "Explain this chapter in 3 bullet points",
-  "Give me a code example for this concept",
-  "What are the best practices here?",
-  "Quiz me on this topic",
-  "What should I learn next after this?",
+  { label: "📅 Clock In/Out", cmd: "check in" },
+  { label: "📈 Performance Review", cmd: "performance review" },
+  { label: "🎓 Suggest Trainings", cmd: "recommend" },
+  { label: "❓ Quiz Me", cmd: "quiz me" },
+  { label: "💬 Show Menu", cmd: "menu" },
 ];
 
 function uid() {
@@ -328,11 +328,11 @@ export default function AICopilot({ context, isOpen, onToggle }: {
                 )}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="font-semibold text-white text-sm">Nalanda AI Copilot</p>
+                <p className="font-semibold text-white text-sm">Nalanda Copilot</p>
                 <p className="text-xs text-slate-400">
                   {geminiStatus === "online" ? "Gemini connected" :
-                   geminiStatus === "offline" ? "Gemini unavailable" :
-                   "Gemini AI"}
+                   geminiStatus === "offline" ? "Local Agent Mode" :
+                   "Institute Assistant"}
                 </p>
               </div>
               {messages.length > 0 && (
@@ -355,19 +355,19 @@ export default function AICopilot({ context, isOpen, onToggle }: {
                 <div className="flex flex-col items-center justify-center h-full gap-6 text-center">
                   <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500/20 to-fuchsia-500/20 text-3xl border border-violet-500/20">🤖</div>
                   <div>
-                    <p className="font-semibold text-white">Software Engineering Expert</p>
+                    <p className="font-semibold text-white">Nalanda Institute Assistant</p>
                     <p className="mt-1 text-xs text-slate-400 max-w-[280px] leading-5">
-                      Ask me anything — from basic HTML to advanced system design, security, DevOps, and beyond.
+                      I can help you check attendance, recommend training courses, check performance reviews, send messages, and take practice quizzes.
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2 justify-center">
                     {QUICK_PROMPTS.map(p => (
                       <button
-                        key={p}
-                        onClick={() => sendMessage(p)}
+                        key={p.label}
+                        onClick={() => sendMessage(p.cmd)}
                         className="rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1.5 text-xs text-violet-300 hover:bg-violet-500/20 transition"
                       >
-                        {p}
+                        {p.label}
                       </button>
                     ))}
                   </div>
@@ -424,7 +424,7 @@ export default function AICopilot({ context, isOpen, onToggle }: {
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={handleKey}
-                  placeholder="Ask a software engineering question…"
+                  placeholder="Ask about attendance, training, reviews, messages, or menu…"
                   rows={1}
                   className="flex-1 resize-none bg-transparent text-sm text-white placeholder-slate-500 outline-none leading-6 max-h-32"
                   style={{ fieldSizing: "content" } as React.CSSProperties}
