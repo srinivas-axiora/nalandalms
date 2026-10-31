@@ -1,16 +1,10 @@
-// One-off backfill: copy existing Skills + Target Skills into the relational
-// tables created by migration 0001. Idempotent (upsert on id). Run AFTER migrate:
+// Backfill tool: copies existing data into normalized PostgreSQL relational tables.
+// Idempotent (upsert on ID). Run AFTER migrations:
 //   node backend/src/db/migrate.js && node backend/src/db/backfill.js
-//
-// Source of truth: database/db.json (the file store) if present; otherwise the
-// in-memory seed. If your current store is PostgreSQL-JSONB (Phase-1 adapter),
-// export that collection to db.json first, or adapt the source below.
-//
-// ⚠️ UNVERIFIED-BY-AUTHOR — validate against a real Postgres (docs/POSTGRES-MIGRATION.md).
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { query, closePool } from "./pool.js";
+import { query, closePool, withTransaction } from "./pool.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_JSON = path.resolve(__dirname, "..", "..", "..", "database", "db.json");
@@ -18,48 +12,200 @@ const DB_JSON = path.resolve(__dirname, "..", "..", "..", "database", "db.json")
 async function loadSource() {
   if (fs.existsSync(DB_JSON)) {
     const data = JSON.parse(fs.readFileSync(DB_JSON, "utf8"));
-    return { skills: data.skills || [], targetSkills: data.targetSkills || [], source: "db.json" };
+    return { data, source: "database/db.json" };
   }
   const core = await import("../core.js");
-  return { skills: core.skills || [], targetSkills: core.targetSkills || [], source: "in-memory seed" };
+  return {
+    data: {
+      users: core.users || [],
+      skills: core.skills || [],
+      targetSkills: core.targetSkills || [],
+      courses: core.courses || [],
+      chapters: core.chapters || [],
+      assessments: core.assessments || [],
+      assignments: core.assignments || [],
+      attempts: core.attempts || [],
+    },
+    source: "in-memory seed",
+  };
 }
 
 export async function backfill() {
-  const { skills, targetSkills, source } = await loadSource();
-  console.log(`Backfilling from ${source}: ${skills.length} skills, ${targetSkills.length} target skills`);
+  const { data, source } = await loadSource();
+  console.log(`[backfill] Loading data from ${source}...`);
 
-  for (const s of skills) {
-    await query(
-      `INSERT INTO skills (id, name, category, description, status, created_at)
-       VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, now()))
-       ON CONFLICT (id) DO UPDATE
-         SET name = EXCLUDED.name, category = EXCLUDED.category,
-             description = EXCLUDED.description, status = EXCLUDED.status`,
-      [s.id, s.name, s.category || "Technical", s.description || "", s.status || "Active", s.createdAt || null]
-    );
-  }
+  await withTransaction(async (client) => {
+    // 1. Users & Departments
+    const users = data.users || [];
+    console.log(`[backfill] Upserting ${users.length} users...`);
+    for (const u of users) {
+      let deptId = null;
+      if (u.department) {
+        const dRes = await client.query(
+          "INSERT INTO departments (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+          [u.department]
+        );
+        deptId = dRes.rows[0]?.id;
+      }
+      await client.query(
+        `INSERT INTO users (
+           id, name, email, password_hash, role, department_id,
+           team, designation, manager_id, status, session_version, created_at, updated_at
+         ) VALUES (
+           $1, $2, $3, $4, $5::user_role, $6,
+           $7, $8, $9, $10::lifecycle_status, $11, COALESCE($12::timestamptz, now()), now()
+         ) ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name, email = EXCLUDED.email, role = EXCLUDED.role,
+           department_id = EXCLUDED.department_id, team = EXCLUDED.team,
+           designation = EXCLUDED.designation, manager_id = EXCLUDED.manager_id,
+           status = EXCLUDED.status`,
+        [
+          u.id, u.name, u.email, u.passwordHash || null, u.role || "Employee", deptId,
+          u.team || "Unassigned", u.designation || "Employee", u.managerId || null,
+          u.status || "Active", u.sessionVersion || 0, u.createdAt || null,
+        ]
+      );
+    }
 
-  for (const t of targetSkills) {
-    await query(
-      `INSERT INTO target_skills
-         (id, skill_id, scope, department, designation, user_id, target_level, target_score, priority, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, now()))
-       ON CONFLICT (id) DO UPDATE
-         SET skill_id = EXCLUDED.skill_id, scope = EXCLUDED.scope, department = EXCLUDED.department,
-             designation = EXCLUDED.designation, user_id = EXCLUDED.user_id,
-             target_level = EXCLUDED.target_level, target_score = EXCLUDED.target_score, priority = EXCLUDED.priority`,
-      [
-        t.id, t.skillId, t.scope, t.department ?? null, t.designation ?? null, t.userId ?? null,
-        t.targetLevel || "Intermediate", t.targetScore ?? 80, t.priority || "Medium", t.createdAt || null,
-      ]
-    );
-  }
-  console.log("Backfill complete.");
+    // 2. Skills & Target Skills
+    const skills = data.skills || [];
+    console.log(`[backfill] Upserting ${skills.length} skills...`);
+    for (const s of skills) {
+      await client.query(
+        `INSERT INTO skills (id, name, category, description, status, created_at)
+         VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, now()))
+         ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name, category = EXCLUDED.category,
+           description = EXCLUDED.description, status = EXCLUDED.status`,
+        [s.id, s.name, s.category || "Technical", s.description || "", s.status || "Active", s.createdAt || null]
+      );
+    }
+
+    // 3. Courses
+    const courses = data.courses || [];
+    console.log(`[backfill] Upserting ${courses.length} courses...`);
+    for (const c of courses) {
+      await client.query(
+        `INSERT INTO courses (
+           id, title, description, skill, skill_ids, target_level, difficulty,
+           estimated_hours, category, prerequisites, tags, thumbnail_color,
+           status, approval, owner_id, current_version, created_at, updated_at
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7,
+           $8, $9, $10, $11, $12,
+           $13::lifecycle_status, $14::approval_status, $15, $16,
+           COALESCE($17::timestamptz, now()), now()
+         ) ON CONFLICT (id) DO UPDATE SET
+           title = EXCLUDED.title, description = EXCLUDED.description,
+           skill = EXCLUDED.skill, status = EXCLUDED.status, approval = EXCLUDED.approval`,
+        [
+          c.id, c.title, c.description, c.skill || "", c.skillIds || [],
+          c.targetLevel || "Beginner", c.difficulty || "Beginner", c.estimatedHours || 4,
+          c.category || "General", c.prerequisites || [], c.tags || [],
+          c.thumbnailColor || "#22d3ee", c.status || "Active", c.approval || "Approved",
+          c.ownerId || users[0]?.id || "SAnalanda", c.version || 1, c.createdAt || null,
+        ]
+      );
+    }
+
+    // 4. Chapters
+    const chapters = data.chapters || [];
+    console.log(`[backfill] Upserting ${chapters.length} chapters...`);
+    for (const ch of chapters) {
+      await client.query(
+        `INSERT INTO chapters (
+           id, course_id, sequence, title, description, content_type,
+           body, url, file_name, duration_minutes, minimum_time_minutes, created_at, updated_at
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6,
+           $7, $8, $9, $10, $11, COALESCE($12::timestamptz, now()), now()
+         ) ON CONFLICT (id) DO UPDATE SET
+           title = EXCLUDED.title, body = EXCLUDED.body, content_type = EXCLUDED.content_type`,
+        [
+          ch.id, ch.courseId, ch.sequence || 1, ch.title, ch.description || "",
+          ch.contentType || "Rich Text", ch.body || "", ch.url || null,
+          ch.fileName || null, ch.durationMinutes || 10, ch.minimumTimeMinutes ?? 1,
+          ch.createdAt || null,
+        ]
+      );
+    }
+
+    // 5. Assessments & Questions
+    const assessments = data.assessments || [];
+    console.log(`[backfill] Upserting ${assessments.length} assessments...`);
+    for (const a of assessments) {
+      await client.query(
+        `INSERT INTO assessments (
+           id, course_id, chapter_id, title, type, strict_mode,
+           duration_minutes, pass_score, question_limit, difficulty,
+           approval, status, owner_id, created_at, updated_at
+         ) VALUES (
+           $1, $2, $3, $4, $5::assessment_type, $6,
+           $7, $8, $9, $10,
+           $11::approval_status, $12::lifecycle_status, $13,
+           COALESCE($14::timestamptz, now()), now()
+         ) ON CONFLICT (id) DO UPDATE SET
+           title = EXCLUDED.title, status = EXCLUDED.status, approval = EXCLUDED.approval`,
+        [
+          a.id, a.courseId, a.chapterId || null, a.title, a.type || "MCQ",
+          a.strictMode ?? true, a.durationMinutes || 15, a.passScore || 70,
+          a.questionLimit || null, a.difficulty || "Beginner", a.approval || "Approved",
+          a.status || "Active", a.ownerId || users[0]?.id || "SAnalanda", a.createdAt || null,
+        ]
+      );
+
+      if (Array.isArray(a.questions)) {
+        await client.query("DELETE FROM questions WHERE assessment_id = $1", [a.id]);
+        for (let i = 0; i < a.questions.length; i++) {
+          const q = a.questions[i];
+          await client.query(
+            `INSERT INTO questions (
+               assessment_id, question_type, prompt, options, correct_answer, points, sort_order
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+              a.id, q.type || "MCQ", q.prompt, JSON.stringify(q.options || []),
+              JSON.stringify(q.answer ?? q.correctAnswer ?? 0), q.points || 10, i,
+            ]
+          );
+        }
+      }
+    }
+
+    // 6. Enrollments
+    const enrollments = data.assignments || data.enrollments || [];
+    console.log(`[backfill] Upserting ${enrollments.length} enrollments...`);
+    for (const e of enrollments) {
+      await client.query(
+        `INSERT INTO enrollments (
+           id, course_id, user_id, assigned_by, due_at, priority,
+           mandatory, progress, completed_chapters, time_spent_minutes,
+           time_spent_seconds, chapter_time_spent_seconds, started_at
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6,
+           $7, $8, $9, $10,
+           $11, $12, COALESCE($13::timestamptz, now())
+         ) ON CONFLICT (course_id, user_id) DO UPDATE SET
+           progress = EXCLUDED.progress, completed_chapters = EXCLUDED.completed_chapters`,
+        [
+          e.id, e.courseId, e.userId, e.assignedBy || users[0]?.id || "SAnalanda",
+          e.dueAt || null, e.priority || "Medium", e.mandatory ?? false,
+          e.progress || 0, e.completedChapters || [], e.timeSpentMinutes || 0,
+          e.timeSpentSeconds || 0, JSON.stringify(e.chapterTimeSpentSeconds || {}),
+          e.startedAt || null,
+        ]
+      );
+    }
+  });
+
+  console.log("[backfill] Relational backfill complete!");
 }
 
 if (process.argv[1]?.endsWith("backfill.js")) {
   backfill()
     .then(() => closePool())
     .then(() => process.exit(0))
-    .catch((err) => { console.error("[backfill] failed:", err?.message || err); process.exit(1); });
+    .catch((err) => {
+      console.error("[backfill] failed:", err?.message || err);
+      process.exit(1);
+    });
 }

@@ -5,6 +5,9 @@ import { v4 as uuid } from "uuid";
 import { assessments, courses, chapters, assignments, attempts, archives, settings, now, isAdmin, ASSESSMENT_TIME_GRACE_SECONDS } from "../../core.js";
 import { audit, canManageCourse, assessmentsVisibleTo, assessmentForUser, questionPointsTotal, addAssessmentTime } from "../../domain.js";
 import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
+import { canAttemptAssessment, ENROLLMENT_STATUS } from "../enrollments/progress.service.js";
+import { buildBlindExamAttempt, getBlindQuestions, recordQuestionAnswer, finalizeAttempt, manualGradeAttempt } from "./exam.service.js";
+import { users } from "../../core.js";
 
 export function registerAssessments(app) {
   app.get("/api/assessments", authenticate, (req, res) => {
@@ -117,7 +120,7 @@ export function registerAssessments(app) {
     res.json({ data: assessment });
   });
 
-  app.post("/api/assessments/:id/attempts/start", authenticate, requireRole("Employee", "Manager", "Admin"), (req, res) => {
+    app.post("/api/assessments/:id/attempts/start", authenticate, requireRole("Employee", "Manager", "Admin", "Learner", "Instructor"), (req, res) => {
     const assessment = assessments.find((item) => item.id === req.params.id && item.approval === "Approved" && item.status === "Active");
     if (!assessment) return res.status(404).json({ error: "Approved assessment not found" });
     const course = courses.find((item) => item.id === assessment.courseId);
@@ -125,18 +128,88 @@ export function registerAssessments(app) {
       return res.status(403).json({ error: "Assessment is not available" });
     }
     if (!isAdmin(req.user.role)) {
-      const assigned = assignments.some((assignment) => assignment.userId === req.user.id && assignment.courseId === assessment.courseId);
-      if (!assigned) return res.status(403).json({ error: "You are not assigned to this course" });
+      const attemptCheck = canAttemptAssessment({ courseId: assessment.courseId, userId: req.user.id, userRole: req.user.role });
+      if (!attemptCheck.allowed) {
+        return res.status(403).json({ error: attemptCheck.error, details: attemptCheck });
+      }
     }
-    const attempt = { id: uuid(), assessmentId: assessment.id, courseId: assessment.courseId, chapterId: assessment.chapterId || null, userId: req.user.id, startedAt: now(), submittedAt: null, status: "InProgress", score: null, maxScore: questionPointsTotal(assessment), feedback: "", answers: {}, selectedQuestionIds: [], tabSwitchWarnings: 0, autoSubmittedReason: null, timeSpentSeconds: 0, flags: [] };
-    attempts.unshift(attempt);
-    audit(req.user.id, "START_ATTEMPT", "ASSESSMENT_ATTEMPT", attempt.id);
-    res.status(201).json({ data: attempt, strictRules: assessment.strictMode ? settings : null });
+
+    try {
+      const attempt = buildBlindExamAttempt({
+        assessment,
+        userId: req.user.id,
+        userRole: req.user.role
+      });
+
+      // Strip server-side answer keys from response
+      const clientSafeAttempt = {
+        id: attempt.id,
+        assessmentId: attempt.assessmentId,
+        courseId: attempt.courseId,
+        chapterId: attempt.chapterId,
+        userId: attempt.userId,
+        startedAt: attempt.startedAt,
+        expiresAt: attempt.expiresAt,
+        status: attempt.status,
+        maxScore: attempt.maxScore,
+        selectedQuestionIds: attempt.selectedQuestionIds,
+      };
+
+      res.status(201).json({ data: clientSafeAttempt, strictRules: assessment.strictMode ? settings : null });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
   });
 
+  // ── Blind Question Delivery (Zero Answer Key Leakage) ──
+  app.get("/api/assessments/attempts/:attemptId/questions", authenticate, (req, res) => {
+    const attempt = attempts.find((item) => item.id === req.params.attemptId);
+    if (!attempt) return res.status(404).json({ error: "Attempt not found" });
+    if (attempt.userId !== req.user.id && !isAdmin(req.user.role) && req.user.role !== "Instructor") {
+      return res.status(403).json({ error: "Forbidden: Attempt belongs to another user" });
+    }
+    const assessment = assessments.find((item) => item.id === attempt.assessmentId);
+    if (!assessment) return res.status(404).json({ error: "Assessment not found" });
+
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+
+    const blindData = getBlindQuestions({ attempt, assessment, page, limit });
+    res.json({ data: blindData });
+  });
+
+  // ── Autosave / Lock Question Answer ──
+  app.post("/api/assessments/attempts/:attemptId/answer", authenticate, (req, res) => {
+    const schema = z.object({
+      questionId: z.string().min(1),
+      answer: z.any()
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+    const attempt = attempts.find((item) => item.id === req.params.attemptId);
+    if (!attempt) return res.status(404).json({ error: "Attempt not found" });
+    const assessment = assessments.find((item) => item.id === attempt.assessmentId);
+    if (!assessment) return res.status(404).json({ error: "Assessment not found" });
+
+    try {
+      const result = recordQuestionAnswer({
+        attempt,
+        assessment,
+        questionId: parsed.data.questionId,
+        answer: parsed.data.answer,
+        userId: req.user.id
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  // ── Final Attempt Submission & Server-Side Scoring ──
   app.post("/api/assessments/attempts/:attemptId/submit", authenticate, (req, res) => {
     const schema = z.object({
-      answers: z.record(z.string(), z.any()).default({}),
+      answers: z.record(z.string(), z.any()).optional(),
       selectedQuestionIds: z.array(z.string()).optional(),
       tabSwitchWarnings: z.coerce.number().int().min(0).optional(),
       autoSubmittedReason: z.string().nullable().optional(),
@@ -150,29 +223,74 @@ export function registerAssessments(app) {
     if (attempt.submittedAt) return res.status(409).json({ error: "Attempt already submitted", data: attempt });
     const assessment = assessments.find((item) => item.id === attempt.assessmentId);
     if (!assessment) return res.status(404).json({ error: "Assessment not found" });
-    const mcqQuestions = assessment.questions.filter((question) => question.type === "MCQ");
-    const mcqScore = mcqQuestions.length ? Math.round((mcqQuestions.filter((question) => parsed.data.answers?.[question.id] === question.answer).length / mcqQuestions.length) * 100) : null;
-    const submittedAt = now();
-    const elapsedSeconds = Math.max(1, Math.round((new Date(submittedAt).getTime() - new Date(attempt.startedAt).getTime()) / 1000));
-    const requestedTimeSpentSeconds = parsed.data.timeSpentSeconds || elapsedSeconds;
-    const timeSpentSeconds = Math.min(requestedTimeSpentSeconds, elapsedSeconds + ASSESSMENT_TIME_GRACE_SECONDS);
-    if (requestedTimeSpentSeconds > elapsedSeconds + ASSESSMENT_TIME_GRACE_SECONDS) {
-      audit(req.user.id, "ASSESSMENT_TIME_CLAMPED", "ASSESSMENT_ATTEMPT", attempt.id, { requestedTimeSpentSeconds, elapsedSeconds });
-    }
-    Object.assign(attempt, {
+
+    const result = finalizeAttempt({
+      attempt,
+      assessment,
       answers: parsed.data.answers,
-      selectedQuestionIds: parsed.data.selectedQuestionIds || attempt.selectedQuestionIds || [],
-      tabSwitchWarnings: parsed.data.tabSwitchWarnings ?? attempt.tabSwitchWarnings ?? 0,
-      autoSubmittedReason: parsed.data.autoSubmittedReason ?? null,
-      submittedAt,
-      status: mcqScore === null ? "PendingManualReview" : "Submitted",
-      score: mcqScore,
-      maxScore: questionPointsTotal(assessment),
-      feedback: mcqScore === null ? "Manual evaluation required" : mcqScore >= assessment.passScore ? "Passed" : "Needs improvement",
-      timeSpentSeconds
+      autoSubmittedReason: parsed.data.autoSubmittedReason,
+      tabSwitchWarnings: parsed.data.tabSwitchWarnings,
+      elapsedSeconds: parsed.data.timeSpentSeconds
     });
-    const assignment = addAssessmentTime({ attempt, assessment, seconds: timeSpentSeconds });
-    audit(req.user.id, "SUBMIT_ATTEMPT", "ASSESSMENT_ATTEMPT", attempt.id, { score: mcqScore, timeSpentSeconds });
-    res.json({ data: attempt, feedback: mcqScore === null ? "Manual evaluation required" : mcqScore >= assessment.passScore ? "Passed" : "Needs improvement" });
+
+    res.json({
+      data: result.attempt,
+      score: result.score,
+      passed: result.passed,
+      feedback: result.feedback
+    });
+  });
+
+  // ── Pending Descriptive Review Queue ──
+  app.get("/api/assessments/attempts/pending-review", authenticate, requireRole("Admin", "Manager", "Instructor"), (req, res) => {
+    let pending = attempts.filter((a) => a.status === "PendingManualReview");
+    if (req.user.role === "Instructor") {
+      const instructorCourseIds = new Set(courses.filter((c) => c.ownerId === req.user.id).map((c) => c.id));
+      pending = pending.filter((a) => instructorCourseIds.has(a.courseId));
+    }
+    const decorated = pending.map((a) => {
+      const user = users.find((u) => u.id === a.userId);
+      const assessment = assessments.find((asm) => asm.id === a.assessmentId);
+      const course = courses.find((c) => c.id === a.courseId);
+      return {
+        ...a,
+        learnerName: user?.name || "Unknown Learner",
+        learnerEmail: user?.email || "",
+        assessmentTitle: assessment?.title || "",
+        courseTitle: course?.title || "",
+      };
+    });
+    res.json({ data: decorated, total: decorated.length });
+  });
+
+  // ── Manual Grading of Descriptive Answers ──
+  app.post("/api/assessments/attempts/:attemptId/grade", authenticate, requireRole("Admin", "Manager", "Instructor"), (req, res) => {
+    const schema = z.object({
+      grades: z.record(z.string(), z.object({
+        pointsAwarded: z.number().nonnegative(),
+        feedback: z.string().optional()
+      })),
+      overallFeedback: z.string().optional()
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+    const attempt = attempts.find((item) => item.id === req.params.attemptId);
+    if (!attempt) return res.status(404).json({ error: "Attempt not found" });
+    const assessment = assessments.find((item) => item.id === attempt.assessmentId);
+    if (!assessment) return res.status(404).json({ error: "Assessment not found" });
+
+    try {
+      const result = manualGradeAttempt({
+        attempt,
+        assessment,
+        evaluatorId: req.user.id,
+        grades: parsed.data.grades,
+        overallFeedback: parsed.data.overallFeedback
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
   });
 }

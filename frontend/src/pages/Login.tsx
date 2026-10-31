@@ -19,7 +19,13 @@ type Props = {
 };
 
 export default function Login({ users, data, onLogin, onUpdateSecurity }: Props) {
-  const [email, setEmail] = useState("Super Admin");
+  const [mode, setMode] = useState<"signin" | "signup" | "forgot">("signin");
+  const [name, setName] = useState("");
+  const [signupRole, setSignupRole] = useState<"Learner" | "Instructor">("Learner");
+  const [successMsg, setSuccessMsg] = useState("");
+  const [resetToken, setResetToken] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [cooldownRemaining, setCooldownRemaining] = useState(0); // ms
@@ -131,6 +137,60 @@ export default function Login({ users, data, onLogin, onUpdateSecurity }: Props)
     }
 
     rateLimitLog.current.push(Date.now());
+
+    if (mode === "signup") {
+      try {
+        const res = await apiFetch("/auth/register", {
+          method: "POST",
+          body: JSON.stringify({ name, email, password, role: signupRole }),
+        });
+        const resData = await res.json();
+        if (!res.ok) {
+          setError(resData.error?.fieldErrors ? Object.values(resData.error.fieldErrors).flat().join(", ") : resData.error || "Registration failed");
+          return;
+        }
+        onLogin(resData.user);
+        return;
+      } catch (err) {
+        setError("Failed to connect to registration service.");
+        return;
+      }
+    }
+
+    if (mode === "forgot") {
+      try {
+        if (!resetToken) {
+          const res = await apiFetch("/auth/forgot-password", {
+            method: "POST",
+            body: JSON.stringify({ email }),
+          });
+          const resData = await res.json();
+          if (resData.resetToken) {
+            setResetToken(resData.resetToken);
+          }
+          setSuccessMsg(resData.message || "Reset instructions sent.");
+          return;
+        } else {
+          const res = await apiFetch("/auth/reset-password", {
+            method: "POST",
+            body: JSON.stringify({ token: resetToken, newPassword }),
+          });
+          const resData = await res.json();
+          if (!res.ok) {
+            setError(resData.error || "Password reset failed");
+            return;
+          }
+          setSuccessMsg("Password reset successfully! Please sign in.");
+          setMode("signin");
+          setPassword("");
+          setResetToken("");
+          return;
+        }
+      } catch (err) {
+        setError("Failed to complete password reset.");
+        return;
+      }
+    }
 
     try {
       const res = await apiFetch("/auth/login", {
@@ -326,6 +386,12 @@ export default function Login({ users, data, onLogin, onUpdateSecurity }: Props)
             </AnimatePresence>
 
             {/* Error message */}
+            {successMsg && (
+              <p className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-100">{successMsg}</p>
+            )}
+            {successMsg && (
+              <p className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-3 text-sm text-emerald-100">{successMsg}</p>
+            )}
             {error && (
               <p className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-300/10 p-3 text-sm text-rose-100">{error}</p>
             )}
@@ -338,7 +404,15 @@ export default function Login({ users, data, onLogin, onUpdateSecurity }: Props)
                   : "bg-gradient-to-r from-cyan-400 to-blue-500 text-slate-950 hover:shadow-lg hover:shadow-cyan-400/20"
               }`}
             >
-              {isRateLimited ? "Please wait..." : "Sign in"}
+              {isRateLimited
+                ? "Please wait..."
+                : mode === "signin"
+                ? "Sign in"
+                : mode === "signup"
+                ? "Create Account"
+                : resetToken
+                ? "Confirm New Password"
+                : "Send Reset Link"}
             </button>
             {showLoginShortcuts && (
               <div className="mt-6 grid gap-2 text-xs text-slate-400">

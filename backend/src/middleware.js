@@ -1,3 +1,4 @@
+import { rateLimitCheckAndIncr } from "./cache/redis.js";
 // Foundation layer: HTTP middleware (CSRF, rate limiting, auth/authz, persistence
 // gate, security-event logging, error handler). Wired onto `app` by server.js.
 import jwt from "jsonwebtoken";
@@ -9,6 +10,8 @@ import { securityEvent } from "./domain.js";
 // ── CSRF protection (double-submit cookie) ──
 export const verifyCsrf = (req, res, next) => {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+  // Exempt external webhooks and mobile companion device pairing (token-authenticated)
+  if (req.path === "/api/payments/webhook" || req.path === "/api/proctoring/companion/pair" || req.path.endsWith("/companion/ping") || req.path.startsWith("/api/public/candidate-assessments")) return next();
   const headerToken = req.headers["x-csrf-token"];
   const cookieToken = req.cookies?.[CSRF_COOKIE];
   if (!headerToken || !cookieToken || !timingSafeEqual(headerToken, cookieToken)) {
@@ -127,6 +130,6 @@ export const errorHandler = (err, _req, res, _next) => {
     if (!res.headersSent) res.status(415).json({ error: "Unsupported file type." });
     return;
   }
-  console.error("[error]", err?.message || err);
+  console.error("[error]", err.stack || err);
   if (!res.headersSent) res.status(500).json({ error: "Internal server error" });
 };

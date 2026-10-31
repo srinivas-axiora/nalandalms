@@ -37,12 +37,28 @@ function createFileStorage({ filePath }) {
       if (!raw.trim()) return null;
       return JSON.parse(raw);
     },
-    async save(data) {
+        async save(data) {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      // Atomic write: a crash mid-write cannot truncate/corrupt the live file.
-      const tmp = `${filePath}.tmp`;
+      const tmp = `${filePath}.${process.pid}.${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`;
       fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-      fs.renameSync(tmp, filePath);
+      for (let i = 0; i < 5; i++) {
+        try {
+          fs.renameSync(tmp, filePath);
+          return;
+        } catch (err) {
+          if ((err.code === "EPERM" || err.code === "EBUSY") && i < 4) {
+            await new Promise((r) => setTimeout(r, 20));
+          } else {
+            try {
+              fs.copyFileSync(tmp, filePath);
+              fs.unlinkSync(tmp);
+              return;
+            } catch {
+              throw err;
+            }
+          }
+        }
+      }
     },
     async close() {},
   };

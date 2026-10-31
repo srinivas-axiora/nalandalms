@@ -7,6 +7,10 @@ import { seedData } from "./seedData";
 import { setToastHandler } from "./toast";
 import { apiFetch } from "./api";
 import Login from "./pages/Login";
+import { MobileProctor } from "./pages/MobileProctor";
+import { ProctorCockpit } from "./pages/ProctorCockpit";
+import { VerifyCertificate } from "./pages/VerifyCertificate";
+import CandidateAssessment from "./pages/CandidateAssessment";
 import Dashboard from "./pages/Dashboard";
 import Courses from "./pages/Courses";
 import Assessments from "./pages/Assessments";
@@ -38,6 +42,7 @@ function ModuleGlyph({ icon, active }: { icon: string; active: boolean }) {
     team: "from-blue-300 via-cyan-400 to-emerald-500",
     "my-learning": "from-cyan-200 via-emerald-300 to-lime-500",
     "ai-generator": "from-cyan-300 via-teal-400 to-emerald-600",
+    "proctor-cockpit": "from-rose-400 via-amber-400 to-red-600",
   };
 
   return (
@@ -56,7 +61,26 @@ function useLocalState<T>(key: string, init: T) {
   return [val, setVal] as const;
 }
 
+const emptyAppData: AppData = {
+  users: [],
+  skills: [],
+  targetSkills: [],
+  courses: [],
+  chapters: [],
+  assessments: [],
+  enrollments: [],
+  attempts: [],
+  chapterFeedbacks: [],
+  skillRatings: [],
+  audit: [],
+  archive: [],
+  loginSecurity: {},
+  sessionVersion: {},
+  issuedCertificates: [],
+};
+
 function normalizeData(data: AppData): AppData {
+  if (!data) return emptyAppData;
   // Collect all archived entity IDs to prevent re-adding deleted items from seed
   const archivedIds = new Set((data?.archive || []).map((r) => r.entityId));
   (data?.archive || []).forEach((r) => {
@@ -71,7 +95,8 @@ function normalizeData(data: AppData): AppData {
 
   const usersRaw = data?.users || [];
   const existingUserIds = new Set(usersRaw.map((user) => user.id));
-  const users = [
+  const isDev = Boolean(import.meta.env.DEV);
+  const users = isDev ? [
     ...usersRaw.map((user) => {
       const seedUser = seedData.users.find((item) => item.id === user.id);
       return {
@@ -81,12 +106,12 @@ function normalizeData(data: AppData): AppData {
       };
     }),
     ...seedData.users.filter((user) => !existingUserIds.has(user.id) && !archivedIds.has(user.id)),
-  ];
-  const skills = mergeById(data?.skills || [], seedData.skills);
-  const targetSkills = mergeById(data?.targetSkills || [], seedData.targetSkills);
-  const courses = mergeById(data?.courses || [], seedData.courses);
-  const chapters = mergeById(data?.chapters || [], seedData.chapters);
-  const assessments = mergeById(data?.assessments || [], seedData.assessments);
+  ] : usersRaw;
+  const skills = isDev ? mergeById(data?.skills || [], seedData.skills) : (data?.skills || []);
+  const targetSkills = isDev ? mergeById(data?.targetSkills || [], seedData.targetSkills) : (data?.targetSkills || []);
+  const courses = isDev ? mergeById(data?.courses || [], seedData.courses) : (data?.courses || []);
+  const chapters = isDev ? mergeById(data?.chapters || [], seedData.chapters) : (data?.chapters || []);
+  const assessments = isDev ? mergeById(data?.assessments || [], seedData.assessments) : (data?.assessments || []);
 
   const rawEnrollments = data?.enrollments || (data as any)?.assignments || [];
   const rawAttempts = data?.attempts || [];
@@ -148,7 +173,7 @@ function normalizeData(data: AppData): AppData {
 }
 
 export default function App() {
-  const [rawData, setDataState] = useLocalState<AppData>("nalanda-v3", seedData);
+  const [rawData, setDataState] = useLocalState<AppData>("nalanda-v3", import.meta.env.DEV ? seedData : emptyAppData);
   const data = normalizeData(rawData);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionVersion, setSessionVersion] = useState<number | null>(null);
@@ -296,6 +321,13 @@ export default function App() {
     if (currentUser && !navByRole[currentUser.role].some((n) => n.key === module)) setModule("dashboard");
   }, [currentUser, module]);
 
+  if (window.location.pathname.startsWith("/mobile-proctor")) {
+    return <MobileProctor />;
+  }
+  if (window.location.pathname.startsWith("/verify/")) {
+    return <VerifyCertificate />;
+  }
+
   if (isInitializing) {
     return <div className="flex min-h-screen items-center justify-center bg-slate-950 text-white font-semibold">Loading Nalanda...</div>;
   }
@@ -318,6 +350,7 @@ export default function App() {
       case "certificates": return <Certificates data={data} currentUser={currentUser} setData={setData} />;
       case "evaluation": return <Evaluation data={data} currentUser={currentUser} />;
       case "archive": return <Archive data={data} currentUser={currentUser} setData={setData} />;
+      case "proctor-cockpit": return <ProctorCockpit currentUser={currentUser} />;
       case "ai-generator": return <TextToCourseAgent data={data} currentUser={currentUser} setData={setData} onGoToCreated={() => {
         setModule("courses");
       }} />;

@@ -3,11 +3,96 @@
 import { z } from "zod";
 import { v4 as uuid } from "uuid";
 import { upload } from "../../config.js";
-import { courses, chapters, assessments, assignments, archives, now, nextCourseId } from "../../core.js";
+import { courses, chapters, assessments, assignments, archives, users, now, nextCourseId } from "../../core.js";
 import { audit, canManageCourse, coursesVisibleTo } from "../../domain.js";
 import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
 
 export function registerCourses(app) {
+  // ── Public Course Catalog (No Auth Required) ──
+  app.get("/api/catalog", (req, res) => {
+    const { skill, category, difficulty, search } = req.query;
+    let list = courses.filter((c) => c.status === "Active" && c.approval === "Approved");
+
+    if (skill) list = list.filter((c) => c.skill === skill || c.skillIds?.includes(skill));
+    if (category) list = list.filter((c) => c.category === category);
+    if (difficulty) list = list.filter((c) => c.difficulty === difficulty);
+    if (search && typeof search === "string") {
+      const q = search.toLowerCase();
+      list = list.filter((c) => (c.title || "").toLowerCase().includes(q) || (c.description || "").toLowerCase().includes(q));
+    }
+
+    const catalogItems = list.map((c) => {
+      const instructor = users.find((u) => u.id === c.ownerId);
+      const courseChapters = chapters.filter((ch) => ch.courseId === c.id);
+      const enrollmentCount = assignments.filter((a) => a.courseId === c.id).length;
+      return {
+        id: c.id,
+        title: c.title,
+        description: c.description,
+        skill: c.skill,
+        skillIds: c.skillIds || [],
+        targetLevel: c.targetLevel,
+        difficulty: c.difficulty,
+        estimatedHours: c.estimatedHours,
+        category: c.category,
+        tags: c.tags || [],
+        thumbnailColor: c.thumbnailColor || "#22d3ee",
+        priceCents: c.priceCents ?? 0,
+        currency: c.currency || "INR",
+        isFree: c.isFree ?? (c.priceCents ? c.priceCents === 0 : true),
+        instructorName: instructor?.name || "Nalanda Faculty",
+        instructorTitle: instructor?.designation || "Instructor",
+        chapterCount: courseChapters.length,
+        enrollmentCount,
+        createdAt: c.createdAt,
+      };
+    });
+
+    res.json({ data: catalogItems, total: catalogItems.length });
+  });
+
+  // ── Self-Enrollment for Learners ──
+  app.post("/api/courses/:id/enroll", authenticate, (req, res) => {
+    const course = courses.find((c) => c.id === req.params.id && c.status === "Active" && c.approval === "Approved");
+    if (!course) return res.status(404).json({ error: "Approved course not found" });
+
+    const existing = assignments.find((a) => a.courseId === course.id && a.userId === req.user.id);
+    if (existing) {
+      return res.status(200).json({ data: existing, message: "Already enrolled in this course" });
+    }
+
+    const isFree = course.isFree ?? (course.priceCents ? course.priceCents === 0 : true);
+    if (!isFree) {
+      return res.status(402).json({
+        error: "Payment required to enroll in this course",
+        priceCents: course.priceCents,
+        currency: course.currency || "INR",
+      });
+    }
+
+    const newEnrollment = {
+      id: `ENR-${Math.floor(1000 + Math.random() * 9000)}`,
+      courseId: course.id,
+      userId: req.user.id,
+      assignedBy: req.user.id,
+      dueAt: null,
+      priority: "Medium",
+      mandatory: false,
+      progress: 0,
+      completedChapters: [],
+      timeSpentMinutes: 0,
+      timeSpentSeconds: 0,
+      chapterTimeSpentSeconds: {},
+      startedAt: now(),
+      completedAt: null,
+      createdAt: now(),
+    };
+
+    assignments.push(newEnrollment);
+    audit(req.user.id, "SELF_ENROLL", "COURSE", course.id);
+    res.status(201).json({ data: newEnrollment });
+  });
+
   app.get("/api/courses", authenticate, (req, res) => {
     const { skill, approval, status = "Active" } = req.query;
     let visible = coursesVisibleTo(req.user);
@@ -48,7 +133,16 @@ export function registerCourses(app) {
       version: 1,
       createdAt: now(),
       updatedAt: now(),
-      storage: { files: Object.keys(req.files || {}) }
+      storage: {
+        files: Object.values(req.files || {}).flat().map((f) => ({
+          field: f.fieldname,
+          originalName: f.originalname,
+          filename: f.filename,
+          path: `/uploads/${f.filename}`,
+          size: f.size,
+          mimetype: f.mimetype,
+        })),
+      }
     };
     courses.unshift(course);
     audit(req.user.id, "CREATE_COURSE", "COURSE", course.id, { approval: course.approval });

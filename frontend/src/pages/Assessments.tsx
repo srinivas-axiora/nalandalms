@@ -60,6 +60,160 @@ export default function Assessments({ data, currentUser, setData }: { data: AppD
   const [uploadMode, setUploadMode] = useState(false);
   const [skillFilter, setSkillFilter] = useState("All");
   const [deleteTarget, setDeleteTarget] = useState<Assessment | null>(null);
+  const [mainView, setMainView] = useState<"assessments" | "screening" | "library">("assessments");
+  const [selectedAssessmentForScreening, setSelectedAssessmentForScreening] = useState<string>("ASM-INTERN-SWE");
+  const [analyticsData, setAnalyticsData] = useState<any | null>(null);
+  const [loadingAnalytics, setLoadingAnalytics] = useState(false);
+  const [libraryData, setLibraryData] = useState<any[]>([]);
+  const [libraryCategories, setLibraryCategories] = useState<string[]>([]);
+  const [selectedLibCategory, setSelectedLibCategory] = useState<string>("All");
+  const [selectedLibMarks, setSelectedLibMarks] = useState<string>("All");
+  const [libSearchQuery, setLibSearchQuery] = useState<string>("");
+  const [loadingLibrary, setLoadingLibrary] = useState<boolean>(false);
+  const [screeningViewingCandidate, setScreeningViewingCandidate] = useState<any | null>(null);
+  const [shareTarget, setShareTarget] = useState<Assessment | null>(null);
+  const [candidateLinks, setCandidateLinks] = useState<any[]>([]);
+  const [selectedShareLink, setSelectedShareLink] = useState<any | null>(null);
+  const [shareConfig, setShareConfig] = useState({
+    durationMinutes: 30,
+    passScore: 70,
+    questionLimit: 10,
+    proctoringRequired: true,
+    fullscreenRequired: true,
+    tabSwitchAutoSubmit: false,
+    maxTabSwitches: 3,
+  });
+  const [shareTab, setShareTab] = useState<"link" | "responses">("link");
+  const [generatingLink, setGeneratingLink] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [viewingCandidate, setViewingCandidate] = useState<any | null>(null);
+
+
+  const loadAnalytics = async (assessmentId: string) => {
+    setSelectedAssessmentForScreening(assessmentId);
+    setLoadingAnalytics(true);
+    setScreeningViewingCandidate(null);
+    try {
+      const res = await apiFetch("/candidate-assessments/analytics/" + assessmentId);
+      if (res.ok) {
+        const body = await res.json();
+        setAnalyticsData(body);
+      }
+    } catch (e) {
+      console.warn("Failed to load analytics:", e);
+    } finally {
+      setLoadingAnalytics(false);
+    }
+  };
+
+  const loadQuestionLibrary = async () => {
+    setLoadingLibrary(true);
+    try {
+      const query = new URLSearchParams();
+      if (selectedLibCategory && selectedLibCategory !== "All") query.set("category", selectedLibCategory);
+      if (selectedLibMarks && selectedLibMarks !== "All") query.set("points", selectedLibMarks);
+      if (libSearchQuery) query.set("search", libSearchQuery);
+      query.set("limit", "100");
+
+      const res = await apiFetch("/assessments/question-library?" + query.toString());
+      if (res.ok) {
+        const body = await res.json();
+        setLibraryData(body.data || []);
+        if (body.categories) setLibraryCategories(body.categories);
+      }
+    } catch (e) {
+      console.warn("Failed to load question library:", e);
+    } finally {
+      setLoadingLibrary(false);
+    }
+  };
+
+
+  useEffect(() => {
+    if (mainView === "library" && libraryData.length === 0) {
+      loadQuestionLibrary();
+    } else if (mainView === "screening" && !analyticsData) {
+      loadAnalytics(selectedAssessmentForScreening);
+    }
+  }, [mainView]);
+
+  const openScreeningView = (assessmentId: string) => {
+    setMainView("screening");
+    loadAnalytics(assessmentId);
+  };
+
+  const openShareModal = async (assessment: Assessment) => {
+    setShareTarget(assessment);
+    setShareTab("link");
+    setCopied(false);
+    setViewingCandidate(null);
+    setShareConfig({
+      durationMinutes: assessment.durationMinutes || 30,
+      passScore: assessment.passScore || 70,
+      questionLimit: assessment.questionLimit || assessment.questions.length,
+      proctoringRequired: true,
+      fullscreenRequired: true,
+      tabSwitchAutoSubmit: false,
+      maxTabSwitches: 3,
+    });
+
+    try {
+      const res = await apiFetch("/candidate-assessments");
+      if (res.ok) {
+        const body = await res.json();
+        const links = body.data || [];
+        setCandidateLinks(links);
+        const existing = links.find((l: any) => l.assessmentId === assessment.id);
+        if (existing) {
+          const detailRes = await apiFetch("/candidate-assessments/" + existing.id);
+          if (detailRes.ok) {
+            const detailBody = await detailRes.json();
+            setSelectedShareLink(detailBody.data);
+          } else {
+            setSelectedShareLink(existing);
+          }
+        } else {
+          setSelectedShareLink(null);
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to load candidate assessments:", e);
+    }
+  };
+
+  const generateShareLink = async () => {
+    if (!shareTarget) return;
+    setGeneratingLink(true);
+    try {
+      const res = await apiFetch("/candidate-assessments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          assessmentId: shareTarget.id,
+          ...shareConfig,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || "Failed to create shareable link.");
+      setSelectedShareLink(body.data);
+      setCandidateLinks((prev) => [body.data, ...prev]);
+      toast("Shareable assessment link generated successfully!");
+    } catch (err: any) {
+      toast(err.message || "Failed to generate link.");
+    } finally {
+      setGeneratingLink(false);
+    }
+  };
+
+  const copyShareLink = () => {
+    if (!selectedShareLink) return;
+    const url = window.location.origin + "/candidate-assessment/" + selectedShareLink.token;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      toast("Assessment link copied to clipboard!");
+      setTimeout(() => setCopied(false), 3000);
+    });
+  };
 
   const addAudit = (d: AppData, a: string, e: string): AppData => ({ ...d, audit: [{ id: uid("AUD"), actorId: currentUser.id, action: a, entity: e, at: now() }, ...d.audit] });
 
@@ -418,6 +572,8 @@ export default function Assessments({ data, currentUser, setData }: { data: AppD
                     <div className="rounded-xl border border-white/10 p-2"><p className="text-xs text-slate-500">Bank / shown</p><p className="font-semibold text-white">{assessment.questions.length}/{assessment.questionLimit || 10}</p></div>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
+                    <button onClick={() => openScreeningView(assessment.id)} className="action-btn rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-bold text-cyan-200 hover:bg-cyan-400/20">📊 Screening & Results</button>
+                    <button onClick={() => openShareModal(assessment)} className="action-btn rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 px-3 py-2 text-xs font-bold text-slate-950 hover:opacity-90">🔗 Share Test</button>
                     <button onClick={() => openEditPage(assessment)} className="action-btn rounded-full border border-white/10 px-3 py-2 text-xs font-semibold text-cyan-100">Edit</button>
                     {isAdminRole(currentUser.role) && <button onClick={() => toggleAssessmentStatus(assessment)} className={cn("action-btn rounded-full border px-3 py-2 text-xs font-semibold", (assessment.status || "Active") === "Active" ? "border-amber-300/30 text-amber-200" : "border-emerald-300/30 text-emerald-200")}>{(assessment.status || "Active") === "Active" ? "Deactivate" : "Activate"}</button>}
                     {isAdminRole(currentUser.role) && assessment.approval === "Pending" && <>
@@ -514,6 +670,250 @@ export default function Assessments({ data, currentUser, setData }: { data: AppD
               )}
               <button className="rounded-full bg-cyan-300 px-5 py-3 font-bold text-slate-950 md:col-span-2">Save assessment {!isAdminRole(currentUser.role) ? "(→ Pending)" : ""}</button>
             </form>
+          </Modal>
+        )}
+
+        {shareTarget && (
+          <Modal title={"Candidate Assessment: " + shareTarget.title} onClose={() => setShareTarget(null)}>
+            <div className="space-y-6">
+              {/* Modal Tabs */}
+              <div className="flex border-b border-white/10 gap-3 pb-3">
+                <button
+                  type="button"
+                  onClick={() => setShareTab("link")}
+                  className={cn("px-4 py-2 rounded-xl text-xs font-bold transition", shareTab === "link" ? "bg-cyan-300 text-slate-950" : "text-slate-400 hover:text-white")}
+                >
+                  🔗 Shareable Link & Settings
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShareTab("responses")}
+                  className={cn("px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2", shareTab === "responses" ? "bg-cyan-300 text-slate-950" : "text-slate-400 hover:text-white")}
+                >
+                  <span>📋 Candidate Responses</span>
+                  <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-cyan-200">
+                    {(selectedShareLink?.submissions || []).length}
+                  </span>
+                </button>
+              </div>
+
+              {/* Tab 1: Shareable Link */}
+              {shareTab === "link" && (
+                <div className="space-y-5">
+                  {selectedShareLink ? (
+                    <div className="space-y-4">
+                      <div className="rounded-2xl border border-cyan-400/30 bg-cyan-400/5 p-4 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold uppercase tracking-wider text-cyan-300">Public Candidate Test Link</span>
+                          <span className="text-xs font-bold text-emerald-400">● {selectedShareLink.status}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            readOnly
+                            value={window.location.origin + "/candidate-assessment/" + selectedShareLink.token}
+                            className="flex-1 rounded-xl border border-white/10 bg-slate-900 px-3.5 py-2.5 text-xs text-white font-mono select-all focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={copyShareLink}
+                            className="rounded-xl bg-cyan-300 px-4 py-2.5 text-xs font-bold text-slate-950 hover:bg-cyan-200 active:scale-95 transition"
+                          >
+                            {copied ? "Copied!" : "Copy Link"}
+                          </button>
+                          <a
+                            href={"/candidate-assessment/" + selectedShareLink.token}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-xs font-semibold text-slate-200 hover:bg-white/10"
+                          >
+                            Preview ↗
+                          </a>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                          <p className="text-slate-400">Duration</p>
+                          <p className="text-base font-bold text-white mt-1">{selectedShareLink.durationMinutes} mins</p>
+                        </div>
+                        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                          <p className="text-slate-400">Pass Score</p>
+                          <p className="text-base font-bold text-emerald-400 mt-1">{selectedShareLink.passScore}%</p>
+                        </div>
+                        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                          <p className="text-slate-400">Proctoring</p>
+                          <p className="text-base font-bold text-cyan-300 mt-1">{selectedShareLink.proctoringRequired ? "Webcam & Fullscreen" : "Off"}</p>
+                        </div>
+                        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                          <p className="text-slate-400">Single Email Rule</p>
+                          <p className="text-base font-bold text-amber-300 mt-1">Enforced (1/email)</p>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl bg-slate-900/80 border border-white/10 p-3 text-xs text-slate-400 leading-relaxed">
+                        💡 <strong>How it works:</strong> Anyone with this link can open it in their browser without an account, enter their Name & Email, pass proctoring readiness, and take the assessment. Duplicate submissions under the same email ID are automatically rejected.
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <p className="text-xs text-slate-300 leading-relaxed">
+                        Create a shareable link for this assessment just like a Google Form. External candidates can click the link, input their email, and complete the proctored test.
+                      </p>
+                      <div className="grid grid-cols-2 gap-4">
+                        <Input
+                          label="Duration (minutes)"
+                          type="number"
+                          value={String(shareConfig.durationMinutes)}
+                          onChange={(v) => setShareConfig({ ...shareConfig, durationMinutes: Number(v) || 30 })}
+                        />
+                        <Input
+                          label="Pass Score (%)"
+                          type="number"
+                          value={String(shareConfig.passScore)}
+                          onChange={(v) => setShareConfig({ ...shareConfig, passScore: Number(v) || 70 })}
+                        />
+                      </div>
+
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
+                        <label className="flex items-center gap-3 text-xs text-slate-300 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={shareConfig.proctoringRequired}
+                            onChange={(e) => setShareConfig({ ...shareConfig, proctoringRequired: e.target.checked })}
+                            className="accent-cyan-300 h-4 w-4"
+                          />
+                          <span>Require Camera Proctoring & Edge Face Detection</span>
+                        </label>
+                        <label className="flex items-center gap-3 text-xs text-slate-300 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={shareConfig.fullscreenRequired}
+                            onChange={(e) => setShareConfig({ ...shareConfig, fullscreenRequired: e.target.checked })}
+                            className="accent-cyan-300 h-4 w-4"
+                          />
+                          <span>Enforce Fullscreen Mode & Tab Switch Tracking</span>
+                        </label>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={generateShareLink}
+                        disabled={generatingLink}
+                        className="w-full rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 py-3.5 text-xs font-bold text-slate-950 hover:opacity-95 transition disabled:opacity-50"
+                      >
+                        {generatingLink ? "Generating Link..." : "Generate Shareable Assessment Link"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Tab 2: Candidate Responses */}
+              {shareTab === "responses" && (
+                <div className="space-y-4">
+                  {viewingCandidate ? (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                        <div>
+                          <h4 className="text-sm font-bold text-white">{viewingCandidate.candidateName}</h4>
+                          <p className="text-xs text-slate-400">{viewingCandidate.candidateEmail}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setViewingCandidate(null)}
+                          className="rounded-full border border-white/10 px-3 py-1 text-xs text-slate-300 hover:bg-white/5"
+                        >
+                          ← Back to candidates list
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-4 gap-2 text-xs">
+                        <div className="rounded-xl border border-white/10 p-2 text-center">
+                          <p className="text-slate-500">Result</p>
+                          <p className={cn("font-bold", viewingCandidate.passed ? "text-emerald-400" : "text-rose-400")}>
+                            {viewingCandidate.status}
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-white/10 p-2 text-center">
+                          <p className="text-slate-500">Score</p>
+                          <p className="font-bold text-white">{viewingCandidate.score}/{viewingCandidate.maxScore} ({viewingCandidate.percentage}%)</p>
+                        </div>
+                        <div className="rounded-xl border border-white/10 p-2 text-center">
+                          <p className="text-slate-500">Trust Score</p>
+                          <p className="font-bold text-cyan-300">{viewingCandidate.trustScore}%</p>
+                        </div>
+                        <div className="rounded-xl border border-white/10 p-2 text-center">
+                          <p className="text-slate-500">Time Spent</p>
+                          <p className="font-bold text-white">{Math.floor((viewingCandidate.timeSpentSeconds || 0) / 60)}m {(viewingCandidate.timeSpentSeconds || 0) % 60}s</p>
+                        </div>
+                      </div>
+
+                      {/* Proctoring Flags Breakdown */}
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
+                        <h5 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                          Proctoring Incident Timeline ({(viewingCandidate.flags || []).length} events)
+                        </h5>
+                        {(viewingCandidate.flags || []).length === 0 ? (
+                          <p className="text-xs text-emerald-400">✓ No proctoring violations recorded for this candidate.</p>
+                        ) : (
+                          <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                            {viewingCandidate.flags.map((flag: any, idx: number) => (
+                              <div key={idx} className="flex items-center justify-between rounded-xl border border-white/5 bg-slate-900/60 p-2 text-xs">
+                                <div className="flex items-center gap-2">
+                                  <span className={cn("h-2 w-2 rounded-full", flag.severity === "high" ? "bg-rose-400" : "bg-amber-400")} />
+                                  <span className="font-semibold text-slate-200">{flag.eventType}</span>
+                                  <span className="text-slate-500 text-[11px]">({flag.severity})</span>
+                                </div>
+                                <span className="text-[11px] text-slate-400">Trust: {flag.trustScoreAfter}%</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      {(!selectedShareLink?.submissions || selectedShareLink.submissions.length === 0) ? (
+                        <div className="text-center py-8 space-y-2">
+                          <p className="text-sm text-slate-400">No candidates have submitted responses yet.</p>
+                          <p className="text-xs text-slate-500">Share the link with your candidates to start collecting responses.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                          {selectedShareLink.submissions.map((sub: any) => (
+                            <div
+                              key={sub.id}
+                              className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.02] p-3 text-xs hover:border-white/20 transition"
+                            >
+                              <div>
+                                <p className="font-semibold text-white">{sub.candidateName}</p>
+                                <p className="text-slate-400 text-[11px]">{sub.candidateEmail}</p>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className={cn("px-2.5 py-1 rounded-full font-bold text-[10px]", sub.passed ? "bg-emerald-400/10 text-emerald-400 border border-emerald-400/20" : "bg-rose-400/10 text-rose-400 border border-rose-400/20")}>
+                                  {sub.status || (sub.passed ? "Passed" : "Failed")} ({sub.percentage || 0}%)
+                                </span>
+                                <span className="text-slate-400 text-[11px]">
+                                  Trust: <strong className="text-white">{sub.trustScore ?? 100}%</strong>
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setViewingCandidate(sub)}
+                                  className="rounded-xl border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-cyan-200 hover:bg-white/10"
+                                >
+                                  Details
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </Modal>
         )}
         {deleteTarget && (

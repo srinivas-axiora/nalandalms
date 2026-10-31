@@ -7,10 +7,135 @@ import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { fileURLToPath } from "node:url";
 import { createStorage } from "../db.js";
+import {
+  pythonFullStackCourse,
+  pythonFullStackSkills,
+  pythonFullStackChapters,
+  pythonFullStackAssessments,
+} from "./seed/courses/python-fullstack/index.js";
+import {
+  javaFullStackCourse,
+  javaFullStackSkills,
+  javaFullStackChapters,
+  javaFullStackAssessments,
+} from "./seed/courses/java-fullstack/index.js";
+import {
+  dataScienceCourse,
+  dataScienceSkills,
+  dataScienceChapters,
+  dataScienceAssessments,
+} from "./seed/courses/data-science/index.js";
+import {
+  aiMlCourse,
+  aiMlSkills,
+  aiMlChapters,
+  aiMlAssessments,
+} from "./seed/courses/ai-ml/index.js";
+import {
+  manualTestingCourse,
+  manualTestingSkills,
+  manualTestingChapters,
+  manualTestingAssessments,
+} from "./seed/courses/manual-testing/index.js";
+import {
+  automationTestingCourse,
+  automationTestingSkills,
+  automationTestingChapters,
+  automationTestingAssessments,
+} from "./seed/courses/automation-testing/index.js";
+import {
+  dataAnalyticsCourse,
+  dataAnalyticsSkills,
+  dataAnalyticsChapters,
+  dataAnalyticsAssessments,
+} from "./seed/courses/data-analytics/index.js";
+import {
+  devopsCourse,
+  devopsSkills,
+  devopsChapters,
+  devopsAssessments,
+} from "./seed/courses/devops/index.js";
+import {
+  mlopsCourse,
+  mlopsSkills,
+  mlopsChapters,
+  mlopsAssessments,
+} from "./seed/courses/mlops/index.js";
+import {
+  dataEngineerCourse,
+  dataEngineerSkills,
+  dataEngineerChapters,
+  dataEngineerAssessments,
+} from "./seed/courses/data-engineer/index.js";
+import {
+  digitalMarketingCourse,
+  digitalMarketingSkills,
+  digitalMarketingChapters,
+  digitalMarketingAssessments,
+} from "./seed/courses/digital-marketing/index.js";
+import {
+  uiUxCourse,
+  uiUxSkills,
+  uiUxChapters,
+  uiUxAssessments,
+} from "./seed/courses/ui-ux/index.js";
+import {
+  reactDeveloperCourse,
+  reactDeveloperSkills,
+  reactDeveloperChapters,
+  reactDeveloperAssessments,
+} from "./seed/courses/react-developer/index.js";
+import {
+  forwardDeployCourse,
+  forwardDeploySkills,
+  forwardDeployChapters,
+  forwardDeployAssessments,
+} from "./seed/courses/forward-deploy-engineer/index.js";
+import {
+  businessAnalystCourse,
+  businessAnalystSkills,
+  businessAnalystChapters,
+  businessAnalystAssessments,
+} from "./seed/courses/business-analyst/index.js";
+import {
+  humanResourcesCourse,
+  humanResourcesSkills,
+  humanResourcesChapters,
+  humanResourcesAssessments,
+} from "./seed/courses/human-resources/index.js";
+import {
+  salesExecutiveCourse,
+  salesExecutiveSkills,
+  salesExecutiveChapters,
+  salesExecutiveAssessments,
+} from "./seed/courses/sales-executive/index.js";
+import {
+  payrollComplianceCourse,
+  payrollComplianceSkills,
+  payrollComplianceChapters,
+  payrollComplianceAssessments,
+} from "./seed/courses/payroll-compliance/index.js";
+import {
+  technicalArchitectCourse,
+  technicalArchitectSkills,
+  technicalArchitectChapters,
+  technicalArchitectAssessments,
+} from "./seed/courses/technical-architect/index.js";
+import {
+  sixSigmaCourse,
+  sixSigmaSkills,
+  sixSigmaChapters,
+  sixSigmaAssessments,
+} from "./seed/courses/six-sigma-operations/index.js";
+import {
+  questionLibrary,
+  draftInternAssessments,
+} from "./seed/question-library/questions.js";
+import { seedCandidateAssessments } from "./seed/question-library/seed-submissions.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
-const roles = ["Super Admin", "Admin", "Manager", "Employee"];
+const roles = ["Super Admin", "Admin", "Manager", "Employee", "Learner", "Instructor", "InstituteAdmin"];
 const adminRoles = ["Super Admin", "Admin"];
 const now = () => new Date().toISOString();
 const nextCourseId = (skill = "GN") => `NLD-${skill.slice(0, 2).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -89,6 +214,26 @@ if (IS_PRODUCTION && !process.env.SEED_SUPERADMIN_PASSWORD) {
 }
 
 const skills = [
+  ...javaFullStackSkills,
+  ...pythonFullStackSkills,
+  ...dataScienceSkills,
+  ...aiMlSkills,
+  ...manualTestingSkills,
+  ...automationTestingSkills,
+  ...dataAnalyticsSkills,
+  ...devopsSkills,
+  ...mlopsSkills,
+  ...dataEngineerSkills,
+  ...digitalMarketingSkills,
+  ...uiUxSkills,
+  ...reactDeveloperSkills,
+  ...forwardDeploySkills,
+  ...businessAnalystSkills,
+  ...humanResourcesSkills,
+  ...salesExecutiveSkills,
+  ...payrollComplianceSkills,
+  ...technicalArchitectSkills,
+  ...sixSigmaSkills,
   { id: "SKILL-SEC", name: "Security", category: "Technical", description: "Secure coding, OWASP controls, and threat modeling.", status: "Active", createdAt: now() },
   { id: "SKILL-LEAD", name: "Leadership", category: "Leadership", description: "Feedback, coaching, and team development practices.", status: "Active", createdAt: now() },
   { id: "SKILL-ANL", name: "Analytics", category: "Functional", description: "Data interpretation, storytelling, and business review skills.", status: "Active", createdAt: now() },
@@ -127,6 +272,26 @@ const chapterFeedbacks = [
 ];
 
 const courses = [
+  javaFullStackCourse,
+  pythonFullStackCourse,
+  dataScienceCourse,
+  aiMlCourse,
+  manualTestingCourse,
+  automationTestingCourse,
+  dataAnalyticsCourse,
+  devopsCourse,
+  mlopsCourse,
+  dataEngineerCourse,
+  digitalMarketingCourse,
+  uiUxCourse,
+  reactDeveloperCourse,
+  forwardDeployCourse,
+  businessAnalystCourse,
+  humanResourcesCourse,
+  salesExecutiveCourse,
+  payrollComplianceCourse,
+  technicalArchitectCourse,
+  sixSigmaCourse,
   { id: "CRS-001", title: "Secure Coding for Cloud Teams", description: "Threat modeling, OWASP controls, and secure release patterns.", skill: "Security", skillIds: ["SKILL-SEC"], targetLevel: "Advanced", prerequisites: [], category: "Technical", tags: ["OWASP", "Cloud"], thumbnailColor: "#22d3ee", ownerId: "EMP-1003", approval: "Approved", status: "Active", version: 2, difficulty: "Advanced", estimatedHours: 6, createdAt: now(), updatedAt: now() },
   { id: "CRS-002", title: "Manager Essentials: Feedback Systems", description: "Practical rituals for coaching and performance reviews.", skill: "Leadership", skillIds: ["SKILL-LEAD", "SKILL-COMM"], targetLevel: "Intermediate", prerequisites: [], category: "Soft Skills", tags: ["Coaching", "People"], thumbnailColor: "#a78bfa", ownerId: "EMP-1002", approval: "Approved", status: "Active", version: 1, difficulty: "Intermediate", estimatedHours: 4, createdAt: now(), updatedAt: now() },
   { id: "CRS-003", title: "Data Storytelling for Business Reviews", description: "Build executive narratives with evidence and charts.", skill: "Analytics", skillIds: ["SKILL-ANL"], targetLevel: "Beginner", prerequisites: [], category: "Business", tags: ["BI", "Charts"], thumbnailColor: "#34d399", ownerId: "EMP-1003", approval: "Pending", status: "Active", version: 1, difficulty: "Beginner", estimatedHours: 3, createdAt: now(), updatedAt: now() },
@@ -136,6 +301,26 @@ const courses = [
 ];
 
 const chapters = [
+  ...javaFullStackChapters,
+  ...pythonFullStackChapters,
+  ...dataScienceChapters,
+  ...aiMlChapters,
+  ...manualTestingChapters,
+  ...automationTestingChapters,
+  ...dataAnalyticsChapters,
+  ...devopsChapters,
+  ...mlopsChapters,
+  ...dataEngineerChapters,
+  ...digitalMarketingChapters,
+  ...uiUxChapters,
+  ...reactDeveloperChapters,
+  ...forwardDeployChapters,
+  ...businessAnalystChapters,
+  ...humanResourcesChapters,
+  ...salesExecutiveChapters,
+  ...payrollComplianceChapters,
+  ...technicalArchitectChapters,
+  ...sixSigmaChapters,
   { id: "CH-001", courseId: "CRS-001", sequence: 1, title: "Threat Model Primer", description: "Identify assets, actors, and trust boundaries.", contentType: "Rich Text", body: "A threat model identifies what you're protecting (assets), who might attack (threat actors), where trust changes (boundaries), and what could go wrong (threats). Document controls and validation evidence before every release.", durationMinutes: 25, minimumTimeMinutes: 15, createdAt: now(), updatedAt: now() },
   { id: "CH-002", courseId: "CRS-001", sequence: 2, title: "OWASP Top 10 Deep Dive", description: "Master the OWASP Top 10 vulnerabilities.", contentType: "PDF", body: "Comprehensive walkthrough of all OWASP Top 10 items with real-world exploit examples and mitigation strategies.", fileName: "owasp-top10.pdf", durationMinutes: 35, minimumTimeMinutes: 25, createdAt: now(), updatedAt: now() },
   { id: "CH-003", courseId: "CRS-001", sequence: 3, title: "Secret Scanning & CI/CD", description: "Automated secret detection in pipelines.", contentType: "Video Link", body: "Learn to configure secret scanning tools in your CI/CD pipeline.", url: "https://www.youtube.com/embed/dQw4w9WgXcQ", durationMinutes: 20, minimumTimeMinutes: 10, createdAt: now(), updatedAt: now() },
@@ -196,6 +381,7 @@ const generatedAssessments = chapters.filter(ch => ch.id.startsWith("CH-QA-") ||
 }));
 
 const assessments = [
+  ...draftInternAssessments,
   { id: "ASM-001", title: "Threat Model Assessment", chapterId: "CH-001", courseId: "CRS-001", type: "MCQ", ownerId: "EMP-1003", approval: "Approved", durationMinutes: 15, passScore: 70, questions: [
     { id: "Q-001", type: "MCQ", prompt: "What should be documented first in a threat model?", options: ["Team lunch plan", "Assets and trust boundaries", "Marketing launch", "Sprint velocity"], answer: 1, points: 25 },
     { id: "Q-002", type: "MCQ", prompt: "Which control prevents API key exposure in production?", options: ["Manual approval", "CI secret scanning", "Quarterly email", "Post-release audit"], answer: 1, points: 25 },
@@ -214,7 +400,29 @@ const assessments = [
     { id: "Q-007", type: "MCQ", prompt: "What does GROW stand for?", options: ["Goal Reality Options Will", "Growth Review Outcome Work", "Guide Reflect Observe Write", "Goal Results Objectives Win"], answer: 0, points: 50 },
   ], createdAt: now(), updatedAt: now() },
   ...generatedAssessments,
+  ...javaFullStackAssessments,
+  ...pythonFullStackAssessments,
+  ...dataScienceAssessments,
+  ...aiMlAssessments,
+  ...manualTestingAssessments,
+  ...automationTestingAssessments,
+  ...dataAnalyticsAssessments,
+  ...devopsAssessments,
+  ...mlopsAssessments,
+  ...dataEngineerAssessments,
+  ...digitalMarketingAssessments,
+  ...uiUxAssessments,
+  ...reactDeveloperAssessments,
+  ...forwardDeployAssessments,
+  ...businessAnalystAssessments,
+  ...humanResourcesAssessments,
+  ...salesExecutiveAssessments,
+  ...payrollComplianceAssessments,
+  ...technicalArchitectAssessments,
+  ...sixSigmaAssessments,
 ];
+
+const cohorts = [];
 
 const assignments = [
   { id: "ENR-001", courseId: "CRS-001", userId: "EMP-1004", assignedBy: "EMP-1003", dueAt: "2026-05-20", priority: "High", mandatory: true, progress: 66, completedChapters: ["CH-001", "CH-002"], timeSpentSeconds: 5040, timeSpentMinutes: 84, chapterTimeSpentSeconds: { "CH-001": 2400, "CH-002": 2640 }, completedAt: null, createdAt: now() },
@@ -288,6 +496,7 @@ const seedCommunications = [
   { id: "MSG-003", senderId: "EMP-1003", senderName: "Kabir Sethi", recipientId: "EMP-1004", content: "Hi Diya, please ensure you complete the 'Secure Coding for Cloud Teams' course by the end of next week. Let me know if you run into any blockers.", sentAt: now() }
 ];
 const communications = [...seedCommunications];
+const candidateAssessments = [...seedCandidateAssessments];
 let settings = { fullscreenRequired: true, cameraRequired: true, microphoneRequired: true, tabSwitchAutoSubmit: true, noiseThreshold: 70, maxAssessmentFlags: 2 };
 
 // Video progress store (temporary before PostgreSQL migration)
@@ -303,6 +512,11 @@ const snapshot = () => ({
   chapters,
   assessments,
   assignments,
+  cohorts,
+  attempts,
+  assignments,
+  cohorts,
+  cohorts,
   attempts,
   proctoringLogs,
   auditLogs,
@@ -322,7 +536,8 @@ const snapshot = () => ({
   chapterFeedbacks,
   attendanceLogs,
   performanceReviews,
-  communications
+  communications,
+  candidateAssessments
 });
 
 const saveDb = async () => {
@@ -354,6 +569,7 @@ const loadDb = async () => {
     if (data.chapters) { chapters.length = 0; chapters.push(...data.chapters); }
     if (data.assessments) { assessments.length = 0; assessments.push(...data.assessments); }
     if (data.assignments) { assignments.length = 0; assignments.push(...data.assignments); }
+    if (data.cohorts) { cohorts.length = 0; cohorts.push(...data.cohorts); }
     if (data.attempts) { attempts.length = 0; attempts.push(...data.attempts); }
     if (data.proctoringLogs) { proctoringLogs.length = 0; proctoringLogs.push(...data.proctoringLogs); }
     if (data.auditLogs) { auditLogs.length = 0; auditLogs.push(...data.auditLogs); }
@@ -374,6 +590,7 @@ const loadDb = async () => {
     if (data.attendanceLogs) { attendanceLogs.length = 0; attendanceLogs.push(...data.attendanceLogs); }
     if (data.performanceReviews) { performanceReviews.length = 0; performanceReviews.push(...data.performanceReviews); }
     if (data.communications) { communications.length = 0; communications.push(...data.communications); }
+    if (data.candidateAssessments) { candidateAssessments.length = 0; candidateAssessments.push(...data.candidateAssessments); }
   } catch (err) {
     console.error("[persist] load failed:", err?.message || err);
     throw err;
@@ -413,6 +630,7 @@ export {
   generatedAssessments,
   assessments,
   assignments,
+  cohorts,
   attempts,
   proctoringLogs,
   auditLogs,
@@ -431,4 +649,6 @@ export {
   attendanceLogs,
   performanceReviews,
   communications,
+  candidateAssessments,
+  questionLibrary,
 };

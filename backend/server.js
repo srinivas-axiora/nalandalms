@@ -17,7 +17,7 @@ import {
   now, isAdmin, users, courses, chapters, assessments, assignments, attempts, proctoringLogs,
   learningTimeEvents, reportExports, auditLogs, securityEvents, archives,
   skills, targetSkills, skillRatings, chapterFeedbacks, settings,
-  issuedCertificates, acharyaFeedbackMemory, storage, saveDb, loadDb,
+  issuedCertificates, acharyaFeedbackMemory, candidateAssessments, storage, saveDb, loadDb,
 } from "./src/core.js";
 import {
   publicUser, visibleUserIdsFor, coursesVisibleTo, assignmentVisibleTo,
@@ -28,6 +28,12 @@ import {
 } from "./src/middleware.js";
 
 import { registerCertificates } from "./src/modules/certificates/certificates.routes.js";
+import { registerUploads } from "./src/modules/uploads/uploads.routes.js";
+import { registerPayments } from "./src/modules/payments/payments.routes.js";
+import { registerCohorts } from "./src/modules/cohorts/cohorts.routes.js";
+import { registerPrivacyCompliance } from "./src/modules/governance/privacy.routes.js";
+import { requestCorrelationMiddleware, logger } from "./src/logging/logger.js";
+import { storageMode } from "./src/storage/object-store.js";
 import { registerGovernance } from "./src/modules/governance/governance.routes.js";
 import { registerSettings } from "./src/modules/settings/settings.routes.js";
 import { registerSkills } from "./src/modules/skills/skills.routes.js";
@@ -37,15 +43,22 @@ import { registerAuth } from "./src/modules/auth/auth.routes.js";
 import { registerUsers } from "./src/modules/users/users.routes.js";
 import { registerEnrollments } from "./src/modules/enrollments/enrollments.routes.js";
 import { registerProctoring } from "./src/modules/proctoring/proctoring.routes.js";
+import { registerCockpit } from "./src/modules/proctoring/cockpit.routes.js";
 import { registerCourses } from "./src/modules/courses/courses.routes.js";
 import { registerChapters } from "./src/modules/chapters/chapters.routes.js";
 import { registerAssessments } from "./src/modules/assessments/assessments.routes.js";
+import { registerCandidateAssessments } from "./src/modules/assessments/candidate-assessments.routes.js";
 import { registerAI } from "./src/modules/ai/ai.routes.js";
+import * as usersRepo from "./src/repositories/users.repository.pg.js";
+import * as coursesRepo from "./src/repositories/courses.repository.pg.js";
+import * as chaptersRepo from "./src/repositories/chapters.repository.pg.js";
+import * as assessmentsRepo from "./src/repositories/assessments.repository.pg.js";
+import * as enrollmentsRepo from "./src/repositories/enrollments.repository.pg.js";
 import * as skillsRepo from "./src/repositories/skills.repository.pg.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Phase-2 gated cutover: when on, skills/target-skills reads come from PostgreSQL.
-const USE_PG_SKILLS = process.env.USE_PG_SKILLS === "1";
+const USE_PG = process.env.USE_PG === "1";
+const USE_PG_SKILLS = USE_PG || process.env.USE_PG_SKILLS === "1";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -58,6 +71,7 @@ app.use(cookieParser());
 app.use(verifyCsrf);
 app.use("/api", rateLimit({ windowMs: 60_000, max: 600, scope: "ip", name: "global" }));
 app.use(persistResponseMiddleware);
+app.use(requestCorrelationMiddleware);
 app.use(securityLoggingMiddleware);
 
 // ── Feature module registration ──
@@ -71,16 +85,41 @@ registerAuth(app);
 registerUsers(app);
 registerEnrollments(app);
 registerProctoring(app);
+registerCockpit(app);
 registerCourses(app);
 registerChapters(app);
 registerAssessments(app);
+registerCandidateAssessments(app);
 registerAI(app);
 registerCertificates(app);
+registerUploads(app);
+registerPayments(app);
+registerCohorts(app);
+registerPrivacyCompliance(app);
 
 // ── System routes ──
 app.get("/api/health", (_req, res) => {
   const apiKey = getGeminiApiKey();
-  res.json({ ok: true, service: "Nalanda API", time: now(), geminiConfigured: Boolean(apiKey), geminiModel: GEMINI_MODEL });
+  const mem = process.memoryUsage();
+  res.json({
+    ok: true,
+    service: "Nalanda API",
+    version: "2.0.0-gtm",
+    uptimeSeconds: Math.round(process.uptime()),
+    time: now(),
+    geminiConfigured: Boolean(apiKey),
+    geminiModel: GEMINI_MODEL,
+    status: {
+      api: "healthy",
+      storage: { mode: storageMode, operational: true },
+      database: { mode: "file-json", connected: true }
+    },
+    system: {
+      memoryRssMb: Math.round(mem.rss / (1024 * 1024)),
+      memoryHeapUsedMb: Math.round(mem.heapUsed / (1024 * 1024)),
+      memoryHeapTotalMb: Math.round(mem.heapTotal / (1024 * 1024))
+    }
+  });
 });
 
 app.get("/api/csrf-token", (req, res) => {
@@ -129,9 +168,12 @@ app.get("/api/app-data", authenticate, async (req, res) => {
     skills: allSkills,
     targetSkills: allTargetSkills.filter((target) => targetSkillVisibleTo(target, req.user)),
     skillRatings: skillRatings.filter((rating) => admin || visibleUserIds.has(rating.userId)),
-    chapterFeedbacks: chapterFeedbacks.filter((feedback) => admin || feedback.userId === req.user.id || visibleCourseIds.has(feedback.courseId))
+    chapterFeedbacks: chapterFeedbacks.filter((feedback) => admin || feedback.userId === req.user.id || (req.user.role === "Manager" && visibleUserIds.has(feedback.userId))),
+    candidateAssessments: admin ? candidateAssessments : candidateAssessments.filter((c) => c.createdBy === req.user.id)
   });
 });
+
+app.use("/uploads", express.static(path.resolve(process.cwd(), "uploads")));
 
 // ── Serve Frontend Production Build ──
 const frontendDistPath = path.resolve(__dirname, "../frontend/dist");
@@ -176,4 +218,8 @@ const shutdown = async (signal) => {
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
-start();
+if (process.env.NODE_ENV !== "test") {
+  start();
+}
+
+export { app, start };

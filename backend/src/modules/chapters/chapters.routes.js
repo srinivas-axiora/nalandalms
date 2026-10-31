@@ -5,6 +5,7 @@ import { sanitizeHtmlServer } from "../../lib.js";
 import { courses, chapters, assignments, videoProgress, now, MAX_CHAPTER_TIME_INCREMENT_SECONDS } from "../../core.js";
 import { canManageCourse, coursesVisibleTo, addChapterTime, chapterTimeFor, assessmentTimeFor, audit } from "../../domain.js";
 import { authenticate, requireRole } from "../../middleware.js";
+import { canAccessChapter, recordChapterHeartbeat } from "../enrollments/progress.service.js";
 
 export function registerChapters(app) {
   app.get("/api/courses/:courseId/chapters", authenticate, (req, res) => {
@@ -13,9 +14,13 @@ export function registerChapters(app) {
     if (!coursesVisibleTo(req.user).some((item) => item.id === course.id)) {
       return res.status(403).json({ error: "Forbidden" });
     }
-    const data = chapters
+    const rawChapters = chapters
       .filter((chapter) => chapter.courseId === req.params.courseId)
       .sort((a, b) => a.sequence - b.sequence);
+    const data = rawChapters.map((ch) => {
+      const access = canAccessChapter({ courseId: req.params.courseId, chapterId: ch.id, userId: req.user.id, userRole: req.user.role });
+      return { ...ch, isLocked: !access.allowed, lockReason: access.allowed ? null : access.error };
+    });
     res.json({ data, total: data.length });
   });
 
@@ -110,6 +115,8 @@ export function registerChapters(app) {
     if (!course) return res.status(404).json({ error: "Course not found" });
     const chapter = chapters.find((item) => item.id === req.params.chapterId && item.courseId === req.params.courseId);
     if (!chapter) return res.status(404).json({ error: "Chapter not found" });
+    const access = canAccessChapter({ courseId: req.params.courseId, chapterId: req.params.chapterId, userId: req.user.id, userRole: req.user.role });
+    if (!access.allowed) return res.status(access.status || 403).json({ error: access.error, requiredChapterId: access.requiredChapterId });
 
     const assignment = addChapterTime({ courseId: req.params.courseId, chapterId: req.params.chapterId, userId: req.user.id, seconds: parsed.data.seconds });
     const chapterTimeSeconds = chapterTimeFor(assignment, req.params.chapterId);
@@ -142,5 +149,27 @@ export function registerChapters(app) {
       minimumTimeSeconds,
       minimumTimeMet: chapterTimeSeconds >= minimumTimeSeconds
     });
+  });
+  app.post("/api/courses/:courseId/chapters/:chapterId/heartbeat", authenticate, (req, res) => {
+    const schema = z.object({
+      currentPositionSeconds: z.number().nonnegative().optional(),
+      incrementSeconds: z.number().positive().optional()
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+    try {
+      const result = recordChapterHeartbeat({
+        courseId: req.params.courseId,
+        chapterId: req.params.chapterId,
+        userId: req.user.id,
+        userRole: req.user.role,
+        currentPositionSeconds: parsed.data.currentPositionSeconds ?? 0,
+        incrementSeconds: parsed.data.incrementSeconds ?? 15
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message, details: err.details });
+    }
   });
 }

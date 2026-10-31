@@ -10,5 +10,7 @@ export const issueCertificateSchema = z.object({
   duration: z.string().default(""),
   subtitle: z.string().default(""),
   footer: z.string().default(""),
-  htmlSnapshot: z.string(),
+  htmlSnapshot: z.string().default("<div/>"),
+  proctoringVerified: z.boolean().default(true),
+  examScore: z.number().optional(),
 });

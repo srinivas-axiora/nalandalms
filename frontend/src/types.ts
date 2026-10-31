@@ -1,6 +1,6 @@
 // Types for the Nalanda L&D Platform
-export type Role = "Super Admin" | "Admin" | "Manager" | "Employee";
-export type ModuleKey = "dashboard" | "my-learning" | "courses" | "chapters" | "assessments" | "team" | "users" | "settings" | "skills" | "reports" | "certificates" | "evaluation" | "archive" | "ai-generator";
+export type Role = "Super Admin" | "Admin" | "Manager" | "Employee" | "Learner" | "Instructor" | "InstituteAdmin";
+export type ModuleKey = "dashboard" | "my-learning" | "courses" | "chapters" | "assessments" | "team" | "users" | "settings" | "skills" | "reports" | "certificates" | "evaluation" | "archive" | "ai-generator" | "proctor-cockpit";
 export type Status = "Active" | "Inactive";
 export type Approval = "Approved" | "Pending" | "Rejected";
 export type AssessmentType = "MCQ" | "Descriptive" | "Mixed";
@@ -58,6 +58,9 @@ export type Course = {
   version: number;
   difficulty: "Beginner" | "Intermediate" | "Advanced";
   estimatedHours: number;
+  priceCents?: number;
+  currency?: string;
+  isFree?: boolean;
   createdAt: string;
   updatedAt: string;
   generatedBy?: "Acharya";
@@ -77,6 +80,8 @@ export type Chapter = {
   durationMinutes: number;
   minimumTimeMinutes?: number;
   isCompleted?: boolean;
+  isLocked?: boolean;
+  lockReason?: string | null;
   generatedBy?: "Acharya";
   generationDurationMs?: number;
 };
@@ -170,8 +175,28 @@ export type Enrollment = {
   timeSpentMinutes: number;
   timeSpentSeconds?: number;
   chapterTimeSpentSeconds?: Record<string, number>;
+  cohortId?: string;
+  status?: "Enrolled" | "InProgress" | "ChaptersComplete" | "AssessmentEligible" | "Passed" | "Failed" | "Certified";
   startedAt: string;
   completedAt: string | null;
+};
+
+
+export type Cohort = {
+  id: string;
+  name: string;
+  courseId: string;
+  courseTitle?: string;
+  instructorId: string;
+  startDate: string;
+  endDate?: string | null;
+  capacity: number;
+  description: string;
+  inviteCode: string;
+  active: boolean;
+  memberCount?: number;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type SkillRating = {
@@ -245,7 +270,61 @@ export type IssuedCertificate = {
   htmlSnapshot: string;
 };
 
+
+export type CandidateSubmission = {
+  id: string;
+  attemptToken?: string;
+  candidateName: string;
+  candidateEmail: string;
+  startedAt: string;
+  submittedAt: string | null;
+  status: "In Progress" | "Passed" | "Failed";
+  score: number;
+  maxScore: number;
+  percentage: number;
+  passed: boolean;
+  trustScore: number;
+  tabSwitchCount: number;
+  timeSpentSeconds?: number;
+  answers?: Record<string, any>;
+  flags?: Array<{
+    id: string;
+    eventType: string;
+    severity: string;
+    confidence: number;
+    trustScoreAfter: number;
+    createdAt: string;
+    metadata?: Record<string, any>;
+  }>;
+};
+
+export type CandidateAssessmentLink = {
+  id: string;
+  token: string;
+  assessmentId: string;
+  title: string;
+  courseTitle: string;
+  durationMinutes: number;
+  passScore: number;
+  questionLimit: number;
+  proctoringRequired: boolean;
+  fullscreenRequired: boolean;
+  tabSwitchAutoSubmit: boolean;
+  maxTabSwitches: number;
+  status: "Active" | "Closed";
+  createdBy: string;
+  createdByName?: string;
+  createdAt: string;
+  totalSubmissions?: number;
+  completedSubmissions?: number;
+  passedSubmissions?: number;
+  averageScore?: number;
+  averageTrustScore?: number;
+  submissions?: CandidateSubmission[];
+};
+
 export type AppData = {
+  candidateAssessments?: CandidateAssessmentLink[];
   users: User[];
   skills: Skill[];
   targetSkills: TargetSkill[];
@@ -273,6 +352,7 @@ export const navByRole: Record<Role, { key: ModuleKey; label: string; icon: stri
     { key: "skills", label: "Skills", icon: "skills" },
     { key: "reports", label: "Reports", icon: "reports" },
     { key: "certificates", label: "Certificates", icon: "certificates" },
+    { key: "proctor-cockpit", label: "Cockpit", icon: "proctor-cockpit" },
     { key: "evaluation", label: "Evaluation", icon: "evaluation" },
     { key: "archive", label: "Archive", icon: "archive" },
     { key: "settings", label: "Profile", icon: "settings" },
@@ -286,6 +366,7 @@ export const navByRole: Record<Role, { key: ModuleKey; label: string; icon: stri
     { key: "skills", label: "Skills", icon: "skills" },
     { key: "reports", label: "Reports", icon: "reports" },
     { key: "certificates", label: "Certificates", icon: "certificates" },
+    { key: "proctor-cockpit", label: "Cockpit", icon: "proctor-cockpit" },
     { key: "settings", label: "Profile", icon: "settings" },
   ],
   Manager: [
@@ -303,6 +384,30 @@ export const navByRole: Record<Role, { key: ModuleKey; label: string; icon: stri
     { key: "courses", label: "Courses", icon: "courses" },
     { key: "skills", label: "Skills", icon: "skills" },
     { key: "certificates", label: "Certificates", icon: "certificates" },
+    { key: "settings", label: "Profile", icon: "settings" },
+  ],
+  Learner: [
+    { key: "dashboard", label: "Learn", icon: "dashboard" },
+    { key: "courses", label: "Catalog", icon: "courses" },
+    { key: "skills", label: "Skills", icon: "skills" },
+    { key: "certificates", label: "Certificates", icon: "certificates" },
+    { key: "settings", label: "Profile", icon: "settings" },
+  ],
+  Instructor: [
+    { key: "dashboard", label: "Hub", icon: "dashboard" },
+    { key: "courses", label: "Studio", icon: "courses" },
+    { key: "assessments", label: "Tests", icon: "assessments" },
+    { key: "proctor-cockpit", label: "Cockpit", icon: "proctor-cockpit" },
+    { key: "reports", label: "Reports", icon: "reports" },
+    { key: "settings", label: "Profile", icon: "settings" },
+  ],
+  InstituteAdmin: [
+    { key: "dashboard", label: "HQ", icon: "dashboard" },
+    { key: "users", label: "People", icon: "users" },
+    { key: "courses", label: "Courses", icon: "courses" },
+    { key: "assessments", label: "Tests", icon: "assessments" },
+    { key: "proctor-cockpit", label: "Cockpit", icon: "proctor-cockpit" },
+    { key: "reports", label: "Reports", icon: "reports" },
     { key: "settings", label: "Profile", icon: "settings" },
   ],
 };

@@ -45,6 +45,7 @@ function ProctoredAssessment({ assessment, course, chapter, currentUser, onSubmi
   const [warnings, setWarnings] = useState(0);
   const [warningMessage, setWarningMessage] = useState("");
   const [captures, setCaptures] = useState<ProctorCapture[]>([]);
+  const [attemptId, setAttemptId] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState(now());
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -90,6 +91,17 @@ function ProctoredAssessment({ assessment, course, chapter, currentUser, onSubmi
       await requestPermissions();
       return;
     }
+    try {
+      const res = await apiFetch(`/assessments/${assessment.id}/attempts/start`, { method: "POST" });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.data?.id) {
+          setAttemptId(json.data.id);
+        }
+      }
+    } catch (err) {
+      console.warn("Could not start attempt on backend, falling back to local session", err);
+    }
     setStartedAt(now());
     setStarted(true);
     await enterFullscreen();
@@ -98,13 +110,20 @@ function ProctoredAssessment({ assessment, course, chapter, currentUser, onSubmi
   const captureImage = (questionId: string) => {
     const video = videoRef.current;
     if (!video || !video.videoWidth) return;
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    setCaptures((items) => [...items, { id: uid("CAP"), assessmentId: assessment.id, courseId: course.id, chapterId: chapter.id, userId: currentUser.id, questionId, imageDataUrl: canvas.toDataURL("image/jpeg", 0.7), capturedAt: now() }]);
+    // Keep proctoring capture metadata without storing heavy base64 images in localStorage
+    setCaptures((items) => [
+      ...items,
+      {
+        id: uid("CAP"),
+        assessmentId: assessment.id,
+        courseId: course.id,
+        chapterId: chapter.id,
+        userId: currentUser.id,
+        questionId,
+        imageDataUrl: "",
+        capturedAt: now(),
+      },
+    ]);
   };
 
   useEffect(() => {
@@ -113,17 +132,67 @@ function ProctoredAssessment({ assessment, course, chapter, currentUser, onSubmi
     return () => window.clearTimeout(timer);
   }, [started, currentQuestion?.id]);
 
-  const submit = (reason: string | null = null, forcedWarnings = warnings) => {
+  const submit = async (reason: string | null = null, forcedWarnings = warnings) => {
     if (submittedRef.current) return;
     submittedRef.current = true;
-    const mcqs = selectedQuestions.filter((q) => q.type === "MCQ");
-    const correct = mcqs.filter((q) => answers[q.id] === q.answer).length;
-    const score = mcqs.length ? Math.round((correct / mcqs.length) * 100) : 100;
-    const maxScore = selectedQuestions.reduce((sum, q) => sum + q.points, 0);
     const timeSpentSeconds = Math.max(1, Math.floor((Date.now() - openedAtRef.current) / 1000));
     stopStream();
     if (document.fullscreenElement) document.exitFullscreen?.();
-    onSubmit({ id: uid("ATT"), assessmentId: assessment.id, chapterId: chapter.id, courseId: course.id, userId: currentUser.id, status: score >= assessment.passScore ? "Passed" : "Failed", score, maxScore, feedback: reason ? `Auto submitted: ${reason}` : score >= assessment.passScore ? "Passed!" : "Needs improvement", answers, selectedQuestionIds: selectedQuestions.map((q) => q.id), tabSwitchWarnings: forcedWarnings, autoSubmittedReason: reason, proctorCaptures: captures, startedAt, submittedAt: now(), timeSpentSeconds });
+
+    const currentAttemptId = attemptId || uid("ATT");
+    const payload = {
+      answers,
+      selectedQuestionIds: selectedQuestions.map((q) => q.id),
+      tabSwitchWarnings: forcedWarnings,
+      autoSubmittedReason: reason,
+      timeSpentSeconds,
+    };
+
+    let serverAttempt: Attempt | null = null;
+    if (attemptId) {
+      try {
+        const res = await apiFetch(`/assessments/attempts/${attemptId}/submit`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.data) {
+            serverAttempt = {
+              ...json.data,
+              proctorCaptures: captures,
+            };
+          }
+        }
+      } catch (err) {
+        console.error("Backend assessment submission failed:", err);
+      }
+    }
+
+    if (serverAttempt) {
+      onSubmit(serverAttempt);
+    } else {
+      const maxScore = selectedQuestions.reduce((sum, q) => sum + q.points, 0);
+      onSubmit({
+        id: currentAttemptId,
+        assessmentId: assessment.id,
+        chapterId: chapter.id,
+        courseId: course.id,
+        userId: currentUser.id,
+        status: "Submitted",
+        score: null,
+        maxScore,
+        feedback: reason ? `Auto submitted: ${reason}` : "Submitted for grading",
+        answers,
+        selectedQuestionIds: selectedQuestions.map((q) => q.id),
+        tabSwitchWarnings: forcedWarnings,
+        autoSubmittedReason: reason,
+        proctorCaptures: captures,
+        startedAt,
+        submittedAt: now(),
+        timeSpentSeconds,
+      });
+    }
   };
 
   const handleViolation = (message: string) => {
@@ -131,6 +200,17 @@ function ProctoredAssessment({ assessment, course, chapter, currentUser, onSubmi
     setWarnings((count) => {
       const next = count + 1;
       setWarningMessage(`${message} Warning ${next}/2. Assessment auto-submits after more than 2 warnings.`);
+      if (attemptId) {
+        apiFetch("/proctoring/events", {
+          method: "POST",
+          body: JSON.stringify({
+            attemptId,
+            eventType: message.includes("Tab") ? "TAB_SWITCH" : "FULLSCREEN_EXIT",
+            severity: next > 2 ? "high" : "medium",
+            metadata: { message, warningNumber: next },
+          }),
+        }).catch(() => {});
+      }
       if (next > 2) window.setTimeout(() => submit(message, next), 0);
       return next;
     });

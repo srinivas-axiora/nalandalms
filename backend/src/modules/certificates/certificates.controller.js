@@ -1,4 +1,4 @@
-// L6 — Controller: HTTP handlers; translate requests to service calls and shape responses.
+// L6 — Controller: HTTP handlers for certificates and public verification.
 import { issueCertificateSchema } from "./certificates.schema.js";
 
 export function createCertificatesController(service) {
@@ -15,5 +15,11 @@ export function createCertificatesController(service) {
     return res.status(result.status).json({ data: result.data });
   };
 
-  return { list, create };
+  const verify = (req, res) => {
+    const result = service.verify(req.params.certificateId);
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    return res.status(result.status).json(result.data);
+  };
+
+  return { list, create, verify };
 }

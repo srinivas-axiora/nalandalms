@@ -45,7 +45,18 @@ export const ALLOWED_UPLOAD_MIME = new Set([
   "image/png", "image/jpeg", "image/webp", "image/gif",
 ]);
 export const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      const uploadsDir = path.resolve(process.cwd(), "uploads");
+      if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+      cb(null, uploadsDir);
+    },
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname);
+      const safeBase = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, "_");
+      cb(null, `${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}-${safeBase}${ext}`);
+    },
+  }),
   limits: { fileSize: 15 * 1024 * 1024, files: 5 },
   fileFilter: (_req, file, cb) => {
     if (ALLOWED_UPLOAD_MIME.has(file.mimetype)) return cb(null, true);
