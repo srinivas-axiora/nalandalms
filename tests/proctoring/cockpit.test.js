@@ -9,7 +9,7 @@ import {
   users,
   now,
 } from "../../backend/src/core.js";
-import { testUsers, getCsrfPair, authCookieFor } from "../helpers/auth.js";
+import { testUsers, getCsrfPair, authCookieFor, stepUpCookieFor } from "../helpers/auth.js";
 
 describe("Sprint 9: Live Proctoring Cockpit, Remote Interventions & Timeline Replay", () => {
   let csrf;
@@ -204,7 +204,7 @@ describe("Sprint 9: Live Proctoring Cockpit, Remote Interventions & Timeline Rep
     it("Proctor sends an urgent remote warning to Candidate High Risk", async () => {
       const res = await request(app)
         .post(`/api/proctoring/attempts/${highRiskAttemptId}/warn`)
-        .set("Cookie", [csrf.cookie, authCookieFor(instructorProctor)])
+        .set("Cookie", [csrf.cookie, authCookieFor(instructorProctor), stepUpCookieFor(instructorProctor)])
         .set("x-csrf-token", csrf.token)
         .send({
           message: "Please remove external secondary monitors from your desk immediately.",
@@ -254,7 +254,7 @@ describe("Sprint 9: Live Proctoring Cockpit, Remote Interventions & Timeline Rep
     it("Proctor pauses Candidate High Risk's exam session", async () => {
       const res = await request(app)
         .post(`/api/proctoring/attempts/${highRiskAttemptId}/pause`)
-        .set("Cookie", [csrf.cookie, authCookieFor(instructorProctor)])
+        .set("Cookie", [csrf.cookie, authCookieFor(instructorProctor), stepUpCookieFor(instructorProctor)])
         .set("x-csrf-token", csrf.token);
 
       expect(res.status).toBe(200);
@@ -268,7 +268,7 @@ describe("Sprint 9: Live Proctoring Cockpit, Remote Interventions & Timeline Rep
     it("Proctor resumes the paused exam session", async () => {
       const res = await request(app)
         .post(`/api/proctoring/attempts/${highRiskAttemptId}/resume`)
-        .set("Cookie", [csrf.cookie, authCookieFor(instructorProctor)])
+        .set("Cookie", [csrf.cookie, authCookieFor(instructorProctor), stepUpCookieFor(instructorProctor)])
         .set("x-csrf-token", csrf.token);
 
       expect(res.status).toBe(200);
@@ -284,7 +284,7 @@ describe("Sprint 9: Live Proctoring Cockpit, Remote Interventions & Timeline Rep
     it("Proctor disqualifies Candidate High Risk, failing their enrollment immediately", async () => {
       const res = await request(app)
         .post(`/api/proctoring/attempts/${highRiskAttemptId}/terminate`)
-        .set("Cookie", [csrf.cookie, authCookieFor(instructorProctor)])
+        .set("Cookie", [csrf.cookie, authCookieFor(instructorProctor), stepUpCookieFor(instructorProctor)])
         .set("x-csrf-token", csrf.token)
         .send({
           reason: "Persistent second person detected and unauthorized external hardware found.",

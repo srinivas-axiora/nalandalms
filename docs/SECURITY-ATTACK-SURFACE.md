@@ -35,14 +35,14 @@ or step-up middleware disagrees with its declaration.
 | GET | `*splat` | Public | N | N/A | N | None | Frontend fallback; API paths return JSON 404 |
 | POST | `/api/auth/register` | Public | Y | Y | N | G + login map | Allows public Instructor self-assignment |
 | POST | `/api/auth/login` | Public | Y | Y | N | G + login map | Identifier lockout enables victim DoS |
-| POST | `/api/auth/logout` | Public | Cookie | Y | N | G | Does not revoke the presented JWT |
+| POST | `/api/auth/logout` | Any | Cookie | Y | N | G | Authenticated logout rotates session version and revokes the presented JWT |
 | POST | `/api/auth/forgot-password` | Public | Y | Y | N | G | No production delivery implementation shown |
 | POST | `/api/auth/reset-password` | Public token | Y | Y | N | G | Reset bumps session version |
 | POST | `/api/auth/reauth` | Any | Cookie | Y | N | G | Issues 10-minute step-up token |
 | GET | `/api/auth/me` | Any | N | N/A | N | G | Session identity |
 | PATCH | `/api/users/me/preferences` | Any | Y | Y | N | G | Self-scoped |
 | GET | `/api/users` | A/M | N | N/A | N | G | Manager direct-report scope implemented |
-| POST | `/api/users` | A | Y | Y | N | G | No step-up for account creation |
+| POST | `/api/users` | A | Y | Y | Y | G | Privileged account creation requires recent re-authentication |
 | PATCH | `/api/users/:id` | A | Y | Y | Y | G | Password hash copied into audit metadata |
 | PATCH | `/api/users/:id/status` | A | Y | Y | Y | G | Deactivation revokes; activation does not rotate |
 | DELETE | `/api/users/:id` | SA | Y | Y | Y | G | Archive retains full user including hash |
@@ -89,14 +89,14 @@ or step-up middleware disagrees with its declaration.
 | POST | `/api/assessments/attempts/:attemptId/answer` | Any | Y | Y | N | G | Ownership and expiry checks present |
 | POST | `/api/assessments/attempts/:attemptId/submit` | Any | Y | Y | N | G | Ownership present; expiry bypass via bulk answers |
 | GET | `/api/assessments/attempts/pending-review` | A/M/I | N | N/A | N | G | Manager sees all; Instructor listing partly scoped |
-| POST | `/api/assessments/attempts/:attemptId/grade` | A/M/I | Y | Y | N | G | No resource-level grader scope |
-| GET | `/api/assessments/question-library` | Any | N | N/A | N | G | Returns answer-bearing objects to Learners |
+| POST | `/api/assessments/attempts/:attemptId/grade` | A/M/I | Y | Y | Y | G | Central owner/assigned-proctor policy plus step-up |
+| GET | `/api/assessments/question-library` | A | N | N/A | N | G | Answer-bearing authoring view is administrator-only |
 | POST | `/api/candidate-assessments` | A/M/I | Y | Y | N | G | Source assessment ownership check missing |
 | GET | `/api/candidate-assessments` | Any | N | N/A | N | G | Creator/admin filter present |
 | GET | `/api/candidate-assessments/analytics/:id` | Any | N | N/A | N | G | No role/ownership check; exposes PII/answers |
 | GET | `/api/candidate-assessments/:id` | Any | N | N/A | N | G | Creator/admin check present |
-| PATCH | `/api/candidate-assessments/:id/status` | Any | Y | Y | N | G | Creator/admin check; no role/step-up |
-| DELETE | `/api/candidate-assessments/:id` | Any | Y | Y | N | G | Creator/admin check; no step-up |
+| PATCH | `/api/candidate-assessments/:id/status` | Any | Y | Y | Y | G | Creator/admin scope plus step-up |
+| DELETE | `/api/candidate-assessments/:id` | Any | Y | Y | Y | G | Creator/admin scope plus step-up |
 | GET | `/api/public/candidate-assessments/:token` | Public token | N | N/A | N | G | Checks status and expiry |
 | POST | `/api/public/candidate-assessments/:token/start` | Public token | Y | Exempt | N | G | Does not check expiry; email rule is bypassable identity |
 | POST | `/api/public/candidate-assessments/:token/event` | Public attempt token | Y | Exempt | N | G | Client controls event/severity/confidence |
@@ -109,21 +109,21 @@ or step-up middleware disagrees with its declaration.
 | POST | `/api/proctoring/attempts/:attemptId/events` | Any | Y | Y | N | G | Any Instructor can target any attempt |
 | POST | `/api/proctoring/events` | Any | Y | Y | N | G | Same backward-compatible weakness |
 | GET | `/api/proctoring/attempts/:attemptId/events` | Any | N | N/A | N | G | Any Instructor can read any attempt |
-| POST | `/api/proctoring/attempts/:attemptId/chunks` | Any | Y | Y | N | G | Candidate/admin scope; 25 MB memory per chunk |
+| POST | `/api/proctoring/attempts/:attemptId/chunks` | Public token | Y | Exempt | N | G | Candidate session or scoped companion token; companion is restricted to companion media |
 | GET | `/api/proctoring/attempts/:attemptId/chunks` | Any | N | N/A | N | G | Any Instructor can read any manifest |
 | POST | `/api/proctoring/attempts/:attemptId/signal` | Any | Y | Y | N | G | No object authorization |
 | GET | `/api/proctoring/attempts/:attemptId/signals` | Any | N | N/A | N | G | No object authorization; SDP/ICE exposure |
 | POST | `/api/proctoring/attempts/:attemptId/companion/token` | Any | Y | Y | N | G | Candidate/admin scope present |
 | POST | `/api/proctoring/companion/pair` | Public token | Y | Exempt | N | G | Pair token expiry present; reusable token not deleted |
-| POST | `/api/proctoring/attempts/:attemptId/companion/ping` | Public | Y | Exempt | N | G | No companion token/authentication |
+| POST | `/api/proctoring/attempts/:attemptId/companion/ping` | Public token | Y | Exempt | N | G | Scoped companion token bound to attempt, candidate and session version |
 | GET | `/api/proctoring/attempts/:attemptId/companion/status` | Any | N | N/A | N | G | No object authorization |
 | GET | `/api/proctoring/cockpit/active` | A/M/I | N | N/A | N | G | Manager sees all; Instructor owned-course filter only |
-| POST | `/api/proctoring/attempts/:attemptId/warn` | A/M/I | Y | Y | N | G | No attempt/course/team scope |
+| POST | `/api/proctoring/attempts/:attemptId/warn` | A/M/I | Y | Y | Y | G | Central attempt policy plus step-up |
 | GET | `/api/assessments/attempts/:attemptId/warnings` | Any | N | N/A | N | G | Any Instructor can read |
 | POST | `/api/assessments/attempts/:attemptId/warnings/:warningId/ack` | Any | Y | Y | N | G | No attempt ownership check |
-| POST | `/api/proctoring/attempts/:attemptId/pause` | A/M/I | Y | Y | N | G | No resource scope or step-up |
-| POST | `/api/proctoring/attempts/:attemptId/resume` | A/M/I | Y | Y | N | G | No resource scope or step-up |
-| POST | `/api/proctoring/attempts/:attemptId/terminate` | A/M/I | Y | Y | N | G | No resource scope or step-up |
+| POST | `/api/proctoring/attempts/:attemptId/pause` | A/M/I | Y | Y | Y | G | Central attempt policy plus step-up |
+| POST | `/api/proctoring/attempts/:attemptId/resume` | A/M/I | Y | Y | Y | G | Central attempt policy plus step-up |
+| POST | `/api/proctoring/attempts/:attemptId/terminate` | A/M/I | Y | Y | Y | G | Central attempt policy plus step-up |
 | GET | `/api/proctoring/attempts/:attemptId/timeline` | A/M/I | N | N/A | N | G | No resource scope |
 
 ## Certificates, payments, uploads and reports
@@ -133,7 +133,7 @@ or step-up middleware disagrees with its declaration.
 | GET | `/api/certificates/verify/:certificateId` | Public | N | N/A | N | G | Public PII; enumeration/rate considerations |
 | GET | `/verify/:certificateId` | Public | N | N/A | N | None | HTML shortcut outside API limiter |
 | GET | `/api/certificates` | Any | N | N/A | N | G | Role-scoped service |
-| POST | `/api/certificates` | A/M/I | Y | Y | N | G | No completion or owner/team scope; arbitrary issue |
+| POST | `/api/certificates` | A/M/I | Y | Y | Y | G | Configured approver, course authority, eligibility and step-up required |
 | POST | `/api/certificates/auto-issue` | Any | Y | Y | N | G | Self-scoped but accepts caller-selected attemptId |
 | POST | `/api/payments/create-order` | Any | Y | Y | N | G | In-memory order; free price uses falsy default bug |
 | POST | `/api/payments/verify` | Any | Y | Y | N | G | Signature optional; order not bound to course/user |
@@ -165,11 +165,11 @@ can make the API fail to start.
 | GET | `/api/analytics/time` | A/M | N | N/A | N | G | Scope helper used |
 | GET | `/api/analytics/time/events` | A/M | N | N/A | N | G | Scope helper used; query coercion weak |
 | GET | `/api/archive` | SA | N | N/A | N | G | Contains full archived records/password hashes |
-| POST | `/api/archive/:id/restore` | SA | Y | Y | N | G | Sensitive restore lacks step-up/conflict handling |
+| POST | `/api/archive/:id/restore` | SA | Y | Y | Y | G | Step-up required; restored user is inactive with a rotated credential/session |
 | GET | `/api/audit-logs` | A | N | N/A | N | G | Mutable array; can contain password hashes |
 | GET | `/api/security-events` | A | N | N/A | N | G | Mutable bounded array |
 | GET | `/api/users/me/data-export` | Any | N | N/A | N | G | Self-scoped; incomplete across all stores/logs |
-| POST | `/api/users/me/delete-request` | Any | Y | Y | N | G | In-memory queue, no executor |
+| POST | `/api/users/me/delete-request` | Any | Y | Y | Y | G | Step-up required; queue remains process-local pending privacy phase |
 | POST | `/api/users/me/cancel-delete` | Any | Y | Y | N | G | Self-scoped |
 | GET | `/api/settings` | A | N | N/A | N | G | Admin-only |
 | PATCH | `/api/settings` | A | Y | Y | Y | G | Step-up present |

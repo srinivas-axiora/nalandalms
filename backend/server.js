@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 
 import {
-  PORT, corsOrigin, COOKIE_SECURE, COOKIE_SAMESITE, CSRF_COOKIE, GEMINI_MODEL, getGeminiApiKey,
+  PORT, corsOrigin, COOKIE_SECURE, COOKIE_SAMESITE, CSRF_COOKIE, GEMINI_MODEL, getGeminiApiKey, TRUST_PROXY,
 } from "./src/config.js";
 import {
   now, isAdmin, users, courses, chapters, assessments, assignments, attempts, proctoringLogs,
@@ -55,13 +55,14 @@ import * as chaptersRepo from "./src/repositories/chapters.repository.pg.js";
 import * as assessmentsRepo from "./src/repositories/assessments.repository.pg.js";
 import * as enrollmentsRepo from "./src/repositories/enrollments.repository.pg.js";
 import * as skillsRepo from "./src/repositories/skills.repository.pg.js";
+import { redactSensitive } from "./src/security/redaction.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG = process.env.USE_PG === "1";
 const USE_PG_SKILLS = USE_PG || process.env.USE_PG_SKILLS === "1";
 
 const app = express();
-app.set("trust proxy", 1);
+app.set("trust proxy", TRUST_PROXY);
 
 // ── Global middleware ──
 app.use(helmet());
@@ -157,14 +158,14 @@ app.get("/api/app-data", authenticate, async (req, res) => {
     assignments: scopedAssignments,
     attempts: scopedAttempts,
     proctoringLogs: scopedProctoring,
-    auditLogs: admin ? auditLogs : [],
-    securityEvents: admin ? securityEvents.slice(0, 500) : [],
+    auditLogs: admin ? redactSensitive(auditLogs) : [],
+    securityEvents: admin ? redactSensitive(securityEvents.slice(0, 500)) : [],
     learningTimeEvents: learningTimeEvents.filter((event) => admin || visibleUserIds.has(event.userId)),
     acharyaFeedbackMemory: admin ? acharyaFeedbackMemory : [],
     reportExports: scopedReports,
     settings: admin ? settings : {},
     issuedCertificates: scopedCertificates,
-    archives: superAdmin ? archives : [],
+    archives: superAdmin ? redactSensitive(archives) : [],
     skills: allSkills,
     targetSkills: allTargetSkills.filter((target) => targetSkillVisibleTo(target, req.user)),
     skillRatings: skillRatings.filter((rating) => admin || visibleUserIds.has(rating.userId)),

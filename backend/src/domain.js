@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { JWT_SECRET } from "./config.js";
 import { tokenize } from "./lib.js";
+import { redactSensitive } from "./security/redaction.js";
 import {
   now, isAdmin, sessionVersions, auditLogs, securityEvents, users, courses,
   assessments, assignments, attempts, chapters, acharyaFeedbackMemory, learningTimeEvents,
@@ -14,14 +15,14 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const publicUser = (user) => {
-  const { passwordHash, ...safe } = user;
+  const safe = redactSensitive(user);
   const sessionVersion = sessionVersions[user.id] || 0;
   return { ...safe, sessionVersion, sv: sessionVersion };
 };
 
 const AUDIT_LOG_CAP = 5000;
 export const audit = (actorId, action, entityType, entityId, metadata = {}) => {
-  auditLogs.unshift({ id: uuid(), actorId, action, entityType, entityId, metadata, createdAt: now() });
+  auditLogs.unshift({ id: uuid(), actorId, action, entityType, entityId, metadata: redactSensitive(metadata), createdAt: now() });
   if (auditLogs.length > AUDIT_LOG_CAP) auditLogs.length = AUDIT_LOG_CAP;
 };
 
@@ -35,7 +36,7 @@ export const securityEvent = (req, type, metadata = {}) => {
     method: req?.method || null,
     path: req?.originalUrl || req?.url || null,
     userAgent: req?.headers?.["user-agent"] || null,
-    metadata,
+    metadata: redactSensitive(metadata),
     createdAt: now(),
   });
   if (securityEvents.length > SECURITY_EVENT_CAP) securityEvents.length = SECURITY_EVENT_CAP;

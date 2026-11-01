@@ -4,7 +4,8 @@ import { createCertificatesService } from "./certificates.service.js";
 import { createCertificatesController } from "./certificates.controller.js";
 import { issuedCertificates, users, courses, assignments, now } from "../../core.js";
 import { audit } from "../../domain.js";
-import { authenticate, requireRole } from "../../middleware.js";
+import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
+import { canManageCourseResource, certificateEligibility } from "../../security/authorization.js";
 
 export function registerCertificates(app) {
   const store = { issuedCertificates, users, courses };
@@ -26,7 +27,19 @@ export function registerCertificates(app) {
 
   // ── Authenticated User & Admin Routes ──
   app.get("/api/certificates", authenticate, controller.list);
-  app.post("/api/certificates", authenticate, requireRole("Admin", "Manager", "Instructor"), controller.create);
+  app.post(
+    "/api/certificates",
+    authenticate,
+    requireRole("Admin", "Manager", "Instructor"),
+    (req, res, next) => {
+      const course = courses.find((item) => item.id === req.body?.courseId);
+      if (!course) return res.status(404).json({ error: "Course not found" });
+      if (!canManageCourseResource(req.user, course)) return res.status(403).json({ error: "Forbidden" });
+      return next();
+    },
+    requireStepUp,
+    controller.create
+  );
 
   // ── Auto-Issue Endpoint upon Course & Screening Completion ──
   app.post("/api/certificates/auto-issue", authenticate, (req, res) => {
@@ -37,7 +50,7 @@ export function registerCertificates(app) {
     const assignment = assignments.find((a) => a.courseId === courseId && a.userId === req.user.id);
     if (!assignment) return res.status(404).json({ error: "Enrollment not found" });
 
-    if (assignment.status !== "Passed" && assignment.status !== "Certified" && assignment.progress < 100) {
+    if (!certificateEligibility({ recipientId: req.user.id, courseId, attemptId }).eligible) {
       return res.status(403).json({ error: "Course requirements and proctored assessment screening must be passed before certificate can be issued" });
     }
 

@@ -6,6 +6,7 @@ import { v4 as uuid } from "uuid";
 import { users, isAdmin, sessionVersions, archives, roles, now } from "../../core.js";
 import { audit, publicUser } from "../../domain.js";
 import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
+import { redactSensitive } from "../../security/redaction.js";
 
 export function registerUsers(app) {
   app.patch("/api/users/me/preferences", authenticate, (req, res) => {
@@ -40,7 +41,7 @@ export function registerUsers(app) {
     res.json({ data: visible.map(publicUser), total: visible.length });
   });
 
-  app.post("/api/users", authenticate, requireRole("Admin"), (req, res) => {
+  app.post("/api/users", authenticate, requireRole("Admin"), requireStepUp, (req, res) => {
     const schema = z.object({
       id: z.string().min(2).optional(),
       name: z.string().min(2),
@@ -66,6 +67,7 @@ export function registerUsers(app) {
     const user = { id: requestedId, ...parsed.data, status: parsed.data.status || "Active", passwordHash: bcrypt.hashSync(parsed.data.password, 10), createdAt: now() };
     delete user.password;
     users.push(user);
+    sessionVersions[user.id] = 0;
     audit(req.user.id, "CREATE_USER", "USER", user.id, { role: user.role });
     res.status(201).json({ data: publicUser(user) });
   });
@@ -101,7 +103,12 @@ export function registerUsers(app) {
       return res.status(403).json({ error: "You cannot deactivate your own account" });
     }
 
-    if (parsed.data.status === "Inactive" && user.status === "Active") {
+    const revokesSessions = Boolean(
+      parsed.data.password
+      || (parsed.data.role && parsed.data.role !== user.role)
+      || (parsed.data.status === "Inactive" && user.status === "Active")
+    );
+    if (revokesSessions) {
       sessionVersions[user.id] = (sessionVersions[user.id] || 0) + 1;
     }
 
@@ -154,7 +161,7 @@ export function registerUsers(app) {
       id: uuid(),
       entityType: "User",
       entityId: user.id,
-      entityData: user,
+      entityData: redactSensitive(user),
       deletedBy: req.user.id,
       deletedByName: req.user.name,
       deletionComment: parsed.data.deletionComment,

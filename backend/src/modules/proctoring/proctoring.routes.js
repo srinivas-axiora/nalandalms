@@ -4,10 +4,11 @@ import multer from "multer";
 import { v4 as uuid } from "uuid";
 import { attempts, proctoringLogs, assessments, settings, now, isAdmin } from "../../core.js";
 import { audit, addAssessmentTime } from "../../domain.js";
-import { authenticate, requireRole } from "../../middleware.js";
+import { authenticate } from "../../middleware.js";
+import { requireAttemptPermission } from "../../security/authorization.js";
 import { uploadBuffer } from "../../storage/object-store.js";
 import { postSignal, getSignals, clearSignals } from "./signaling.js";
-import { createPairingToken, verifyAndPairCompanion, updateCompanionHeartbeat } from "./pairing.js";
+import { authorizeCompanionToken, createPairingToken, verifyAndPairCompanion, updateCompanionHeartbeat } from "./pairing.js";
 
 // In-memory multer storage for video chunks to stream directly into object storage
 const chunkUpload = multer({
@@ -31,6 +32,18 @@ export const PROCTORING_EVENT_TYPES = [
 ];
 
 export function registerProctoring(app) {
+  const authorizeAttemptOrCompanion = (req, res, next) => {
+    const companionToken = req.headers["x-companion-token"];
+    if (typeof companionToken === "string") {
+      const authorized = authorizeCompanionToken(companionToken, req.params.attemptId);
+      if (!authorized) return res.status(401).json({ error: "Invalid, expired, or revoked companion token" });
+      req.authorizedAttempt = authorized.attempt;
+      req.companionAuthenticated = true;
+      return next();
+    }
+    return authenticate(req, res, () => requireAttemptPermission("view")(req, res, next));
+  };
+
   // ── Record Proctoring Anomaly Event (with Real-Time Trust Score Calculation) ──
   const recordEvent = (req, res, attemptId) => {
     const schema = z.object({
@@ -48,12 +61,7 @@ export function registerProctoring(app) {
     const targetAttemptId = attemptId || parsed.data.attemptId;
     if (!targetAttemptId) return res.status(400).json({ error: "attemptId is required" });
 
-    const attempt = attempts.find((item) => item.id === targetAttemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
-
-    if (attempt.userId !== req.user.id && !isAdmin(req.user.role) && req.user.role !== "Instructor") {
-      return res.status(403).json({ error: "Forbidden: Attempt belongs to another candidate" });
-    }
+    const attempt = req.authorizedAttempt;
 
     // Initialize trust score if not present
     if (attempt.trustScore === undefined) {
@@ -115,23 +123,18 @@ export function registerProctoring(app) {
   };
 
   // Modern scoped route
-  app.post("/api/proctoring/attempts/:attemptId/events", authenticate, (req, res) => {
+  app.post("/api/proctoring/attempts/:attemptId/events", authenticate, requireAttemptPermission("view"), (req, res) => {
     recordEvent(req, res, req.params.attemptId);
   });
 
   // Backward compatible route
-  app.post("/api/proctoring/events", authenticate, (req, res) => {
+  app.post("/api/proctoring/events", authenticate, requireAttemptPermission("view"), (req, res) => {
     recordEvent(req, res, req.body.attemptId);
   });
 
   // ── Retrieve Exam Attempt Proctoring Log & Trust Score ──
-  app.get("/api/proctoring/attempts/:attemptId/events", authenticate, (req, res) => {
-    const attempt = attempts.find((item) => item.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
-
-    if (attempt.userId !== req.user.id && !isAdmin(req.user.role) && req.user.role !== "Instructor") {
-      return res.status(403).json({ error: "Forbidden" });
-    }
+  app.get("/api/proctoring/attempts/:attemptId/events", authenticate, requireAttemptPermission("view"), (req, res) => {
+    const attempt = req.authorizedAttempt;
 
     res.json({
       data: {
@@ -147,15 +150,10 @@ export function registerProctoring(app) {
   // ── Continuous Video Chunk Recording Pipeline ──
   app.post(
     "/api/proctoring/attempts/:attemptId/chunks",
-    authenticate,
+    authorizeAttemptOrCompanion,
     chunkUpload.single("chunk"),
     async (req, res) => {
-      const attempt = attempts.find((item) => item.id === req.params.attemptId);
-      if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
-
-      if (attempt.userId !== req.user.id && !isAdmin(req.user.role)) {
-        return res.status(403).json({ error: "Forbidden: Attempt belongs to another candidate" });
-      }
+      const attempt = req.authorizedAttempt;
 
       if (!req.file || !req.file.buffer) {
         return res.status(400).json({ error: "No video chunk binary received" });
@@ -163,6 +161,9 @@ export function registerProctoring(app) {
 
       const chunkIndex = parseInt(req.body.chunkIndex, 10) || 0;
       const streamRole = req.body.streamRole === "companion" ? "companion" : "primary";
+      if (req.companionAuthenticated && streamRole !== "companion") {
+        return res.status(403).json({ error: "Companion tokens may only upload companion media" });
+      }
       const durationSeconds = parseFloat(req.body.durationSeconds) || 10;
 
       const storageKey = `proctoring/${attempt.id}/${streamRole}_chunk_${String(chunkIndex).padStart(4, "0")}.webm`;
@@ -194,13 +195,8 @@ export function registerProctoring(app) {
   );
 
   // ── Video Chunk Manifest for Review ──
-  app.get("/api/proctoring/attempts/:attemptId/chunks", authenticate, (req, res) => {
-    const attempt = attempts.find((item) => item.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
-
-    if (attempt.userId !== req.user.id && !isAdmin(req.user.role) && req.user.role !== "Instructor") {
-      return res.status(403).json({ error: "Forbidden" });
-    }
+  app.get("/api/proctoring/attempts/:attemptId/chunks", authenticate, requireAttemptPermission("view"), (req, res) => {
+    const attempt = req.authorizedAttempt;
 
     const chunks = attempt.videoChunks || [];
     const primaryChunks = chunks.filter((c) => c.streamRole === "primary");
@@ -218,7 +214,7 @@ export function registerProctoring(app) {
   });
 
   // ── WebRTC Signaling Broker (Offer, Answer, ICE Candidates) ──
-  app.post("/api/proctoring/attempts/:attemptId/signal", authenticate, (req, res) => {
+  app.post("/api/proctoring/attempts/:attemptId/signal", authenticate, requireAttemptPermission("view"), (req, res) => {
     const schema = z.object({
       targetRole: z.enum(["candidate", "proctor", "companion", "all"]),
       type: z.enum(["offer", "answer", "ice-candidate", "ping"]),
@@ -229,8 +225,7 @@ export function registerProctoring(app) {
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const attempt = attempts.find((item) => item.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
+    const attempt = req.authorizedAttempt;
 
     const signal = postSignal(attempt.id, {
       senderId: req.user.id,
@@ -243,9 +238,8 @@ export function registerProctoring(app) {
     res.status(201).json({ ok: true, data: signal });
   });
 
-  app.get("/api/proctoring/attempts/:attemptId/signals", authenticate, (req, res) => {
-    const attempt = attempts.find((item) => item.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
+  app.get("/api/proctoring/attempts/:attemptId/signals", authenticate, requireAttemptPermission("view"), (req, res) => {
+    const attempt = req.authorizedAttempt;
 
     const since = parseInt(req.query.since, 10) || 0;
     const targetRole = req.query.targetRole || null;
@@ -255,15 +249,14 @@ export function registerProctoring(app) {
   });
 
   // ── Mobile Companion Camera Pairing via QR Code ──
-  app.post("/api/proctoring/attempts/:attemptId/companion/token", authenticate, (req, res) => {
-    const attempt = attempts.find((item) => item.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
+  app.post("/api/proctoring/attempts/:attemptId/companion/token", authenticate, requireAttemptPermission("view"), (req, res) => {
+    const attempt = req.authorizedAttempt;
 
     if (attempt.userId !== req.user.id && !isAdmin(req.user.role)) {
-      return res.status(403).json({ error: "Forbidden: Attempt belongs to another candidate" });
+      return res.status(403).json({ error: "Only the candidate or an administrator can create a companion token" });
     }
 
-    const tokenData = createPairingToken(attempt.id, req.user.id);
+    const tokenData = createPairingToken(attempt.id, attempt.userId);
     res.json({ data: tokenData });
   });
 
@@ -296,16 +289,17 @@ export function registerProctoring(app) {
   });
 
   app.post("/api/proctoring/attempts/:attemptId/companion/ping", (req, res) => {
-    const updated = updateCompanionHeartbeat(req.params.attemptId, {
+    const companionToken = req.headers["x-companion-token"];
+    if (typeof companionToken !== "string") return res.status(401).json({ error: "Companion token required" });
+    const updated = updateCompanionHeartbeat(companionToken, req.params.attemptId, {
       batteryLevel: req.body.batteryLevel,
     });
-    if (!updated) return res.status(404).json({ error: "Companion not paired or attempt not found" });
+    if (!updated) return res.status(401).json({ error: "Invalid, expired, or revoked companion token" });
     res.json({ ok: true, timestamp: now() });
   });
 
-  app.get("/api/proctoring/attempts/:attemptId/companion/status", authenticate, (req, res) => {
-    const attempt = attempts.find((item) => item.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
+  app.get("/api/proctoring/attempts/:attemptId/companion/status", authenticate, requireAttemptPermission("view"), (req, res) => {
+    const attempt = req.authorizedAttempt;
 
     res.json({
       data: {

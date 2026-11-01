@@ -3,7 +3,8 @@ import { z } from "zod";
 import { v4 as uuid } from "uuid";
 import { attempts, assessments, courses, users, assignments, now, isAdmin } from "../../core.js";
 import { audit } from "../../domain.js";
-import { authenticate, requireRole } from "../../middleware.js";
+import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
+import { canControlProctoring, requireAttemptPermission } from "../../security/authorization.js";
 import { getExamClock } from "../assessments/exam.service.js";
 import { postSignal } from "./signaling.js";
 import { ENROLLMENT_STATUS } from "../enrollments/progress.service.js";
@@ -11,13 +12,10 @@ import { ENROLLMENT_STATUS } from "../enrollments/progress.service.js";
 export function registerCockpit(app) {
   // ── Live Active Exam Sessions Grid ──
   app.get("/api/proctoring/cockpit/active", authenticate, requireRole("Admin", "Manager", "Instructor"), (req, res) => {
-    let activeAttempts = attempts.filter((a) => a.status === "InProgress" || a.status === "Paused");
-
-    // Scope for instructor
-    if (req.user.role === "Instructor") {
-      const ownedCourseIds = new Set(courses.filter((c) => c.ownerId === req.user.id).map((c) => c.id));
-      activeAttempts = activeAttempts.filter((a) => ownedCourseIds.has(a.courseId));
-    }
+    const activeAttempts = attempts.filter((attempt) => (
+      (attempt.status === "InProgress" || attempt.status === "Paused")
+      && canControlProctoring(req.user, attempt)
+    ));
 
     const sessionGrid = activeAttempts.map((attempt) => {
       const user = users.find((u) => u.id === attempt.userId);
@@ -69,7 +67,7 @@ export function registerCockpit(app) {
   });
 
   // ── Remote Candidate Warning Overlay ──
-  app.post("/api/proctoring/attempts/:attemptId/warn", authenticate, requireRole("Admin", "Manager", "Instructor"), (req, res) => {
+  app.post("/api/proctoring/attempts/:attemptId/warn", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), requireStepUp, (req, res) => {
     const schema = z.object({
       message: z.string().min(3),
       severity: z.enum(["low", "medium", "critical"]).default("medium"),
@@ -78,8 +76,7 @@ export function registerCockpit(app) {
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const attempt = attempts.find((a) => a.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
+    const attempt = req.authorizedAttempt;
 
     const warning = {
       id: `WARN-${uuid().slice(0, 8)}`,
@@ -117,21 +114,18 @@ export function registerCockpit(app) {
   });
 
   // ── Candidate Warning Polling & Acknowledgement ──
-  app.get("/api/assessments/attempts/:attemptId/warnings", authenticate, (req, res) => {
-    const attempt = attempts.find((a) => a.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
-
-    if (attempt.userId !== req.user.id && !isAdmin(req.user.role) && req.user.role !== "Instructor") {
-      return res.status(403).json({ error: "Forbidden" });
-    }
+  app.get("/api/assessments/attempts/:attemptId/warnings", authenticate, requireAttemptPermission("view"), (req, res) => {
+    const attempt = req.authorizedAttempt;
 
     const unacknowledged = (attempt.warnings || []).filter((w) => !w.acknowledged);
     res.json({ data: unacknowledged, total: unacknowledged.length });
   });
 
-  app.post("/api/assessments/attempts/:attemptId/warnings/:warningId/ack", authenticate, (req, res) => {
-    const attempt = attempts.find((a) => a.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
+  app.post("/api/assessments/attempts/:attemptId/warnings/:warningId/ack", authenticate, requireAttemptPermission("view"), (req, res) => {
+    const attempt = req.authorizedAttempt;
+    if (attempt.userId !== req.user.id && !isAdmin(req.user.role)) {
+      return res.status(403).json({ error: "Only the candidate can acknowledge a warning" });
+    }
 
     const warning = (attempt.warnings || []).find((w) => w.id === req.params.warningId);
     if (!warning) return res.status(404).json({ error: "Warning not found" });
@@ -143,9 +137,8 @@ export function registerCockpit(app) {
   });
 
   // ── Remote Clock Pause & Resume ──
-  app.post("/api/proctoring/attempts/:attemptId/pause", authenticate, requireRole("Admin", "Manager", "Instructor"), (req, res) => {
-    const attempt = attempts.find((a) => a.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
+  app.post("/api/proctoring/attempts/:attemptId/pause", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), requireStepUp, (req, res) => {
+    const attempt = req.authorizedAttempt;
     if (attempt.status !== "InProgress") return res.status(400).json({ error: "Can only pause in-progress attempts" });
 
     attempt.isPaused = true;
@@ -156,9 +149,8 @@ export function registerCockpit(app) {
     res.json({ ok: true, message: "Exam session paused", status: attempt.status });
   });
 
-  app.post("/api/proctoring/attempts/:attemptId/resume", authenticate, requireRole("Admin", "Manager", "Instructor"), (req, res) => {
-    const attempt = attempts.find((a) => a.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
+  app.post("/api/proctoring/attempts/:attemptId/resume", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), requireStepUp, (req, res) => {
+    const attempt = req.authorizedAttempt;
     if (!attempt.isPaused && attempt.status !== "Paused") return res.status(400).json({ error: "Attempt is not paused" });
 
     const pausedMs = attempt.pausedAt ? Date.now() - new Date(attempt.pausedAt).getTime() : 0;
@@ -176,7 +168,7 @@ export function registerCockpit(app) {
   });
 
   // ── Remote Candidate Disqualification & Immediate Termination ──
-  app.post("/api/proctoring/attempts/:attemptId/terminate", authenticate, requireRole("Admin", "Manager", "Instructor"), (req, res) => {
+  app.post("/api/proctoring/attempts/:attemptId/terminate", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), requireStepUp, (req, res) => {
     const schema = z.object({
       reason: z.string().min(5),
       evidenceSummary: z.string().optional(),
@@ -185,8 +177,7 @@ export function registerCockpit(app) {
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const attempt = attempts.find((a) => a.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
+    const attempt = req.authorizedAttempt;
     if (attempt.submittedAt && attempt.status !== "InProgress" && attempt.status !== "Paused") {
       return res.status(409).json({ error: "Attempt has already been finalized" });
     }
@@ -225,9 +216,8 @@ export function registerCockpit(app) {
   });
 
   // ── Chronological Incident Timeline & Session Replay ──
-  app.get("/api/proctoring/attempts/:attemptId/timeline", authenticate, requireRole("Admin", "Manager", "Instructor"), (req, res) => {
-    const attempt = attempts.find((a) => a.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
+  app.get("/api/proctoring/attempts/:attemptId/timeline", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), (req, res) => {
+    const attempt = req.authorizedAttempt;
 
     const user = users.find((u) => u.id === attempt.userId);
     const assessment = assessments.find((asm) => asm.id === attempt.assessmentId);

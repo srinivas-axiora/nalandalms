@@ -10,8 +10,14 @@ import { securityEvent } from "./domain.js";
 // ── CSRF protection (double-submit cookie) ──
 export const verifyCsrf = (req, res, next) => {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
-  // Exempt external webhooks and mobile companion device pairing (token-authenticated)
-  if (req.path === "/api/payments/webhook" || req.path === "/api/proctoring/companion/pair" || req.path.endsWith("/companion/ping") || req.path.startsWith("/api/public/candidate-assessments")) return next();
+  // These mutations authenticate with route-scoped, high-entropy tokens rather
+  // than ambient browser cookies. No other state-changing path is exempt.
+  const candidateTokenMutation = /^\/api\/public\/candidate-assessments\/[^/]+\/(?:start|event|submit)$/.test(req.path);
+  const companionPair = req.path === "/api/proctoring/companion/pair";
+  const companionMutation = /^\/api\/proctoring\/attempts\/[^/]+\/(?:companion\/ping|chunks)$/.test(req.path)
+    && typeof req.headers["x-companion-token"] === "string";
+  const verifiedWebhook = req.path === "/api/payments/webhook";
+  if (candidateTokenMutation || companionPair || companionMutation || verifiedWebhook) return next();
   const headerToken = req.headers["x-csrf-token"];
   const cookieToken = req.cookies?.[CSRF_COOKIE];
   if (!headerToken || !cookieToken || !timingSafeEqual(headerToken, cookieToken)) {

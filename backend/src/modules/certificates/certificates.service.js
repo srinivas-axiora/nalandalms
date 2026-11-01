@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import { signCertificatePayload, verifyCertificateSignature, buildLinkedInShareUrl } from "./signatures.js";
 import { assignments, attempts } from "../../core.js";
 import { ENROLLMENT_STATUS } from "../enrollments/progress.service.js";
+import { getCertificateIssuanceApprovalRole } from "../../config.js";
+import { canIssueCertificate, certificateEligibility } from "../../security/authorization.js";
 
 export function createCertificatesService({ repo, audit, now }) {
   const listForUser = (user) => {
@@ -28,6 +30,19 @@ export function createCertificatesService({ repo, audit, now }) {
     const employee = repo.findUser(data.employeeId);
     const course = repo.findCourse(data.courseId);
     if (!employee || !course) return { status: 404, error: "Employee or Course not found" };
+    const approvalRole = getCertificateIssuanceApprovalRole();
+    if (!approvalRole) return { status: 503, error: "Certificate issuance approval role is not configured" };
+    if (!canIssueCertificate({
+      actor,
+      recipientId: employee.id,
+      course,
+      attemptId: data.attemptId,
+      approvalRole,
+    })) {
+      return { status: 403, error: "Certificate issuance is not authorized or the learner is not eligible" };
+    }
+    const eligibility = certificateEligibility({ recipientId: employee.id, courseId: course.id, attemptId: data.attemptId });
+    const verifiedAttempt = eligibility.attempt;
 
     const year = new Date().getFullYear();
     const certId = `NLD-CERT-${year}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
@@ -49,8 +64,8 @@ export function createCertificatesService({ repo, audit, now }) {
       issuedBy: actor.id,
       issuedByName: actor.name || "Nalanda Academic Board",
       issuedAt: now(),
-      proctoringVerified: data.proctoringVerified ?? true,
-      examScore: data.examScore ?? 100,
+      proctoringVerified: Boolean(verifiedAttempt && verifiedAttempt.status === "Passed" && (verifiedAttempt.trustScore ?? 100) >= 70),
+      examScore: verifiedAttempt?.score ?? null,
       verificationUrl: `/verify/${certId}`,
     };
 
@@ -122,7 +137,9 @@ export function createCertificatesService({ repo, audit, now }) {
     const course = repo.findCourse(courseId);
     if (!employee || !course) return null;
 
-    const attempt = attemptId ? attempts.find((a) => a.id === attemptId) : null;
+    const attempt = attemptId
+      ? attempts.find((a) => a.id === attemptId && a.userId === userId && a.courseId === courseId && a.status === "Passed")
+      : attempts.find((a) => a.userId === userId && a.courseId === courseId && a.status === "Passed");
     const year = new Date().getFullYear();
     const certId = `NLD-CERT-${year}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
 
@@ -143,8 +160,8 @@ export function createCertificatesService({ repo, audit, now }) {
       issuedBy: course.ownerId || "SYSTEM",
       issuedByName: "Nalanda Academic Board",
       issuedAt: now(),
-      proctoringVerified: attempt ? (attempt.trustScore >= 70 && attempt.status === "Passed") : true,
-      examScore: attempt?.score ?? 100,
+      proctoringVerified: Boolean(attempt && (attempt.trustScore ?? 100) >= 70),
+      examScore: attempt?.score ?? null,
       verificationUrl: `/verify/${certId}`,
     };
 

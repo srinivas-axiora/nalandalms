@@ -79,14 +79,14 @@ export function MobileProctor() {
 
       setAttemptId(data.data.attemptId);
       setPairingStatus("paired");
-      startCompanionCamera(data.data.attemptId);
+      startCompanionCamera(data.data.attemptId, data.data.companionToken);
     } catch (err: any) {
       setPairingStatus("error");
       setErrorMessage(err.message || "Could not pair companion camera");
     }
   };
 
-  const startCompanionCamera = async (targetAttemptId: string) => {
+  const startCompanionCamera = async (targetAttemptId: string, companionToken: string) => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -119,6 +119,7 @@ export function MobileProctor() {
           try {
             await fetch(`/api/proctoring/attempts/${targetAttemptId}/chunks`, {
               method: "POST",
+              headers: { "x-companion-token": companionToken },
               body: formData,
             });
             setChunkCount((prev) => prev + 1);
@@ -136,7 +137,7 @@ export function MobileProctor() {
         try {
           await fetch(`/api/proctoring/attempts/${targetAttemptId}/companion/ping`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "x-companion-token": companionToken },
             body: JSON.stringify({ batteryLevel }),
           });
         } catch {

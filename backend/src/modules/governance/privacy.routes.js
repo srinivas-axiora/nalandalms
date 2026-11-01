@@ -13,7 +13,7 @@ import {
   now,
 } from "../../core.js";
 import { audit } from "../../domain.js";
-import { authenticate } from "../../middleware.js";
+import { authenticate, requireStepUp } from "../../middleware.js";
 
 const deletionQueue = new Map(); // userId -> { requestedAt, gracePeriodEndsAt, email, reason }
 
@@ -76,7 +76,7 @@ export function registerPrivacyCompliance(app) {
   });
 
   // ── GDPR Article 17 / DPDPA: Right to Erasure (Queue Account Deletion) ──
-  app.post("/api/users/me/delete-request", authenticate, (req, res) => {
+  app.post("/api/users/me/delete-request", authenticate, requireStepUp, (req, res) => {
     const schema = z.object({
       confirmEmail: z.string().email(),
       reason: z.string().optional(),

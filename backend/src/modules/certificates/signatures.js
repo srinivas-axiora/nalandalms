@@ -1,7 +1,6 @@
 // Cryptographic Certificate Signing & Tamper-Proof Verification Engine
 import crypto from "node:crypto";
-
-const SIGNING_SECRET = process.env.CERTIFICATE_SIGNING_SECRET || process.env.JWT_SECRET || "nalanda-enterprise-credential-root-secret-key-2026";
+import { CERTIFICATE_SIGNING_SECRET } from "../../config.js";
 
 export function canonicalizePayload(cert) {
   return [
@@ -17,7 +16,7 @@ export function canonicalizePayload(cert) {
 
 export function signCertificatePayload(cert) {
   const canonical = canonicalizePayload(cert);
-  const hmac = crypto.createHmac("sha256", SIGNING_SECRET);
+  const hmac = crypto.createHmac("sha256", CERTIFICATE_SIGNING_SECRET);
   hmac.update(canonical);
   return hmac.digest("hex");
 }

@@ -9,7 +9,7 @@ import {
   now,
 } from "../../backend/src/core.js";
 import { runRetentionCleanup } from "../../backend/src/workers/retention-cleanup.js";
-import { testUsers, getCsrfPair, authCookieFor } from "../helpers/auth.js";
+import { testUsers, getCsrfPair, authCookieFor, stepUpCookieFor } from "../helpers/auth.js";
 
 describe("Sprint 11: Production Polish, Health Telemetry & Privacy Compliance", () => {
   let csrf;
@@ -90,7 +90,7 @@ describe("Sprint 11: Production Polish, Health Telemetry & Privacy Compliance", 
     it("Learner queues account deletion with a 30-day grace period", async () => {
       const res = await request(app)
         .post("/api/users/me/delete-request")
-        .set("Cookie", [csrf.cookie, authCookieFor(compliantUser)])
+        .set("Cookie", [csrf.cookie, authCookieFor(compliantUser), stepUpCookieFor(compliantUser)])
         .set("x-csrf-token", csrf.token)
         .send({
           confirmEmail: compliantUser.email,
@@ -108,7 +108,7 @@ describe("Sprint 11: Production Polish, Health Telemetry & Privacy Compliance", 
     it("Providing an incorrect confirmation email is rejected with 400", async () => {
       const res = await request(app)
         .post("/api/users/me/delete-request")
-        .set("Cookie", [csrf.cookie, authCookieFor(compliantUser)])
+        .set("Cookie", [csrf.cookie, authCookieFor(compliantUser), stepUpCookieFor(compliantUser)])
         .set("x-csrf-token", csrf.token)
         .send({
           confirmEmail: "wrong@nalanda.edu",

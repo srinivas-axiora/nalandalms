@@ -6,6 +6,7 @@ import {
   assessments,
   assignments,
   attempts,
+  sessionVersions,
   users,
   now,
 } from "../../backend/src/core.js";
@@ -254,6 +255,7 @@ describe("Sprint 8: WebRTC Proctoring, Continuous Chunking & Dual-Camera Pairing
 
   describe("4. Mobile Companion Pairing via QR Code", () => {
     let pairingToken;
+    let companionToken;
 
     it("Candidate requests a mobile pairing token for dual-angle setup", async () => {
       const res = await request(app)
@@ -280,6 +282,30 @@ describe("Sprint 8: WebRTC Proctoring, Continuous Chunking & Dual-Camera Pairing
       expect(res.body.ok).toBe(true);
       expect(res.body.message).toContain("successfully paired");
       expect(res.body.data.attemptId).toBe(candidateAttemptId);
+      companionToken = res.body.data.companionToken;
+      expect(companionToken).toBe(pairingToken);
+    });
+
+    it("Companion heartbeat requires and accepts the scoped token", async () => {
+      const denied = await request(app)
+        .post(`/api/proctoring/attempts/${candidateAttemptId}/companion/ping`)
+        .send({ batteryLevel: 82 });
+      expect([401, 403]).toContain(denied.status);
+
+      const accepted = await request(app)
+        .post(`/api/proctoring/attempts/${candidateAttemptId}/companion/ping`)
+        .set("x-companion-token", companionToken)
+        .send({ batteryLevel: 82 });
+      expect(accepted.status).toBe(200);
+    });
+
+    it("Candidate session revocation invalidates the companion token", async () => {
+      sessionVersions[candidateA.id] = (sessionVersions[candidateA.id] || 0) + 1;
+      const res = await request(app)
+        .post(`/api/proctoring/attempts/${candidateAttemptId}/companion/ping`)
+        .set("x-companion-token", companionToken)
+        .send({ batteryLevel: 80 });
+      expect(res.status).toBe(401);
     });
 
     it("Desktop client confirms companion camera is active and paired", async () => {
@@ -290,7 +316,7 @@ describe("Sprint 8: WebRTC Proctoring, Continuous Chunking & Dual-Camera Pairing
       expect(res.status).toBe(200);
       expect(res.body.data.isPaired).toBe(true);
       expect(res.body.data.companion.deviceName).toContain("Pixel 8 Pro");
-      expect(res.body.data.companion.batteryLevel).toBe(89);
+      expect(res.body.data.companion.batteryLevel).toBe(82);
     });
 
     it("Submitting invalid pairing token returns 404", async () => {

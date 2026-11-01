@@ -2,12 +2,18 @@
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import crypto from "node:crypto";
 import { COOKIE_SECURE, COOKIE_SAMESITE, CSRF_COOKIE, STEP_UP_COOKIE, JWT_SECRET } from "../../config.js";
 import { rateLimitCheck, rateLimitRecord, loginSecurity, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS, users, sessionVersions, now } from "../../core.js";
 import { signToken, signStepUpToken, audit, publicUser, securityEvent } from "../../domain.js";
 import { authenticate } from "../../middleware.js";
 
 export function registerAuth(app) {
+  const throttleIdentity = (identifier) => crypto
+    .createHash("sha256")
+    .update(String(identifier || "").trim().toLowerCase())
+    .digest("hex");
+
   // ── Public Self-Registration ──
   app.post("/api/auth/register", (req, res) => {
     const ip = req.ip || req.connection.remoteAddress;
@@ -20,7 +26,6 @@ export function registerAuth(app) {
       name: z.string().min(2).max(100),
       email: z.string().email(),
       password: z.string().min(8).max(128),
-      role: z.enum(["Learner", "Instructor", "Employee"]).default("Learner"),
     });
 
     const parsed = schema.safeParse(req.body);
@@ -31,7 +36,7 @@ export function registerAuth(app) {
       return res.status(409).json({ error: "An account with this email already exists" });
     }
 
-    const assignedRole = parsed.data.role === "Instructor" ? "Instructor" : "Learner";
+    const assignedRole = "Learner";
     const newUser = {
       id: `LRN-${Math.floor(1000 + Math.random() * 9000)}`,
       name: parsed.data.name.trim(),
@@ -77,18 +82,24 @@ export function registerAuth(app) {
   // ── Login ──
   app.post("/api/auth/login", (req, res) => {
     const ip = req.ip || req.connection.remoteAddress;
-    if (rateLimitCheck(ip, "/api/auth/login")) {
-      return res.status(429).json({ error: "Too many login attempts. Please try again later." });
-    }
-    rateLimitRecord(ip, "/api/auth/login");
-
     const schema = z.object({ email: z.string().min(2), password: z.string().min(8) });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     const identifier = parsed.data.email.trim();
     const normalizedIdentifier = identifier.toLowerCase();
-    const security = loginSecurity[normalizedIdentifier] || { failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
+    const identityKey = throttleIdentity(normalizedIdentifier);
+    const throttleEndpoint = `/api/auth/login/${identityKey}`;
+    if (rateLimitCheck(ip, "/api/auth/login") || rateLimitCheck(ip, throttleEndpoint)) {
+      return res.status(429).json({ error: "Too many login attempts. Please try again later." });
+    }
+    rateLimitRecord(ip, "/api/auth/login");
+    rateLimitRecord(ip, throttleEndpoint);
+
+    // Lockouts are scoped to the account/IP pair. An attacker cannot lock a
+    // victim out globally by repeatedly submitting that victim's identifier.
+    const securityKey = `${identityKey}|${ip}`;
+    const security = loginSecurity[securityKey] || { failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
 
     if (security.lockedUntil && new Date(security.lockedUntil).getTime() > Date.now()) {
       return res.status(403).json({ error: "Account locked due to too many failed attempts", lockedUntil: security.lockedUntil });
@@ -105,18 +116,20 @@ export function registerAuth(app) {
       if (security.failedAttempts >= MAX_LOGIN_ATTEMPTS) {
         security.lockedUntil = new Date(Date.now() + LOCKOUT_MS).toISOString();
       }
-      loginSecurity[normalizedIdentifier] = security;
+      loginSecurity[securityKey] = security;
       return res.status(401).json({ error: "Invalid credentials", failedAttempts: security.failedAttempts, lockedUntil: security.lockedUntil });
     }
 
-    loginSecurity[normalizedIdentifier] = { failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
+    loginSecurity[securityKey] = { failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
     audit(user.id, "LOGIN", "USER", user.id);
     res.cookie("token", signToken(user), { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE, maxAge: 30 * 60 * 1000 });
     return res.json({ user: publicUser(user) });
   });
 
   // ── Logout ──
-  app.post("/api/auth/logout", (_req, res) => {
+  app.post("/api/auth/logout", authenticate, (req, res) => {
+    sessionVersions[req.user.id] = (sessionVersions[req.user.id] || 0) + 1;
+    audit(req.user.id, "LOGOUT_AND_REVOKE_SESSION", "USER", req.user.id);
     res.clearCookie("token", { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
     res.clearCookie(CSRF_COOKIE, { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
     res.clearCookie(STEP_UP_COOKIE, { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });

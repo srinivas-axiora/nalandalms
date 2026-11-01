@@ -19,7 +19,19 @@ export function registerChapters(app) {
       .sort((a, b) => a.sequence - b.sequence);
     const data = rawChapters.map((ch) => {
       const access = canAccessChapter({ courseId: req.params.courseId, chapterId: ch.id, userId: req.user.id, userRole: req.user.role });
-      return { ...ch, isLocked: !access.allowed, lockReason: access.allowed ? null : access.error };
+      if (access.allowed) return { ...ch, isLocked: false, lockReason: null };
+      return {
+        id: ch.id,
+        courseId: ch.courseId,
+        sequence: ch.sequence,
+        title: ch.title,
+        description: ch.description || "",
+        contentType: ch.contentType,
+        durationMinutes: ch.durationMinutes,
+        minimumTimeMinutes: ch.minimumTimeMinutes,
+        isLocked: true,
+        lockReason: access.error,
+      };
     });
     res.json({ data, total: data.length });
   });

@@ -5,6 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
+import { USER_ROLES } from "./roles.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -82,10 +84,44 @@ const resolveJwtSecret = () => {
   return fromEnv;
 };
 export const JWT_SECRET = resolveJwtSecret();
+const resolveCertificateSigningSecret = () => {
+  const fromEnv = String(process.env.CERTIFICATE_SIGNING_SECRET || "").trim();
+  if (IS_PRODUCTION && fromEnv.length < 32) {
+    console.error("FATAL: CERTIFICATE_SIGNING_SECRET must be set to a strong (>= 32 chars) value in production.");
+    process.exit(1);
+  }
+  if (!fromEnv) {
+    console.warn("[security] CERTIFICATE_SIGNING_SECRET is missing — using an ephemeral development key.");
+    return crypto.randomBytes(48).toString("hex");
+  }
+  return fromEnv;
+};
+export const CERTIFICATE_SIGNING_SECRET = resolveCertificateSigningSecret();
 export const COOKIE_SECURE = IS_PRODUCTION;
 export const COOKIE_SAMESITE = "lax";
 export const CSRF_COOKIE = "csrfToken";
 export const STEP_UP_COOKIE = "stepUpToken";
+
+const trustProxySchema = z.union([
+  z.literal("false").transform(() => false),
+  z.literal("loopback"),
+  z.literal("linklocal"),
+  z.literal("uniquelocal"),
+  z.coerce.number().int().min(0).max(10),
+]);
+export const TRUST_PROXY = trustProxySchema.parse(process.env.TRUST_PROXY ?? "false");
+
+const certificateApprovalRoleSchema = z.enum(USER_ROLES);
+export const getCertificateIssuanceApprovalRole = () => {
+  const configured = String(process.env.CERTIFICATE_ISSUANCE_APPROVAL_ROLE || "").trim();
+  if (!configured) return null;
+  return certificateApprovalRoleSchema.parse(configured);
+};
+
+const companionTokenTtlSchema = z.coerce.number().int().min(60).max(3600);
+export const COMPANION_TOKEN_TTL_SECONDS = companionTokenTtlSchema.parse(
+  process.env.COMPANION_TOKEN_TTL_SECONDS ?? "900"
+);
 
 export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 export const getGeminiApiKey = () => {

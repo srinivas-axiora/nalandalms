@@ -5,7 +5,7 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS citext;
 
-CREATE TYPE user_role AS ENUM ('Super Admin', 'Admin', 'Manager', 'Employee');
+CREATE TYPE user_role AS ENUM ('Super Admin', 'Admin', 'InstituteAdmin', 'Manager', 'Instructor', 'Employee', 'Learner');
 CREATE TYPE lifecycle_status AS ENUM ('Active', 'Inactive');
 CREATE TYPE approval_status AS ENUM ('Draft', 'Pending', 'Approved', 'Rejected');
 CREATE TYPE assessment_type AS ENUM ('MCQ', 'Descriptive', 'Timed Quiz', 'Mixed');
@@ -46,12 +46,14 @@ CREATE INDEX idx_users_department ON users(department_id);
 COMMENT ON COLUMN users.login_id IS 'Super Admin signs in with "Super Admin"; all other users sign in with their email address.';
 COMMENT ON COLUMN users.password_hash IS 'Store bcrypt hashes only. Seed/demo passwords are supplied via SEED_*_PASSWORD environment variables and must be rotated before production use.';
 
--- Every Active -> Inactive transition invalidates all previously issued JWTs.
+-- Every account trust change invalidates all previously issued JWTs.
 -- Tokens carry the user's session_version claim and the API rejects mismatches.
-CREATE OR REPLACE FUNCTION revoke_user_sessions_on_deactivate()
+CREATE OR REPLACE FUNCTION revoke_user_sessions_on_trust_change()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF OLD.status = 'Active' AND NEW.status = 'Inactive' THEN
+  IF OLD.status IS DISTINCT FROM NEW.status
+     OR OLD.role IS DISTINCT FROM NEW.role
+     OR OLD.password_hash IS DISTINCT FROM NEW.password_hash THEN
     NEW.session_version := OLD.session_version + 1;
   END IF;
   NEW.updated_at := now();
@@ -59,10 +61,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_revoke_user_sessions_on_deactivate
-BEFORE UPDATE OF status ON users
+CREATE TRIGGER trg_revoke_user_sessions_on_trust_change
+BEFORE UPDATE OF status, role, password_hash ON users
 FOR EACH ROW
-EXECUTE FUNCTION revoke_user_sessions_on_deactivate();
+EXECUTE FUNCTION revoke_user_sessions_on_trust_change();
 
 -- ── Login Security ──
 -- Tracks failed login attempts and account lockouts per email

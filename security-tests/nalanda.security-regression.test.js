@@ -380,4 +380,101 @@ describe("Nalanda release-blocking security regressions", () => {
     expect(event.metadata.password).toBeUndefined();
     expect(event.metadata.passwordHash).toBeUndefined();
   });
+
+  it("SEC-P1-001 every client-supplied privileged registration role resolves to Learner", async () => {
+    for (const role of ["Admin", "Manager", "Instructor"]) {
+      const csrf = await csrfPair();
+      const response = await request(app)
+        .post("/api/auth/register")
+        .set("Cookie", csrf.cookie)
+        .set("x-csrf-token", csrf.token)
+        .send({
+          name: `Untrusted ${role}`,
+          email: `${unique(role.toLowerCase())}@example.test`,
+          password: "SecurityOnly123!",
+          role,
+        });
+      expect(response.status, role).toBe(201);
+      expect(response.body.user.role, role).toBe("Learner");
+    }
+  });
+
+  it("SEC-P1-002 administrator role changes revoke the subject's existing JWT", async () => {
+    const admin = core.users.find((item) => item.role === "Admin");
+    const oldCookie = cookieFor(learnerB);
+    const csrf = await csrfPair();
+    const update = await request(app)
+      .patch(`/api/users/${learnerB.id}`)
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(admin)}; ${stepUpFor(admin)}`)
+      .set("x-csrf-token", csrf.token)
+      .send({ role: "Employee" });
+    expect(update.status).toBe(200);
+
+    const replay = await request(app).get("/api/auth/me").set("Cookie", oldCookie);
+    expect(replay.status).toBe(401);
+  });
+
+  it("SEC-P1-003 administrator password changes revoke the subject's existing JWT", async () => {
+    const admin = core.users.find((item) => item.role === "Admin");
+    const oldCookie = cookieFor(paymentLearner);
+    const csrf = await csrfPair();
+    const update = await request(app)
+      .patch(`/api/users/${paymentLearner.id}`)
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(admin)}; ${stepUpFor(admin)}`)
+      .set("x-csrf-token", csrf.token)
+      .send({ password: "RotatedSecurityPassword123!" });
+    expect(update.status).toBe(200);
+
+    const replay = await request(app).get("/api/auth/me").set("Cookie", oldCookie);
+    expect(replay.status).toBe(401);
+  });
+
+  it("SEC-P1-004 an authorized course owner needs step-up for proctor controls", async () => {
+    const owner = core.users.find((item) => item.id === courseA.ownerId);
+    victimAttempt.status = "InProgress";
+    victimAttempt.isPaused = false;
+    const csrf = await csrfPair();
+    const response = await request(app)
+      .post(`/api/proctoring/attempts/${victimAttempt.id}/pause`)
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(owner)}`)
+      .set("x-csrf-token", csrf.token)
+      .send({});
+
+    expect(response.status).toBe(412);
+    expect(victimAttempt.status).toBe("InProgress");
+  });
+
+  it("SEC-P1-005 a foreign instructor cannot manually grade another owner's attempt", async () => {
+    const reviewAttempt = {
+      ...victimAttempt,
+      id: "SEC-FOREIGN-GRADE-ATTEMPT",
+      status: "PendingManualReview",
+      submittedAt: new Date().toISOString(),
+      answers: {},
+    };
+    core.attempts.push(reviewAttempt);
+    const csrf = await csrfPair();
+    const response = await request(app)
+      .post(`/api/assessments/attempts/${reviewAttempt.id}/grade`)
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(foreignInstructor)}; ${stepUpFor(foreignInstructor)}`)
+      .set("x-csrf-token", csrf.token)
+      .send({ grades: {}, overallFeedback: "Unauthorized grading attempt" });
+
+    expect(response.status).toBe(403);
+    expect(reviewAttempt.evaluatedBy).toBeUndefined();
+  });
+
+  it("SEC-P1-006 companion heartbeat rejects requests without its scoped token", async () => {
+    victimAttempt.companion = {
+      paired: true,
+      pairedAt: new Date().toISOString(),
+      lastPingAt: new Date().toISOString(),
+      deviceName: "Security companion",
+    };
+    const response = await request(app)
+      .post(`/api/proctoring/attempts/${victimAttempt.id}/companion/ping`)
+      .send({ batteryLevel: 50 });
+
+    expect([401, 403]).toContain(response.status);
+  });
 });

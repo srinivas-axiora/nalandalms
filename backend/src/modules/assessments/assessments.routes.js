@@ -8,6 +8,7 @@ import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
 import { canAttemptAssessment, ENROLLMENT_STATUS } from "../enrollments/progress.service.js";
 import { buildBlindExamAttempt, getBlindQuestions, recordQuestionAnswer, finalizeAttempt, manualGradeAttempt } from "./exam.service.js";
 import { users } from "../../core.js";
+import { canGradeAttempt, requireAttemptPermission } from "../../security/authorization.js";
 
 export function registerAssessments(app) {
   app.get("/api/assessments", authenticate, (req, res) => {
@@ -162,12 +163,8 @@ export function registerAssessments(app) {
   });
 
   // ── Blind Question Delivery (Zero Answer Key Leakage) ──
-  app.get("/api/assessments/attempts/:attemptId/questions", authenticate, (req, res) => {
-    const attempt = attempts.find((item) => item.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Attempt not found" });
-    if (attempt.userId !== req.user.id && !isAdmin(req.user.role) && req.user.role !== "Instructor") {
-      return res.status(403).json({ error: "Forbidden: Attempt belongs to another user" });
-    }
+  app.get("/api/assessments/attempts/:attemptId/questions", authenticate, requireAttemptPermission("view"), (req, res) => {
+    const attempt = req.authorizedAttempt;
     const assessment = assessments.find((item) => item.id === attempt.assessmentId);
     if (!assessment) return res.status(404).json({ error: "Assessment not found" });
 
@@ -243,11 +240,9 @@ export function registerAssessments(app) {
 
   // ── Pending Descriptive Review Queue ──
   app.get("/api/assessments/attempts/pending-review", authenticate, requireRole("Admin", "Manager", "Instructor"), (req, res) => {
-    let pending = attempts.filter((a) => a.status === "PendingManualReview");
-    if (req.user.role === "Instructor") {
-      const instructorCourseIds = new Set(courses.filter((c) => c.ownerId === req.user.id).map((c) => c.id));
-      pending = pending.filter((a) => instructorCourseIds.has(a.courseId));
-    }
+    const pending = attempts.filter((attempt) => (
+      attempt.status === "PendingManualReview" && canGradeAttempt(req.user, attempt)
+    ));
     const decorated = pending.map((a) => {
       const user = users.find((u) => u.id === a.userId);
       const assessment = assessments.find((asm) => asm.id === a.assessmentId);
@@ -264,7 +259,13 @@ export function registerAssessments(app) {
   });
 
   // ── Manual Grading of Descriptive Answers ──
-  app.post("/api/assessments/attempts/:attemptId/grade", authenticate, requireRole("Admin", "Manager", "Instructor"), (req, res) => {
+  app.post(
+    "/api/assessments/attempts/:attemptId/grade",
+    authenticate,
+    requireRole("Admin", "Manager", "Instructor"),
+    requireAttemptPermission("grade"),
+    requireStepUp,
+    (req, res) => {
     const schema = z.object({
       grades: z.record(z.string(), z.object({
         pointsAwarded: z.number().nonnegative(),
@@ -275,8 +276,7 @@ export function registerAssessments(app) {
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const attempt = attempts.find((item) => item.id === req.params.attemptId);
-    if (!attempt) return res.status(404).json({ error: "Attempt not found" });
+    const attempt = req.authorizedAttempt;
     const assessment = assessments.find((item) => item.id === attempt.assessmentId);
     if (!assessment) return res.status(404).json({ error: "Assessment not found" });
 
@@ -292,5 +292,6 @@ export function registerAssessments(app) {
     } catch (err) {
       res.status(err.status || 400).json({ error: err.message });
     }
-  });
+    },
+  );
 }

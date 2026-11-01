@@ -10,7 +10,7 @@ import {
   users,
   now,
 } from "../../backend/src/core.js";
-import { testUsers, getCsrfPair, authCookieFor } from "../helpers/auth.js";
+import { testUsers, getCsrfPair, authCookieFor, stepUpCookieFor } from "../helpers/auth.js";
 
 describe("Sprint 7: Blind Exam Delivery Engine", () => {
   let csrf;
@@ -371,7 +371,7 @@ describe("Sprint 7: Blind Exam Delivery Engine", () => {
     it("Instructor grades the descriptive answer, promoting status to 'Passed'", async () => {
       const gradeRes = await request(app)
         .post(`/api/assessments/attempts/${descAttemptId}/grade`)
-        .set("Cookie", [csrf.cookie, authCookieFor(instructor)])
+        .set("Cookie", [csrf.cookie, authCookieFor(instructor), stepUpCookieFor(instructor)])
         .set("x-csrf-token", csrf.token)
         .send({
           grades: {

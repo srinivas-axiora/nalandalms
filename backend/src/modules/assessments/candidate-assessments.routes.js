@@ -13,11 +13,17 @@ import {
   isAdmin,
   persist,
 } from "../../core.js";
-import { authenticate, requireRole } from "../../middleware.js";
+import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
+import {
+  canCreateCandidateAssessment,
+  canViewCandidateAnalytics,
+  canViewQuestionBank,
+} from "../../security/authorization.js";
 
 export function registerCandidateAssessments(app) {
   // ── 1. Question Library API: Browse 300+ Questions across 12 Hiring Categories ──
-  app.get("/api/assessments/question-library", authenticate, (req, res) => {
+  app.get("/api/assessments/question-library", authenticate, requireRole("Admin"), (req, res) => {
+    if (!canViewQuestionBank(req.user)) return res.status(403).json({ error: "Forbidden" });
     const { category, difficulty, points, search, limit = 50, offset = 0 } = req.query;
 
     let filtered = [...questionLibrary];
@@ -92,6 +98,9 @@ export function registerCandidateAssessments(app) {
 
     const assessment = assessments.find((item) => item.id === parsed.data.assessmentId);
     if (!assessment) return res.status(404).json({ error: "Assessment not found" });
+    if (!canCreateCandidateAssessment(req.user, assessment)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
 
     const course = courses.find((item) => item.id === assessment.courseId);
     const token = crypto.randomBytes(12).toString("hex");
@@ -186,6 +195,10 @@ export function registerCandidateAssessments(app) {
     );
 
     const assessment = assessments.find((a) => a.id === targetId || a.id === link?.assessmentId);
+    if (!link && !assessment) return res.status(404).json({ error: "Candidate assessment not found" });
+    if (!canViewCandidateAnalytics(req.user, link, assessment)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
 
     const submissions = link?.submissions || [];
     const completed = submissions.filter((s) => s.submittedAt);
@@ -297,7 +310,7 @@ export function registerCandidateAssessments(app) {
   });
 
   // ── 6. Authenticated: Toggle Active / Closed status ──
-  app.patch("/api/candidate-assessments/:id/status", authenticate, (req, res) => {
+  app.patch("/api/candidate-assessments/:id/status", authenticate, requireStepUp, (req, res) => {
     const link = candidateAssessments.find((item) => item.id === req.params.id || item.token === req.params.id);
     if (!link) return res.status(404).json({ error: "Candidate assessment not found" });
 
@@ -312,7 +325,7 @@ export function registerCandidateAssessments(app) {
   });
 
   // ── 7. Authenticated: Delete a shareable link ──
-  app.delete("/api/candidate-assessments/:id", authenticate, (req, res) => {
+  app.delete("/api/candidate-assessments/:id", authenticate, requireStepUp, (req, res) => {
     const idx = candidateAssessments.findIndex((item) => item.id === req.params.id || item.token === req.params.id);
     if (idx === -1) return res.status(404).json({ error: "Candidate assessment not found" });
 

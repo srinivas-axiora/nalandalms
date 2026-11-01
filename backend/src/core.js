@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { fileURLToPath } from "node:url";
 import { createStorage } from "../db.js";
+import { USER_ROLES, ADMIN_ROLES } from "./roles.js";
 import {
   pythonFullStackCourse,
   pythonFullStackSkills,
@@ -135,8 +136,8 @@ import { seedCandidateAssessments } from "./seed/question-library/seed-submissio
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
-const roles = ["Super Admin", "Admin", "Manager", "Employee", "Learner", "Instructor", "InstituteAdmin"];
-const adminRoles = ["Super Admin", "Admin"];
+const roles = [...USER_ROLES];
+const adminRoles = [...ADMIN_ROLES];
 const now = () => new Date().toISOString();
 const nextCourseId = (skill = "GN") => `NLD-${skill.slice(0, 2).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
 

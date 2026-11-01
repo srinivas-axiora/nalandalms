@@ -15,7 +15,7 @@ import {
   verifyCertificateSignature,
   buildLinkedInShareUrl,
 } from "../../backend/src/modules/certificates/signatures.js";
-import { testUsers, getCsrfPair, authCookieFor } from "../helpers/auth.js";
+import { testUsers, getCsrfPair, authCookieFor, stepUpCookieFor } from "../helpers/auth.js";
 
 describe("Sprint 10: Cryptographic Certificates & Public QR Verification", () => {
   let csrf;
@@ -41,6 +41,7 @@ describe("Sprint 10: Cryptographic Certificates & Public QR Verification", () =>
   };
 
   beforeAll(async () => {
+    process.env.CERTIFICATE_ISSUANCE_APPROVAL_ROLE = "Admin";
     csrf = await getCsrfPair();
 
     if (!users.some((u) => u.id === graduate.id)) users.push(graduate);
@@ -143,7 +144,7 @@ describe("Sprint 10: Cryptographic Certificates & Public QR Verification", () =>
       courseId,
       userId: graduate.id,
       assignedBy: faculty.id,
-      status: "AssessmentEligible",
+      status: "Passed",
       progress: 100,
       completedChapters: [],
       timeSpentSeconds: 5000,
@@ -205,7 +206,7 @@ describe("Sprint 10: Cryptographic Certificates & Public QR Verification", () =>
       // Issue a certificate via Admin API
       const res = await request(app)
         .post("/api/certificates")
-        .set("Cookie", [csrf.cookie, authCookieFor(testUsers.admin)])
+        .set("Cookie", [csrf.cookie, authCookieFor(testUsers.admin), stepUpCookieFor(testUsers.admin)])
         .set("x-csrf-token", csrf.token)
         .send({
           employeeId: graduate.id,
