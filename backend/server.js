@@ -67,7 +67,14 @@ app.set("trust proxy", TRUST_PROXY);
 // ── Global middleware ──
 app.use(helmet());
 app.use(cors({ origin: corsOrigin, credentials: true }));
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({
+  limit: "2mb",
+  verify: (req, _res, buffer) => {
+    if (req.originalUrl?.split("?", 1)[0] === "/api/payments/webhook") {
+      req.rawBody = Buffer.from(buffer);
+    }
+  },
+}));
 app.use(cookieParser());
 app.use(verifyCsrf);
 app.use("/api", rateLimit({ windowMs: 60_000, max: 600, scope: "ip", name: "global" }));

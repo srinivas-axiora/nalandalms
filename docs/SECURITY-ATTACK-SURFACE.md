@@ -135,9 +135,9 @@ or step-up middleware disagrees with its declaration.
 | GET | `/api/certificates` | Any | N | N/A | N | G | Role-scoped service |
 | POST | `/api/certificates` | A/M/I | Y | Y | Y | G | Configured approver, course authority, eligibility and step-up required |
 | POST | `/api/certificates/auto-issue` | Any | Y | Y | N | G | Self-scoped but accepts caller-selected attemptId |
-| POST | `/api/payments/create-order` | Any | Y | Y | N | G | In-memory order; free price uses falsy default bug |
-| POST | `/api/payments/verify` | Any | Y | Y | N | G | Signature optional; order not bound to course/user |
-| POST | `/api/payments/webhook` | Public | Y | Exempt | N | G | Signature optional; reconstructed JSON, no replay ID |
+| POST | `/api/payments/create-order` | Any | Y | Y | N | G | Server-priced order ledger binds user/course/amount/currency and expires |
+| POST | `/api/payments/verify` | Any | Y | Y | N | G | Mandatory HMAC, order ownership/binding and payment-level idempotency |
+| POST | `/api/payments/webhook` | Public | Y | Exempt | N | G | Mandatory raw-body HMAC and provider event-ID replay protection |
 | POST | `/api/uploads/presign` | A/M | Y | Y | N | G | MIME header only; returns seven-day download URL |
 | PUT | `/api/uploads/direct` | Any | Y | Y | N | G | Unbounded, no role/MIME/containment control |
 | GET | `/api/content/:courseId/:chapterId/url` | Any | N | N/A | N | G | Enrollment/owner/admin authorization present |
@@ -183,8 +183,8 @@ can make the API fail to start.
 
 1. Public registration can create an Instructor, while Instructor is trusted by
    certificate, assessment and proctoring routes.
-2. Payment verification and webhook routes can succeed without cryptographic
-   authentication.
+2. Payment authentication was remediated in Phase 2; deployment still requires
+   the payment migration, unique production secrets and provider reconciliation.
 3. Candidate analytics, signaling, companion status and many proctor controls
    have role-only or no resource authorization.
 4. Direct upload is available to every authenticated account and its output is

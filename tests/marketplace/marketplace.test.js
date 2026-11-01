@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import crypto from "node:crypto";
 import request from "supertest";
 import { app } from "../../backend/server.js";
 import { testUsers, getCsrfPair, authCookieFor } from "../helpers/auth.js";
@@ -7,6 +8,7 @@ import { storage, loadDb, courses, assignments } from "../../backend/src/core.js
 describe("Nalanda LMS — Course Marketplace, Pricing & Checkout", () => {
   beforeAll(async () => {
     process.env.NODE_ENV = "test";
+    process.env.RAZORPAY_KEY_SECRET = "marketplace-test-payment-secret";
     await storage.init();
     await loadDb();
 
@@ -134,13 +136,18 @@ describe("Nalanda LMS — Course Marketplace, Pricing & Checkout", () => {
 
     it("should verify payment and auto-enroll the candidate", async () => {
       const { token, cookie } = await getCsrfPair();
+      const paymentId = `pay_${Date.now()}`;
+      const signature = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+        .update(`${orderId}|${paymentId}`)
+        .digest("hex");
       const res = await request(app)
         .post("/api/payments/verify")
         .set("Cookie", `${cookie}; ${authCookieFor(testUsers.employee)}`)
         .set("x-csrf-token", token)
         .send({
           orderId,
-          paymentId: `pay_${Date.now()}`,
+          paymentId,
+          signature,
           courseId: courses[1].id,
         });
 

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -14,6 +15,7 @@ process.chdir(isolatedRoot);
 process.env.NODE_ENV = "test";
 process.env.JWT_SECRET = "security-regression-only-secret-000000000000000000";
 process.env.RAZORPAY_KEY_SECRET = "security-regression-razorpay-secret";
+process.env.RAZORPAY_WEBHOOK_SECRET = "security-regression-webhook-secret";
 
 const { app } = await import("../backend/server.js");
 const core = await import("../backend/src/core.js");
@@ -476,5 +478,123 @@ describe("Nalanda release-blocking security regressions", () => {
       .send({ batteryLevel: 50 });
 
     expect([401, 403]).toContain(response.status);
+  });
+
+  it("SEC-P2-001 a correctly signed payment cannot be claimed by another user", async () => {
+    const paidCourse = { ...courseA, id: unique("SEC-PAY-COURSE"), title: "Cross-user payment course" };
+    core.courses.push(paidCourse);
+    const csrf = await csrfPair();
+    const created = await request(app)
+      .post("/api/payments/create-order")
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(paymentLearner)}`)
+      .set("x-csrf-token", csrf.token)
+      .send({ courseId: paidCourse.id });
+    const paymentId = unique("pay");
+    const signature = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(`${created.body.orderId}|${paymentId}`).digest("hex");
+
+    const stolen = await request(app)
+      .post("/api/payments/verify")
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(learnerA)}`)
+      .set("x-csrf-token", csrf.token)
+      .send({ orderId: created.body.orderId, paymentId, signature, courseId: paidCourse.id });
+
+    expect(stolen.status).toBe(403);
+    expect(core.assignments.some((item) => item.userId === learnerA.id && item.courseId === paidCourse.id)).toBe(false);
+  });
+
+  it("SEC-P2-002 a signed callback cannot substitute the server-bound course", async () => {
+    const orderedCourse = { ...courseA, id: unique("SEC-ORDERED-COURSE"), title: "Ordered course" };
+    const substitutedCourse = { ...courseB, id: unique("SEC-SUBSTITUTED-COURSE"), title: "Substituted course" };
+    core.courses.push(orderedCourse, substitutedCourse);
+    const csrf = await csrfPair();
+    const created = await request(app)
+      .post("/api/payments/create-order")
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(paymentLearner)}`)
+      .set("x-csrf-token", csrf.token)
+      .send({ courseId: orderedCourse.id });
+    const paymentId = unique("pay");
+    const signature = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(`${created.body.orderId}|${paymentId}`).digest("hex");
+
+    const response = await request(app)
+      .post("/api/payments/verify")
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(paymentLearner)}`)
+      .set("x-csrf-token", csrf.token)
+      .send({ orderId: created.body.orderId, paymentId, signature, courseId: substitutedCourse.id });
+
+    expect(response.status).toBe(400);
+    expect(core.assignments.some((item) => item.userId === paymentLearner.id && item.courseId === substitutedCourse.id)).toBe(false);
+  });
+
+  it("SEC-P2-003 a verified callback is idempotent and cannot create duplicate entitlement", async () => {
+    const paidCourse = { ...courseA, id: unique("SEC-IDEMPOTENT-COURSE"), title: "Idempotent payment course" };
+    core.courses.push(paidCourse);
+    const csrf = await csrfPair();
+    const created = await request(app)
+      .post("/api/payments/create-order")
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(paymentLearner)}`)
+      .set("x-csrf-token", csrf.token)
+      .send({ courseId: paidCourse.id });
+    const paymentId = unique("pay");
+    const signature = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(`${created.body.orderId}|${paymentId}`).digest("hex");
+    const callback = { orderId: created.body.orderId, paymentId, signature, courseId: paidCourse.id };
+
+    const first = await request(app).post("/api/payments/verify")
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(paymentLearner)}`)
+      .set("x-csrf-token", csrf.token).send(callback);
+    const replay = await request(app).post("/api/payments/verify")
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(paymentLearner)}`)
+      .set("x-csrf-token", csrf.token).send(callback);
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(200);
+    expect(replay.body.idempotent).toBe(true);
+    expect(core.assignments.filter((item) => item.userId === paymentLearner.id && item.courseId === paidCourse.id)).toHaveLength(1);
+  });
+
+  it("SEC-P2-004 webhooks require raw-body authentication and deduplicate event IDs", async () => {
+    const paidCourse = { ...courseA, id: unique("SEC-WEBHOOK-COURSE"), title: "Webhook payment course" };
+    core.courses.push(paidCourse);
+    const csrf = await csrfPair();
+    const created = await request(app)
+      .post("/api/payments/create-order")
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(paymentLearner)}`)
+      .set("x-csrf-token", csrf.token)
+      .send({ courseId: paidCourse.id });
+    const paymentId = unique("pay");
+    const rawBody = JSON.stringify({
+      event: "payment.captured",
+      payload: { payment: { entity: {
+        id: paymentId,
+        order_id: created.body.orderId,
+        amount: created.body.amount,
+        currency: created.body.currency,
+        status: "captured",
+      } } },
+    });
+    const signature = crypto.createHmac("sha256", process.env.RAZORPAY_WEBHOOK_SECRET)
+      .update(rawBody).digest("hex");
+    const eventId = unique("evt");
+
+    const unsigned = await request(app).post("/api/payments/webhook")
+      .set("Content-Type", "application/json").send(rawBody);
+    const first = await request(app).post("/api/payments/webhook")
+      .set("Content-Type", "application/json")
+      .set("x-razorpay-signature", signature)
+      .set("x-razorpay-event-id", eventId)
+      .send(rawBody);
+    const replay = await request(app).post("/api/payments/webhook")
+      .set("Content-Type", "application/json")
+      .set("x-razorpay-signature", signature)
+      .set("x-razorpay-event-id", eventId)
+      .send(rawBody);
+
+    expect(unsigned.status).toBe(400);
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(200);
+    expect(replay.body.duplicate).toBe(true);
+    expect(core.assignments.filter((item) => item.userId === paymentLearner.id && item.courseId === paidCourse.id)).toHaveLength(1);
   });
 });

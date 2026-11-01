@@ -146,6 +146,9 @@ const loginSecurity = {};  // { email: { failedAttempts, lockedUntil, lastFailed
 const sessionVersions = {}; // { userId: number }
 const rateLimitLog = [];    // [{ ip, endpoint, at }]
 const issuedCertificates = []; // issued cert records
+const paymentOrders = [];
+const paymentTransactions = [];
+const paymentWebhookEvents = [];
 const archives = [];        // deleted entity archives
 
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -530,6 +533,9 @@ const snapshot = () => ({
   loginSecurity,
   sessionVersions,
   issuedCertificates,
+  paymentOrders,
+  paymentTransactions,
+  paymentWebhookEvents,
   archives,
   skills,
   targetSkills,
@@ -583,6 +589,9 @@ const loadDb = async () => {
     if (data.loginSecurity) { Object.assign(loginSecurity, data.loginSecurity); }
     if (data.sessionVersions) { Object.assign(sessionVersions, data.sessionVersions); }
     if (data.issuedCertificates) { issuedCertificates.length = 0; issuedCertificates.push(...data.issuedCertificates); }
+    if (data.paymentOrders) { paymentOrders.length = 0; paymentOrders.push(...data.paymentOrders); }
+    if (data.paymentTransactions) { paymentTransactions.length = 0; paymentTransactions.push(...data.paymentTransactions); }
+    if (data.paymentWebhookEvents) { paymentWebhookEvents.length = 0; paymentWebhookEvents.push(...data.paymentWebhookEvents); }
     if (data.archives) { archives.length = 0; archives.push(...data.archives); }
     if (data.skills) { skills.length = 0; skills.push(...data.skills); }
     if (data.targetSkills) { targetSkills.length = 0; targetSkills.push(...data.targetSkills); }
@@ -607,6 +616,9 @@ export {
   sessionVersions,
   rateLimitLog,
   issuedCertificates,
+  paymentOrders,
+  paymentTransactions,
+  paymentWebhookEvents,
   archives,
   MAX_LOGIN_ATTEMPTS,
   LOCKOUT_MS,

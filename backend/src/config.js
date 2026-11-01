@@ -123,6 +123,14 @@ export const COMPANION_TOKEN_TTL_SECONDS = companionTokenTtlSchema.parse(
   process.env.COMPANION_TOKEN_TTL_SECONDS ?? "900"
 );
 
+const paymentOrderTtlSchema = z.coerce.number().int().min(300).max(86400);
+export const PAYMENT_ORDER_TTL_SECONDS = paymentOrderTtlSchema.parse(
+  process.env.PAYMENT_ORDER_TTL_SECONDS ?? "1800"
+);
+export const getRazorpayKeyId = () => String(process.env.RAZORPAY_KEY_ID || "").trim();
+export const getRazorpayKeySecret = () => String(process.env.RAZORPAY_KEY_SECRET || "").trim();
+export const getRazorpayWebhookSecret = () => String(process.env.RAZORPAY_WEBHOOK_SECRET || "").trim();
+
 export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 export const getGeminiApiKey = () => {
   if (!process.env.GEMINI_API_KEY) loadLocalEnv();
