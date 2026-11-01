@@ -20,11 +20,11 @@ type Props = {
 
 export default function Login({ users, data, onLogin, onUpdateSecurity }: Props) {
   const [mode, setMode] = useState<"signin" | "signup" | "forgot">("signin");
-  const [name, setName] = useState("");
-  const [signupRole, setSignupRole] = useState<"Learner" | "Instructor">("Learner");
+  const [name] = useState("");
+  const [signupRole] = useState<"Learner" | "Instructor">("Learner");
   const [successMsg, setSuccessMsg] = useState("");
   const [resetToken, setResetToken] = useState("");
-  const [newPassword, setNewPassword] = useState("");
+  const [newPassword] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");

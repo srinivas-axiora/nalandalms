@@ -23,8 +23,6 @@ export class EdgeVisionDetector {
   private ctx: CanvasRenderingContext2D | null;
   private absentFramesCount = 0;
   private gazeAwayFramesCount = 0;
-  private consecutiveAnomalies = 0;
-  private lastAnalysisTime = 0;
 
   constructor() {
     this.canvas = document.createElement("canvas");
@@ -148,7 +146,6 @@ export class EdgeVisionDetector {
   public reset() {
     this.absentFramesCount = 0;
     this.gazeAwayFramesCount = 0;
-    this.consecutiveAnomalies = 0;
   }
 }
 

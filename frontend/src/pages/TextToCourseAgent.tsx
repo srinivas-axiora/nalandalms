@@ -198,23 +198,26 @@ export default function TextToCourseAgent({
           setGenerationProgress((items) => [...items, { id: "outline", tone: "green", label: `Course structure created`, detail: `${count} chapters planned before content generation.` }]);
         }
         if (event.type === "chapter_start" && typeof event.index === "number") {
+          const chapterIndex = event.index;
           setStage(2);
-          const pct = 15 + Math.round((event.index / Math.max(1, count)) * 55);
+          const pct = 15 + Math.round((chapterIndex / Math.max(1, count)) * 55);
           setProgressPercent(pct);
-          setGenerationProgress((items) => [...items, { id: `chapter-start-${event.index}`, tone: "cyan", label: `Creating Chapter ${event.index + 1} of ${count}`, detail: event.message }]);
+          setGenerationProgress((items) => [...items, { id: `chapter-start-${chapterIndex}`, tone: "cyan", label: `Creating Chapter ${chapterIndex + 1} of ${count}`, detail: event.message }]);
         }
         if (event.type === "chapter_repair" && typeof event.index === "number") {
+          const chapterIndex = event.index;
           setStage(3);
-          setGenerationProgress((items) => [...items, { id: `chapter-repair-${event.index}`, tone: "amber", label: `Validating Chapter ${event.index + 1} of ${count}`, detail: event.validation?.failures?.join(" ") || "Quality repair in progress." }]);
+          setGenerationProgress((items) => [...items, { id: `chapter-repair-${chapterIndex}`, tone: "amber", label: `Validating Chapter ${chapterIndex + 1} of ${count}`, detail: event.validation?.failures?.join(" ") || "Quality repair in progress." }]);
         }
         if (event.type === "chapter_done" && typeof event.index === "number") {
+          const chapterIndex = event.index;
           setStage(3);
-          const pct = 15 + Math.round(((event.index + 1) / Math.max(1, count)) * 55);
+          const pct = 15 + Math.round(((chapterIndex + 1) / Math.max(1, count)) * 55);
           setProgressPercent(pct);
           setGenerationProgress((items) => [...items, {
-            id: `chapter-done-${event.index}`,
+            id: `chapter-done-${chapterIndex}`,
             tone: event.validation?.passed ? "green" : "amber",
-            label: `Chapter ${event.index + 1} of ${count} Created`,
+            label: `Chapter ${chapterIndex + 1} of ${count} Created`,
             detail: event.validation ? `${event.validation.wordCount} words validated` : "Chapter completed",
           }]);
         }
@@ -229,11 +232,12 @@ export default function TextToCourseAgent({
           setGenerationProgress((items) => [...items, { id: "assessment-done", tone: "green", label: "Assessments created", detail: "Assessment generation started only after every chapter was complete." }]);
         }
         if (event.type === "final" && event.draft) {
-          finalDraft = event.draft;
-          setDraft(event.draft);
+          const completedDraft = event.draft;
+          finalDraft = completedDraft;
+          setDraft(completedDraft);
           setStage(stages.length - 1);
           setProgressPercent(100);
-          setGenerationProgress((items) => [...items, { id: "final", tone: "green", label: "Acharya draft ready for review", detail: `${event.draft.chapters.length} chapters and ${event.draft.assessments.length} assessments completed.` }]);
+          setGenerationProgress((items) => [...items, { id: "final", tone: "green", label: "Acharya draft ready for review", detail: `${completedDraft.chapters.length} chapters and ${completedDraft.assessments.length} assessments completed.` }]);
         }
         if (event.type === "error") throw new Error(event.message || "Generation failed.");
       };

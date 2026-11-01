@@ -54,6 +54,9 @@ const defaultPermissions: Record<Role, string[]> = {
   Admin: permissionLabels.filter((item) => item !== "Manage access permissions"),
   Manager: ["Assign team learning", "View audit analytics", "View own learning"],
   Employee: ["View own learning"],
+  Learner: [],
+  Instructor: [],
+  InstituteAdmin: [],
 };
 
 const blankForm = (managerId = ""): EmployeeForm => ({

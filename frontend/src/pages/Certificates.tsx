@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Panel, Input, Select, Metric, StatusPill, EmptyState } from "../components";
-import type { AppData, User, IssuedCertificate } from "../types";
+import type { AppData, User } from "../types";
 import { isAdminRole, now, uid } from "../types";
 import { toast } from "../toast";
 import { apiFetch } from "../api";

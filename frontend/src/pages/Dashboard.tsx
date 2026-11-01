@@ -18,7 +18,6 @@ export default function Dashboard({ data, currentUser }: { data: AppData; curren
   const visibleIds = isAdminRole(currentUser.role) ? data.users.map((u) => u.id) : currentUser.role === "Manager" ? [currentUser.id, ...teamIds] : [currentUser.id];
   const vis = data.enrollments.filter((e) => visibleIds.includes(e.userId));
   const completion = vis.length ? Math.round(vis.reduce((s, e) => s + e.progress, 0) / vis.length) : 0;
-  const approved = data.courses.filter((c) => c.approval === "Approved" && c.status === "Active").length;
   const pending = data.courses.filter((c) => c.approval === "Pending").length + data.assessments.filter((a) => a.approval === "Pending").length;
 
   const monthly = ["Aug", "Sep", "Oct", "Nov", "Dec", "Jan"].map((m, i) => ({ month: m, completions: 430 + i * 160, hours: 900 + i * 290, score: Math.min(96, 70 + i * 4) }));

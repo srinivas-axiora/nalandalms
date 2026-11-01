@@ -9,7 +9,10 @@
     "dev:backend": "node backend/server.js",
     "build": "vite build frontend",
     "preview": "vite preview frontend",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:security": "vitest run --config vitest.security.config.ts",
+    "typecheck": "tsc -p frontend/tsconfig.json --noEmit",
+    "routes:inventory": "node scripts/authorization-matrix.mjs --json"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1160.0",

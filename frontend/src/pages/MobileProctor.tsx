@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 // Inline SVG icons
 const ShieldCheck = ({ className }: { className?: string }) => (
   <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -23,10 +23,10 @@ const Battery = ({ className }: { className?: string }) => (
 );
 
 export function MobileProctor() {
-  const [token, setToken] = useState<string>("");
+  const [, setToken] = useState<string>("");
   const [pairingStatus, setPairingStatus] = useState<"idle" | "pairing" | "paired" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState<string>("");
-  const [attemptId, setAttemptId] = useState<string>("");
+  const [, setAttemptId] = useState<string>("");
   const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
   const [chunkCount, setChunkCount] = useState<number>(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);

@@ -287,7 +287,7 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
   const [pdfZoom, setPdfZoom] = useState(1);
   const [pdfOpenedAt, setPdfOpenedAt] = useState<number | null>(null);
   const [pdfElapsedSeconds, setPdfElapsedSeconds] = useState(0);
-  const [timerTick, setTimerTick] = useState(0);
+  const [, setTimerTick] = useState(0);
   const [chapterSeconds, setChapterSeconds] = useState<Record<string, number>>(() => ({ ...(enrollment?.chapterTimeSpentSeconds || {}) }));
   const [fbForm, setFbForm] = useState({ rating: 0, clarity: 0, relevance: 0, comments: "" });
   const videoRef = useRef<HTMLVideoElement>(null);

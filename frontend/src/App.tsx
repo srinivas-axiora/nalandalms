@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { cn, Avatar, ToastNotification } from "./components";
-import { navByRole, uid, now } from "./types";
+import { navByRole, now } from "./types";
 import type { AppData, ModuleKey, User, LoginSecurity } from "./types";
 import { seedData } from "./seedData";
 import { setToastHandler } from "./toast";
@@ -10,7 +10,6 @@ import Login from "./pages/Login";
 import { MobileProctor } from "./pages/MobileProctor";
 import { ProctorCockpit } from "./pages/ProctorCockpit";
 import { VerifyCertificate } from "./pages/VerifyCertificate";
-import CandidateAssessment from "./pages/CandidateAssessment";
 import Dashboard from "./pages/Dashboard";
 import Courses from "./pages/Courses";
 import Assessments from "./pages/Assessments";

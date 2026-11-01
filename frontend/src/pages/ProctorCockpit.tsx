@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { apiFetch } from "../api";
-import { User } from "../types";
+import type { User } from "../types";
 
 // Clean inline SVGs
 const ShieldAlert = ({ className }: { className?: string }) => (
@@ -52,7 +52,7 @@ export type ActiveSession = {
   activeWarningsCount: number;
 };
 
-export function ProctorCockpit({ currentUser }: { currentUser: User }) {
+export function ProctorCockpit({ currentUser: _currentUser }: { currentUser: User }) {
   const [sessions, setSessions] = useState<ActiveSession[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(null);

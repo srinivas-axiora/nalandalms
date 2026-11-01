@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { AnimatePresence } from "framer-motion";
 import { Panel, Modal, StatusPill, Input, Select, EmptyState, DeleteConfirmModal, cn } from "../components";
@@ -63,16 +63,16 @@ export default function Assessments({ data, currentUser, setData }: { data: AppD
   const [mainView, setMainView] = useState<"assessments" | "screening" | "library">("assessments");
   const [selectedAssessmentForScreening, setSelectedAssessmentForScreening] = useState<string>("ASM-INTERN-SWE");
   const [analyticsData, setAnalyticsData] = useState<any | null>(null);
-  const [loadingAnalytics, setLoadingAnalytics] = useState(false);
+  const [, setLoadingAnalytics] = useState(false);
   const [libraryData, setLibraryData] = useState<any[]>([]);
-  const [libraryCategories, setLibraryCategories] = useState<string[]>([]);
-  const [selectedLibCategory, setSelectedLibCategory] = useState<string>("All");
-  const [selectedLibMarks, setSelectedLibMarks] = useState<string>("All");
-  const [libSearchQuery, setLibSearchQuery] = useState<string>("");
-  const [loadingLibrary, setLoadingLibrary] = useState<boolean>(false);
-  const [screeningViewingCandidate, setScreeningViewingCandidate] = useState<any | null>(null);
+  const [, setLibraryCategories] = useState<string[]>([]);
+  const [selectedLibCategory] = useState<string>("All");
+  const [selectedLibMarks] = useState<string>("All");
+  const [libSearchQuery] = useState<string>("");
+  const [, setLoadingLibrary] = useState<boolean>(false);
+  const [, setScreeningViewingCandidate] = useState<any | null>(null);
   const [shareTarget, setShareTarget] = useState<Assessment | null>(null);
-  const [candidateLinks, setCandidateLinks] = useState<any[]>([]);
+  const [, setCandidateLinks] = useState<any[]>([]);
   const [selectedShareLink, setSelectedShareLink] = useState<any | null>(null);
   const [shareConfig, setShareConfig] = useState({
     durationMinutes: 30,
