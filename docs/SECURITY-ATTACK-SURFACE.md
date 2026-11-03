@@ -92,16 +92,17 @@ or step-up middleware disagrees with its declaration.
 | GET | `/api/assessments/attempts/pending-review` | A/M/I | N | N/A | N | G | Manager sees all; Instructor listing partly scoped |
 | POST | `/api/assessments/attempts/:attemptId/grade` | A/M/I | Y | Y | Y | G | Central owner/assigned-proctor policy plus step-up |
 | GET | `/api/assessments/question-library` | A | N | N/A | N | G | Answer-bearing authoring view is administrator-only |
-| POST | `/api/candidate-assessments` | A/M/I | Y | Y | N | G | Source assessment ownership check missing |
-| GET | `/api/candidate-assessments` | Any | N | N/A | N | G | Creator/admin filter present |
-| GET | `/api/candidate-assessments/analytics/:id` | Any | N | N/A | N | G | No role/ownership check; exposes PII/answers |
+| POST | `/api/candidate-assessments` | A/M/I | Y | Y | N | G | Source ownership checked; relational mode freezes an immutable question snapshot |
+| GET | `/api/candidate-assessments` | Any | N | N/A | N | G | Creator/admin filter; relational mode never recovers bearer tokens |
+| GET | `/api/candidate-assessments/analytics/:id` | Any | N | N/A | N | G | Creator/admin scoped; contains candidate PII and evaluated answers |
 | GET | `/api/candidate-assessments/:id` | Any | N | N/A | N | G | Creator/admin check present |
 | PATCH | `/api/candidate-assessments/:id/status` | Any | Y | Y | Y | G | Creator/admin scope plus step-up |
+| POST | `/api/candidate-assessments/:id/rotate-token` | Any | Y | Y | Y | G | Creator/admin scope plus step-up; old bearer hash is invalidated atomically |
 | DELETE | `/api/candidate-assessments/:id` | Any | Y | Y | Y | G | Creator/admin scope plus step-up |
 | GET | `/api/public/candidate-assessments/:token` | Public token | N | N/A | N | G | Checks status and expiry |
-| POST | `/api/public/candidate-assessments/:token/start` | Public token | Y | Exempt | N | G | Does not check expiry; email rule is bypassable identity |
-| POST | `/api/public/candidate-assessments/:token/event` | Public attempt token | Y | Exempt | N | G | Client controls event/severity/confidence |
-| POST | `/api/public/candidate-assessments/:token/submit` | Public attempt token | Y | Exempt | N | G | No server deadline enforcement; descriptive >10 chars passes |
+| POST | `/api/public/candidate-assessments/:token/start` | Public token | Y | Exempt | N | G | Status/expiry checked; relational mode atomically enforces case-insensitive email uniqueness |
+| POST | `/api/public/candidate-assessments/:token/event` | Public attempt token | Y | Exempt | N | G | Deadline enforced; relational mode derives severity server-side, deduplicates client event IDs and commits evidence atomically |
+| POST | `/api/public/candidate-assessments/:token/submit` | Public attempt token | Y | Exempt | N | G | Server deadline enforced; prose requires manual review; relational mode locks and commits once |
 
 ## Proctoring and signaling
 

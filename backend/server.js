@@ -64,6 +64,7 @@ import { replaceIdentityProjection } from "./src/identity-projection.js";
 import { attemptsRepository } from "./src/repositories/attempts.repository.pg.js";
 import { replaceAttemptProjection } from "./src/attempt-projection.js";
 import { certificatesPgRepository } from "./src/repositories/certificates.repository.pg.js";
+import { candidateAssessmentsPgRepository } from "./src/repositories/candidate-assessments.repository.pg.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG = process.env.USE_PG === "1";
@@ -72,6 +73,7 @@ const USE_PG_PAYMENTS = process.env.USE_PG_PAYMENTS === "1";
 const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
 const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
 const USE_PG_CERTIFICATES = process.env.USE_PG_CERTIFICATES === "1";
+const USE_PG_CANDIDATE_ASSESSMENTS = process.env.USE_PG_CANDIDATE_ASSESSMENTS === "1";
 
 const app = express();
 app.set("trust proxy", TRUST_PROXY);
@@ -138,7 +140,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/ready", async (_req, res) => {
-  const [database, redis, objects, payments, identity, attemptRuntime, certificateAuthority] = await Promise.all([
+  const [database, redis, objects, payments, identity, attemptRuntime, certificateAuthority, candidateRuntime] = await Promise.all([
     storage.health(),
     redisHealth(),
     objectStoreHealth(),
@@ -255,9 +257,37 @@ app.get("/api/ready", async (_req, res) => {
           mode: "normalized",
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
+    USE_PG_CANDIDATE_ASSESSMENTS
+      ? relationalQuery(
+          `SELECT
+             to_regclass('public.candidate_assessment_links') IS NOT NULL AS links,
+             to_regclass('public.candidate_assessment_submissions') IS NOT NULL AS submissions,
+             to_regclass('public.candidate_proctor_events') IS NOT NULL AS events,
+             to_regclass('public.candidate_assessment_links_token_hash_key') IS NOT NULL AS unique_link_tokens,
+             to_regclass('public.candidate_assessment_submissions_link_id_candidate_email_key') IS NOT NULL AS unique_candidate_email,
+             to_regclass('public.candidate_proctor_events_submission_id_client_event_id_key') IS NOT NULL AS idempotent_events,
+             NOT EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public'
+                 AND table_name IN ('candidate_assessment_links', 'candidate_assessment_submissions')
+                 AND column_name IN ('token', 'attempt_token')
+             ) AS no_plaintext_tokens,
+             NOT EXISTS (
+               SELECT 1 FROM candidate_assessment_links
+               WHERE jsonb_array_length(question_snapshot) = 0
+             ) AS question_snapshots`
+        ).then(({ rows }) => ({
+          ok: Object.values(rows[0] || {}).every(Boolean),
+          mode: "normalized",
+        })).catch(() => ({ ok: false, mode: "normalized" }))
+      : Promise.resolve({ ok: true, mode: "disabled" }),
   ]);
-  const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok && attemptRuntime.ok && certificateAuthority.ok;
-  if (!ok) logger.error("READINESS_CHECK_FAILED", { database, redis, objects, payments, identity, attempts: attemptRuntime, certificates: certificateAuthority, startupReady });
+  const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok
+    && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok;
+  if (!ok) logger.error("READINESS_CHECK_FAILED", {
+    database, redis, objects, payments, identity, attempts: attemptRuntime,
+    certificates: certificateAuthority, candidateAssessments: candidateRuntime, startupReady,
+  });
   res.status(ok ? 200 : 503).json({
     ok,
     service: "Nalanda API",
@@ -269,6 +299,7 @@ app.get("/api/ready", async (_req, res) => {
       identity: { ok: identity.ok, mode: identity.mode },
       attempts: { ok: attemptRuntime.ok, mode: attemptRuntime.mode },
       certificates: { ok: certificateAuthority.ok, mode: certificateAuthority.mode },
+      candidateAssessments: { ok: candidateRuntime.ok, mode: candidateRuntime.mode },
     },
   });
 });
@@ -303,6 +334,9 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   const scopedCertificates = USE_PG_CERTIFICATES
     ? await certificatesPgRepository.listForUser(req.user)
     : issuedCertificates.filter((cert) => admin || visibleUserIds.has(cert.employeeId));
+  const scopedCandidateAssessments = USE_PG_CANDIDATE_ASSESSMENTS
+    ? await candidateAssessmentsPgRepository.listForUser(req.user)
+    : (admin ? candidateAssessments : candidateAssessments.filter((item) => item.createdBy === req.user.id));
   const scopedChapters = chapters.filter((chapter) => visibleCourseIds.has(chapter.courseId));
   const scopedAssessments = assessmentsVisibleTo(req.user).map((assessment) => assessmentForUser(assessment, req.user));
   const scopedUsers = users.filter((user) => visibleUserIds.has(user.id)).map(publicUser);
@@ -326,7 +360,7 @@ app.get("/api/app-data", authenticate, async (req, res) => {
     targetSkills: allTargetSkills.filter((target) => targetSkillVisibleTo(target, req.user)),
     skillRatings: skillRatings.filter((rating) => admin || visibleUserIds.has(rating.userId)),
     chapterFeedbacks: chapterFeedbacks.filter((feedback) => admin || feedback.userId === req.user.id || (req.user.role === "Manager" && visibleUserIds.has(feedback.userId))),
-    candidateAssessments: admin ? candidateAssessments : candidateAssessments.filter((c) => c.createdBy === req.user.id)
+    candidateAssessments: scopedCandidateAssessments
   });
 });
 

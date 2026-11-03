@@ -18,7 +18,8 @@
     "db:backfill": "node backend/src/db/backfill.js",
     "db:verify-identity": "node backend/src/db/verify-identity.mjs",
     "db:verify-attempts": "node backend/src/db/verify-attempts.mjs",
-    "db:verify-certificates": "node backend/src/db/verify-certificates.mjs"
+    "db:verify-certificates": "node backend/src/db/verify-certificates.mjs",
+    "db:verify-candidate-assessments": "node backend/src/db/verify-candidate-assessments.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1160.0",

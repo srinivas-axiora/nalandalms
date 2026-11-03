@@ -1,6 +1,6 @@
 # Nalanda — PostgreSQL data-layer migration
 
-Status: **in progress — skills, payment, identity, attempt and certificate boundaries built.**
+Status: **in progress — skills, payment, identity, attempt, certificate and candidate boundaries built.**
 Owner: Engineering. Updated: 2026-11-03.
 
 > ⚠️ **This code is UNVERIFIED by the author.** It was written without a live
@@ -9,8 +9,9 @@ Owner: Engineering. Updated: 2026-11-03.
 > be validated against a real database using the steps in §4 before any cutover.
 > It is feature-gated — most of the running app still uses the existing
 > in-memory/JSONB snapshot store. `USE_PG_SKILLS`, `USE_PG_PAYMENTS`,
-> `USE_PG_IDENTITY`, `USE_PG_ATTEMPTS` and `USE_PG_CERTIFICATES` must stay off until their
-> live-database gates pass.
+> `USE_PG_IDENTITY`, `USE_PG_ATTEMPTS`, `USE_PG_CERTIFICATES` and
+> `USE_PG_CANDIDATE_ASSESSMENTS` must stay off until their live-database gates
+> pass.
 
 ---
 
@@ -43,6 +44,9 @@ backend/src/db/verify-attempts.mjs              live PostgreSQL attempt verifier
 database/migrations/0008_certificate_authority.sql signed credential/revocation authority
 backend/src/repositories/certificates.repository.pg.js transactional certificate authority
 backend/src/db/verify-certificates.mjs          signature/issuance/revocation verifier
+database/migrations/0009_candidate_assessment_runtime.sql durable public candidate runtime
+backend/src/repositories/candidate-assessments.repository.pg.js transactional candidate authority
+backend/src/db/verify-candidate-assessments.mjs live candidate/deadline/proctor verifier
 ```
 
 The **skills** bounded context is the pilot (like the certificates pilot for the
@@ -87,6 +91,7 @@ node backend/src/db/verify-skills.mjs
 npm run db:verify-identity
 npm run db:verify-attempts
 npm run db:verify-certificates
+npm run db:verify-candidate-assessments
 ```
 
 If `verify-skills.mjs` prints all `ok`, the pilot pattern is sound and we proceed
@@ -138,15 +143,22 @@ For each bounded context, in roughly ascending coupling:
 - [x] Signed certificate issuance, active-credential uniqueness, enrollment
       certification, public verification and revocation are implemented behind
       `USE_PG_CERTIFICATES=1` (Phase 9; live-DB/cross-task gate still pending)
+- [x] Public candidate links, anonymous sessions, proctor evidence, database
+      deadlines and grading are implemented behind
+      `USE_PG_CANDIDATE_ASSESSMENTS=1` (Phase 10; live-DB/cross-task gate still
+      pending)
 - [ ] courses (price/currency schema and repository mapping complete; route-wide
       source-of-truth cutover remains)
 - [ ] chapters  (+ chapter_time_totals / learning_time_events)
-- [ ] assessments (+ questions as JSONB)  ·  enrollments(assignments)
+- [ ] assessments source-of-truth routes (+ questions as JSONB)  ·
+      enrollments(assignments); candidate links now freeze a relational runtime
+      snapshot but creation still reads the process-local assessment projection
 - [x] attempts (+ answers/flags as JSONB; reconcile status CHECK)
 - [x] proctoring_logs  ·  certificates
 - [ ] archives  ·  audit_logs / security_events (certificate/attempt audit rows
       are durable, but application-wide audit authority remains incomplete)
-- [ ] reports, analytics → convert aggregates to SQL (`GROUP BY`, views)
+- [ ] reports, application-wide analytics → convert aggregates to SQL
+      (`GROUP BY`, views); candidate analytics now reads normalized submissions
 - [ ] remove the in-memory arrays + JSON-blob adapter; externalize rate-limit /
       session / lockout state to enable **multi-instance** horizontal scaling
 
@@ -158,6 +170,9 @@ Each entity: add migration SQL → repository → backfill → verify → wire m
 - **Unverified SQL** (this slice) — must pass §4 before trusting it.
 - **Payment cutover remains disabled** until the live PostgreSQL and concurrency
   gates in `SECURITY-PHASE-6-PAYMENT-PERSISTENCE.md` pass.
+- **Candidate cutover remains disabled** until the migration, reconciliation,
+  verifier and cross-task gates in `SECURITY-PHASE-10-CANDIDATE-RUNTIME.md`
+  pass. Candidate email must not be treated as verified identity.
 - **`now()`-seeded timestamps** are identical across seed rows, so list ordering
   by `created_at` is approximate; if exact order matters, add a sort key.
 - **Backfill source** prefers the PostgreSQL `app_state` snapshot, then local

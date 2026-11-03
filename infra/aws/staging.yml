@@ -384,6 +384,7 @@ Resources:
             - { Name: USE_PG_IDENTITY, Value: "0" }
             - { Name: USE_PG_ATTEMPTS, Value: "0" }
             - { Name: USE_PG_CERTIFICATES, Value: "0" }
+            - { Name: USE_PG_CANDIDATE_ASSESSMENTS, Value: "0" }
             - { Name: REDIS_URL, Value: !Sub "rediss://${Cache.PrimaryEndPoint.Address}:${Cache.PrimaryEndPoint.Port}" }
             - { Name: S3_BUCKET, Value: !Ref MediaBucket }
             - { Name: S3_REGION, Value: !Ref AWS::Region }

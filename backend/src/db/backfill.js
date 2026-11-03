@@ -2,9 +2,11 @@
 // Idempotent (upsert on ID). Run AFTER migrations:
 //   node backend/src/db/migrate.js && node backend/src/db/backfill.js
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { query, closePool, withTransaction } from "./pool.js";
+import { hashCandidateToken } from "../repositories/candidate-assessments.repository.pg.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_JSON = path.resolve(__dirname, "..", "..", "..", "database", "db.json");
@@ -39,6 +41,7 @@ async function loadSource() {
       attempts: core.attempts || [],
       proctoringLogs: core.proctoringLogs || [],
       issuedCertificates: core.issuedCertificates || [],
+      candidateAssessments: core.candidateAssessments || [],
     },
     source: "in-memory seed",
   };
@@ -417,7 +420,181 @@ export async function backfill() {
       }
     }
 
-    // 9. Payment ledger. This preserves existing settlement evidence before
+    // 9. Public candidate links and anonymous submissions. Plaintext bearer
+    // tokens never enter the normalized tables.
+    const candidateLinks = data.candidateAssessments || [];
+    const assessmentsById = new Map(assessments.map((assessment) => [assessment.id, assessment]));
+    const chapterIds = new Set(chapters.map((chapter) => chapter.id));
+    const candidateTokenCounts = candidateLinks.reduce((counts, link) => {
+      counts.set(link.token, (counts.get(link.token) || 0) + 1);
+      return counts;
+    }, new Map());
+    const activeAttemptTokenCounts = candidateLinks.reduce((counts, link) => {
+      for (const submission of (link.submissions || [])) {
+        if (!submission.submittedAt && submission.attemptToken) {
+          counts.set(submission.attemptToken, (counts.get(submission.attemptToken) || 0) + 1);
+        }
+      }
+      return counts;
+    }, new Map());
+    const eligibleCandidateLinks = candidateLinks.filter((link) => {
+      const assessment = assessmentsById.get(link.assessmentId);
+      return Boolean(link.id)
+        && typeof link.token === "string"
+        && link.token.length >= 4
+        && candidateTokenCounts.get(link.token) === 1
+        && Boolean(assessment)
+        && coursesById.has(link.courseId || assessment?.courseId)
+        && userIds.has(link.createdBy)
+        && (!link.expiresAt || Number.isFinite(Date.parse(link.expiresAt)))
+        && Array.isArray(assessment?.questions)
+        && assessment.questions.length > 0;
+    });
+    console.log(`[backfill] Upserting ${eligibleCandidateLinks.length} candidate links (${candidateLinks.length - eligibleCandidateLinks.length} quarantined)...`);
+    for (const link of eligibleCandidateLinks) {
+      const assessment = assessmentsById.get(link.assessmentId);
+      const course = coursesById.get(link.courseId || assessment.courseId);
+      const questionLimit = Math.min(
+        Math.max(1, Number(link.questionLimit || assessment.questionLimit || assessment.questions.length)),
+        assessment.questions.length
+      );
+      const questions = assessment.questions.slice(0, questionLimit);
+      await client.query(
+        `INSERT INTO candidate_assessment_links (
+           id, token_hash, token_hint, assessment_id, title, course_id,
+           course_title, chapter_id, duration_minutes, pass_score, question_limit,
+           question_snapshot, proctoring_required, fullscreen_required,
+           tab_switch_auto_submit, max_tab_switches, expires_at, status,
+           created_by, created_by_name, created_at, updated_at
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6,
+           $7, $8, $9, $10, $11,
+           $12::jsonb, $13, $14,
+           $15, $16, $17, $18,
+           $19, $20, COALESCE($21::timestamptz, now()), COALESCE($21::timestamptz, now())
+         ) ON CONFLICT (id) DO NOTHING`,
+        [
+          link.id, hashCandidateToken(link.token), link.token.slice(-8),
+          assessment.id, link.title || assessment.title, course.id,
+          link.courseTitle || course.title,
+          chapterIds.has(link.chapterId) ? link.chapterId : null,
+          Math.min(360, Math.max(1, Number(link.durationMinutes || assessment.durationMinutes || 30))),
+          Math.min(100, Math.max(1, Number(link.passScore || assessment.passScore || 70))),
+          questionLimit, JSON.stringify(questions), link.proctoringRequired !== false,
+          link.fullscreenRequired !== false, Boolean(link.tabSwitchAutoSubmit),
+          Math.min(10, Math.max(1, Number(link.maxTabSwitches || 3))),
+          link.expiresAt || null, link.status === "Closed" ? "Closed" : "Active",
+          link.createdBy, link.createdByName || users.find((user) => user.id === link.createdBy)?.name,
+          Number.isFinite(Date.parse(link.createdAt || "")) ? link.createdAt : null,
+        ]
+      );
+
+      const submissions = Array.isArray(link.submissions) ? link.submissions : [];
+      const emailCounts = submissions.reduce((counts, submission) => {
+        const email = String(submission.candidateEmail || "").trim().toLowerCase();
+        counts.set(email, (counts.get(email) || 0) + 1);
+        return counts;
+      }, new Map());
+      let admittedSubmissions = 0;
+      for (const submission of submissions) {
+        const email = String(submission.candidateEmail || "").trim().toLowerCase();
+        const startedAtMs = Date.parse(submission.startedAt || "");
+        const submittedAt = Number.isFinite(Date.parse(submission.submittedAt || ""))
+          ? submission.submittedAt
+          : null;
+        if (!submission.id || !email.includes("@") || emailCounts.get(email) !== 1 || !Number.isFinite(startedAtMs)) continue;
+        const rawStatus = String(submission.status || "").replaceAll(" ", "");
+        const status = submittedAt
+          ? ["Expired", "PendingManualReview", "Passed", "Failed"].includes(rawStatus)
+            ? rawStatus
+            : submission.passed === true ? "Passed" : submission.passed === false ? "Failed" : "PendingManualReview"
+          : "InProgress";
+        if (status === "InProgress" && (
+          !submission.attemptToken || activeAttemptTokenCounts.get(submission.attemptToken) !== 1
+        )) continue;
+        const expiresAt = Number.isFinite(Date.parse(submission.expiresAt || ""))
+          ? submission.expiresAt
+          : new Date(
+          startedAtMs + (Number(link.durationMinutes || assessment.durationMinutes || 30) * 60 + 30) * 1000
+          ).toISOString();
+        const questionIds = submission.questionIds?.length
+          ? submission.questionIds
+          : submission.evaluatedResponses?.map((response) => response.questionId).filter(Boolean).length
+            ? submission.evaluatedResponses.map((response) => response.questionId).filter(Boolean)
+            : questions.map((question, index) => question.id || `Q-${index + 1}`);
+        const passed = status === "Passed" ? true : status === "Failed" ? false : null;
+        const requiresManualReview = status === "PendingManualReview";
+        const inserted = await client.query(
+          `INSERT INTO candidate_assessment_submissions (
+             id, link_id, attempt_token_hash, candidate_name, candidate_email,
+             started_at, expires_at, submitted_at, expired_at, status,
+             trust_score, tab_switch_count, flags, answers, question_ids,
+             score, max_score, percentage, passed, requires_manual_review,
+             ignored_proctoring, proctoring_status, hiring_recommendation,
+             evaluated_responses, category_breakdown, auto_submitted_reason,
+             time_spent_seconds
+           ) VALUES (
+             $1, $2, $3, $4, $5,
+             $6, $7, $8, $9, $10,
+             $11, $12, $13::jsonb, $14::jsonb, $15,
+             $16, $17, $18, $19, $20,
+             $21, $22, $23,
+             $24::jsonb, $25::jsonb, $26,
+             $27
+           ) ON CONFLICT (id) DO NOTHING RETURNING id`,
+          [
+            submission.id, link.id,
+            hashCandidateToken(status === "InProgress"
+              ? submission.attemptToken
+              : `closed:${crypto.randomUUID()}`),
+            submission.candidateName || "Legacy candidate", email,
+            submission.startedAt, expiresAt, submittedAt,
+            status === "Expired" ? (submission.expiredAt || submittedAt) : null, status,
+            Math.min(100, Math.max(0, Number(submission.trustScore ?? 100))),
+            Math.max(0, Number(submission.tabSwitchCount || 0)),
+            JSON.stringify(submission.flags || []), JSON.stringify(submission.answers || {}),
+            questionIds, Number(submission.score || 0),
+            Math.max(1, Number(submission.maxScore || questions.reduce((sum, item) => sum + Number(item.points || 1), 0))),
+            Math.min(100, Math.max(0, Number(submission.percentage || 0))),
+            passed, requiresManualReview,
+            Boolean(submission.ignoredProctoring), submission.proctoringStatus || "CLEAN",
+            submission.hiringRecommendation || "Not Shortlisted",
+            JSON.stringify(submission.evaluatedResponses || []),
+            JSON.stringify(submission.categoryBreakdown || {}),
+            submission.autoSubmittedReason || null, Math.max(0, Number(submission.timeSpentSeconds || 0)),
+          ]
+        );
+        if (!inserted.rows[0]) continue;
+        admittedSubmissions += 1;
+        for (const [index, flag] of (submission.flags || []).entries()) {
+          const eventId = flag.id || `CPE-BACKFILL-${hashCandidateToken(`${link.id}:${submission.id}:${index}`).slice(0, 32).toUpperCase()}`;
+          const legacyClientEventId = String(flag.id || eventId);
+          const clientEventId = legacyClientEventId.length >= 8
+            ? legacyClientEventId.slice(0, 128)
+            : eventId;
+          await client.query(
+            `INSERT INTO candidate_proctor_events (
+               id, submission_id, client_event_id, event_type, severity, confidence,
+               trust_score_after, metadata, created_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, COALESCE($9::timestamptz, now()))
+             ON CONFLICT DO NOTHING`,
+            [
+              eventId, submission.id, clientEventId,
+              flag.eventType || "LEGACY_EVENT",
+              ["low", "medium", "high"].includes(flag.severity) ? flag.severity : "medium",
+              flag.confidence === null || flag.confidence === undefined
+                ? null
+                : Math.min(1, Math.max(0, Number(flag.confidence))),
+              Math.min(100, Math.max(0, Number(flag.trustScoreAfter ?? submission.trustScore ?? 100))),
+              JSON.stringify(flag.metadata || {}), flag.createdAt || null,
+            ]
+          );
+        }
+      }
+      console.log(`[backfill] Candidate link ${link.id}: admitted ${admittedSubmissions}/${submissions.length} submissions.`);
+    }
+
+    // 10. Payment ledger. This preserves existing settlement evidence before
     // USE_PG_PAYMENTS is enabled. Foreign keys require users/courses/enrollments
     // to be loaded first.
     const paymentOrders = data.paymentOrders || [];

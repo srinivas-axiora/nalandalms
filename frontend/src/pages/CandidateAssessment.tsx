@@ -122,6 +122,7 @@ export default function CandidateAssessment() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             attemptToken,
+            eventId: crypto.randomUUID(),
             eventType,
             severity,
             metadata,
