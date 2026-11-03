@@ -4,6 +4,7 @@ import { assessments, courses, chapters, assignments, attempts, users, issuedCer
 import { signCertificatePayload, buildLinkedInShareUrl } from "../certificates/signatures.js";
 import { audit } from "../../domain.js";
 import { ENROLLMENT_STATUS } from "../enrollments/progress.service.js";
+import { assessmentAttemptClock } from "./exam-deadline.js";
 
 
 function autoIssueCert(attempt, assignment) {
@@ -153,18 +154,7 @@ export function buildBlindExamAttempt({ assessment, userId, userRole = "Learner"
 }
 
 export function getExamClock(attempt, assessment) {
-  const durationMinutes = Number(assessment.durationMinutes) || 15;
-  const durationSeconds = durationMinutes * 60;
-  const elapsedSeconds = Math.max(0, Math.round((Date.now() - new Date(attempt.startedAt).getTime()) / 1000));
-  const timeRemainingSeconds = Math.max(0, durationSeconds - elapsedSeconds);
-  const isExpired = elapsedSeconds > (durationSeconds + ASSESSMENT_TIME_GRACE_SECONDS);
-
-  return {
-    durationSeconds,
-    elapsedSeconds,
-    timeRemainingSeconds,
-    isExpired,
-  };
+  return assessmentAttemptClock(attempt, assessment);
 }
 
 export function getBlindQuestions({ attempt, assessment, page = 1, limit = 50 }) {
@@ -176,7 +166,7 @@ export function getBlindQuestions({ attempt, assessment, page = 1, limit = 50 })
       attempt,
       assessment,
       autoSubmittedReason: "TIME_EXPIRED",
-      elapsedSeconds: clock.durationSeconds,
+      systemAutoSubmit: true,
     });
   }
 
@@ -237,7 +227,7 @@ export function recordQuestionAnswer({ attempt, assessment, questionId, answer, 
       attempt,
       assessment,
       autoSubmittedReason: "TIME_EXPIRED",
-      elapsedSeconds: clock.durationSeconds,
+      systemAutoSubmit: true,
     });
     const err = new Error("Exam time has expired");
     err.status = 403;
@@ -270,15 +260,29 @@ export function finalizeAttempt({
   answers = null,
   autoSubmittedReason = null,
   tabSwitchWarnings = null,
-  elapsedSeconds = null,
+  systemAutoSubmit = false,
 }) {
   if (attempt.submittedAt) {
     return { attempt, alreadySubmitted: true };
   }
 
   const clock = getExamClock(attempt, assessment);
-  const actualElapsed = elapsedSeconds ?? clock.elapsedSeconds;
-  const timeSpentSeconds = Math.min(actualElapsed, clock.durationSeconds + ASSESSMENT_TIME_GRACE_SECONDS);
+  if (clock.isExpired && !systemAutoSubmit) {
+    finalizeAttempt({
+      attempt,
+      assessment,
+      autoSubmittedReason: "TIME_EXPIRED",
+      systemAutoSubmit: true,
+    });
+    const err = new Error("Exam time has expired; saved answers were auto-submitted");
+    err.status = 403;
+    throw err;
+  }
+
+  const timeSpentSeconds = Math.min(
+    clock.elapsedSeconds,
+    clock.durationSeconds + ASSESSMENT_TIME_GRACE_SECONDS,
+  );
 
   // Merge any bulk final answers if provided
   if (answers && typeof answers === "object") {

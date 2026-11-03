@@ -19,6 +19,24 @@ import {
   canViewCandidateAnalytics,
   canViewQuestionBank,
 } from "../../security/authorization.js";
+import {
+  candidateLinkIsExpired,
+  candidateSubmissionClock,
+  candidateSubmissionExpiresAt,
+} from "./exam-deadline.js";
+
+function expireCandidateSubmission(submission, link) {
+  const clock = candidateSubmissionClock(submission, link);
+  if (!clock.isExpired) return false;
+
+  submission.submittedAt = submission.submittedAt || now();
+  submission.expiredAt = submission.expiredAt || submission.submittedAt;
+  submission.status = "Expired";
+  submission.autoSubmittedReason = "TIME_EXPIRED";
+  submission.timeSpentSeconds = clock.durationSeconds;
+  submission.answers = submission.answers || {};
+  return true;
+}
 
 export function registerCandidateAssessments(app) {
   // ── 1. Question Library API: Browse 300+ Questions across 12 Hiring Categories ──
@@ -353,7 +371,7 @@ export function registerCandidateAssessments(app) {
       return res.status(403).json({ error: "This assessment link is currently closed by the administrator." });
     }
 
-    if (link.expiresAt && new Date(link.expiresAt) < new Date()) {
+    if (candidateLinkIsExpired(link)) {
       return res.status(403).json({ error: "This assessment link has expired." });
     }
 
@@ -396,6 +414,10 @@ export function registerCandidateAssessments(app) {
       return res.status(403).json({ error: "This assessment link is currently closed." });
     }
 
+    if (candidateLinkIsExpired(link)) {
+      return res.status(403).json({ error: "This assessment link has expired." });
+    }
+
     const normalizedEmail = parsed.data.candidateEmail.toLowerCase();
 
     // STRICT ONE SUBMISSION PER EMAIL CHECK
@@ -435,12 +457,14 @@ export function registerCandidateAssessments(app) {
     const attemptToken = crypto.randomBytes(24).toString("hex");
     const submissionId = `CAS-${Math.floor(100000 + Math.random() * 900000)}`;
 
+    const startedAt = now();
     const submission = {
       id: submissionId,
       attemptToken,
       candidateName: parsed.data.candidateName.trim(),
       candidateEmail: normalizedEmail,
-      startedAt: now(),
+      startedAt,
+      expiresAt: candidateSubmissionExpiresAt(link.durationMinutes, Date.parse(startedAt)),
       submittedAt: null,
       status: "In Progress",
       trustScore: 100,
@@ -471,6 +495,7 @@ export function registerCandidateAssessments(app) {
       passScore: link.passScore,
       questions: blindQuestions,
       startedAt: submission.startedAt,
+      expiresAt: submission.expiresAt,
     });
   });
 
@@ -507,6 +532,11 @@ export function registerCandidateAssessments(app) {
 
     if (submission.submittedAt) {
       return res.status(400).json({ error: "Assessment has already been completed" });
+    }
+
+    if (expireCandidateSubmission(submission, link)) {
+      persist();
+      return res.status(403).json({ error: "Assessment time has expired." });
     }
 
     const penalty = parsed.data.severity === "high" ? 15 : parsed.data.severity === "medium" ? 5 : 2;
@@ -596,12 +626,18 @@ export function registerCandidateAssessments(app) {
       });
     }
 
+    if (expireCandidateSubmission(submission, link)) {
+      persist();
+      return res.status(403).json({ error: "Assessment time has expired; saved answers were submitted." });
+    }
+
     const assessment = assessments.find((item) => item.id === link.assessmentId);
     if (!assessment) return res.status(500).json({ error: "Base assessment not found" });
 
     // ── Instant Auto-Evaluation Engine ──
     let earnedPoints = 0;
     let totalPoints = 0;
+    let requiresManualReview = false;
     const evaluatedResponses = [];
     const categoryScores = {};
 
@@ -635,12 +671,9 @@ export function registerCandidateAssessments(app) {
             categoryScores[cat].score += pts;
           }
         } else {
-          // Descriptive / other type
-          if (String(candidateAnswer).trim().length > 10) {
-            isCorrect = true;
-            earnedPoints += pts;
-            categoryScores[cat].score += pts;
-          }
+          // Free-form responses require a human rubric decision. Text length is
+          // never evidence of correctness.
+          requiresManualReview = true;
         }
       }
 
@@ -652,16 +685,19 @@ export function registerCandidateAssessments(app) {
         earnedPoints: isCorrect ? pts : 0,
         candidateAnswer,
         candidateAnswerText: q.options?.[candidateAnswer] !== undefined ? q.options[candidateAnswer] : String(candidateAnswer ?? "Unanswered"),
-        correctAnswer: q.answer,
-        correctAnswerText: q.options?.[q.answer] !== undefined ? q.options[q.answer] : String(q.answer),
-        isCorrect,
+        correctAnswer: q.type === "MCQ" ? q.answer : undefined,
+        correctAnswerText: q.type === "MCQ"
+          ? (q.options?.[q.answer] !== undefined ? q.options[q.answer] : String(q.answer))
+          : undefined,
+        isCorrect: q.type === "MCQ" ? isCorrect : null,
+        requiresManualReview: q.type !== "MCQ",
         explanation: q.explanation || "",
       });
     });
 
     const maxScore = totalPoints > 0 ? totalPoints : 100;
     const percentage = Math.round((earnedPoints / maxScore) * 100);
-    const passed = percentage >= (link.passScore || 70);
+    const passed = requiresManualReview ? null : percentage >= (link.passScore || 70);
 
     // Compute category percentage breakdown
     const categoryBreakdown = {};
@@ -689,7 +725,9 @@ export function registerCandidateAssessments(app) {
 
     // Automated Screening Recommendation
     let hiringRecommendation = "Not Shortlisted";
-    if (passed && proctoringStatus === "CLEAN") {
+    if (requiresManualReview) {
+      hiringRecommendation = "Manual Review Required";
+    } else if (passed && proctoringStatus === "CLEAN") {
       hiringRecommendation = "Fast-track Interview";
     } else if (passed && proctoringStatus !== "CLEAN") {
       hiringRecommendation = "Interview with Proctoring Review";
@@ -705,7 +743,8 @@ export function registerCandidateAssessments(app) {
     submission.maxScore = maxScore;
     submission.percentage = percentage;
     submission.passed = passed;
-    submission.status = passed ? "Passed" : "Failed";
+    submission.status = requiresManualReview ? "PendingManualReview" : (passed ? "Passed" : "Failed");
+    submission.requiresManualReview = requiresManualReview;
     submission.ignoredProctoring = ignoredProctoring;
     submission.proctoringStatus = proctoringStatus;
     submission.hiringRecommendation = hiringRecommendation;
@@ -724,6 +763,8 @@ export function registerCandidateAssessments(app) {
         maxScore: submission.maxScore,
         percentage: submission.percentage,
         passed: submission.passed,
+        status: submission.status,
+        requiresManualReview: submission.requiresManualReview,
         passScore: link.passScore,
         trustScore: submission.trustScore,
         ignoredProctoring: submission.ignoredProctoring,

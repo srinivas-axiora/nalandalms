@@ -32,7 +32,9 @@ type SubmissionResult = {
   score: number;
   maxScore: number;
   percentage: number;
-  passed: boolean;
+  passed: boolean | null;
+  status: "Passed" | "Failed" | "PendingManualReview" | string;
+  requiresManualReview: boolean;
   passScore: number;
   trustScore: number;
   timeSpentSeconds: number;
@@ -771,6 +773,7 @@ export default function CandidateAssessment() {
   // ─────────────────────────────────────────────────────────────────────────────
   if (stage === "submitted" && submissionResult) {
     const passed = submissionResult.passed;
+    const requiresManualReview = submissionResult.requiresManualReview;
 
     return (
       <main className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-4">
@@ -778,26 +781,38 @@ export default function CandidateAssessment() {
           <div className="rounded-[2.5rem] border border-white/10 bg-white/[0.03] p-8 backdrop-blur-xl shadow-2xl text-center space-y-6">
             <div
               className={`h-16 w-16 rounded-3xl mx-auto flex items-center justify-center text-3xl font-bold shadow-xl ${
-                passed
+                requiresManualReview
+                  ? "bg-amber-500/20 border border-amber-500/30 text-amber-300 shadow-amber-500/10"
+                  : passed
                   ? "bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 shadow-emerald-500/10"
                   : "bg-rose-500/20 border border-rose-500/30 text-rose-400 shadow-rose-500/10"
               }`}
             >
-              {passed ? "✓" : "✗"}
+              {requiresManualReview ? "…" : passed ? "✓" : "✗"}
             </div>
 
             <div>
               <span
                 className={`inline-block px-3.5 py-1 rounded-full text-xs font-bold mb-3 ${
-                  passed
+                  requiresManualReview
+                    ? "bg-amber-400/10 border border-amber-400/30 text-amber-200"
+                    : passed
                     ? "bg-emerald-400/10 border border-emerald-400/30 text-emerald-300"
                     : "bg-rose-400/10 border border-rose-400/30 text-rose-300"
                 }`}
               >
-                {passed ? "ASSESSMENT PASSED" : "ASSESSMENT NOT CLEARED"}
+                {requiresManualReview
+                  ? "MANUAL REVIEW PENDING"
+                  : passed
+                    ? "ASSESSMENT PASSED"
+                    : "ASSESSMENT NOT CLEARED"}
               </span>
               <h1 className="text-2xl font-bold text-white">Thank You, {submissionResult.candidateName}!</h1>
-              <p className="text-xs text-slate-400 mt-1">Your responses have been recorded and graded.</p>
+              <p className="text-xs text-slate-400 mt-1">
+                {requiresManualReview
+                  ? "Your responses were recorded and are awaiting evaluator review."
+                  : "Your responses have been recorded and graded."}
+              </p>
             </div>
 
             {/* Score Grid */}
@@ -807,7 +822,9 @@ export default function CandidateAssessment() {
                 <p className="text-xl font-bold text-white">
                   {submissionResult.score}/{submissionResult.maxScore}
                 </p>
-                <p className="text-[11px] text-slate-500 font-semibold">{submissionResult.percentage}%</p>
+                <p className="text-[11px] text-slate-500 font-semibold">
+                  {requiresManualReview ? "Preliminary" : `${submissionResult.percentage}%`}
+                </p>
               </div>
 
               <div>

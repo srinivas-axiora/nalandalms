@@ -303,6 +303,7 @@ describe("Sprint 7: Blind Exam Delivery Engine", () => {
       // Simulate expired exam clock by backdating startedAt by 15 minutes (duration is 10 min)
       const attempt = attempts.find((a) => a.id === attemptId);
       attempt.startedAt = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+      attempt.expiresAt = new Date(Date.now() - 60 * 1000).toISOString();
 
       // Attempting to save answer now should fail due to expiration
       const answerRes = await request(app)

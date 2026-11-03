@@ -428,6 +428,95 @@ describe("Nalanda release-blocking security regressions", () => {
     expect(response.status).toBe(403);
   });
 
+  it("SEC-P4-001 an expired public candidate attempt rejects final answers", async () => {
+    const token = unique("expired-public-attempt");
+    const attemptToken = unique("candidate-attempt");
+    const submission = {
+      id: unique("submission"),
+      attemptToken,
+      candidateName: "Expired Candidate",
+      candidateEmail: `${unique("expired-submit")}@example.test`,
+      startedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      submittedAt: null,
+      status: "In Progress",
+      answers: {},
+      questionIds: ["SEC-Q-1"],
+      trustScore: 100,
+      tabSwitchCount: 0,
+      flags: [],
+    };
+    core.candidateAssessments.push({
+      id: unique("candidate-link"),
+      token,
+      assessmentId: assessment.id,
+      title: assessment.title,
+      courseId: courseA.id,
+      durationMinutes: 1,
+      passScore: 70,
+      questionLimit: 1,
+      status: "Active",
+      createdBy: "EMP-1003",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      submissions: [submission],
+    });
+
+    const response = await request(app)
+      .post(`/api/public/candidate-assessments/${token}/submit`)
+      .send({ attemptToken, answers: { "SEC-Q-1": 1 } });
+
+    expect([403, 409]).toContain(response.status);
+    expect(submission.answers["SEC-Q-1"]).toBeUndefined();
+  });
+
+  it("SEC-P4-002 descriptive candidate responses require manual review", async () => {
+    const descriptiveAssessment = {
+      ...assessment,
+      id: unique("descriptive-assessment"),
+      title: "Manual Review Assessment",
+      questions: [{
+        id: "SEC-DESC-1",
+        type: "Descriptive",
+        prompt: "Explain a secure architecture.",
+        points: 100,
+      }],
+    };
+    const token = unique("descriptive-link");
+    const link = {
+      id: unique("candidate-link"),
+      token,
+      assessmentId: descriptiveAssessment.id,
+      title: descriptiveAssessment.title,
+      courseId: courseA.id,
+      durationMinutes: 10,
+      passScore: 70,
+      questionLimit: 1,
+      status: "Active",
+      createdBy: "EMP-1003",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      submissions: [],
+    };
+    core.assessments.push(descriptiveAssessment);
+    core.candidateAssessments.push(link);
+
+    const started = await request(app)
+      .post(`/api/public/candidate-assessments/${token}/start`)
+      .send({ candidateName: "Review Candidate", candidateEmail: `${unique("review")}@example.test` });
+    expect(started.status).toBe(201);
+
+    const response = await request(app)
+      .post(`/api/public/candidate-assessments/${token}/submit`)
+      .send({
+        attemptToken: started.body.attemptToken,
+        answers: { "SEC-DESC-1": "This is deliberately longer than ten characters." },
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.result.status).toBe("PendingManualReview");
+    expect(response.body.result.requiresManualReview).toBe(true);
+    expect(response.body.result.passed).toBeNull();
+  });
+
   it("SEC-013 companion status is scoped to the candidate or assigned proctor", async () => {
     const response = await request(app)
       .get(`/api/proctoring/attempts/${victimAttempt.id}/companion/status`)

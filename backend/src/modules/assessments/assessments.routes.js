@@ -2,7 +2,7 @@
 // Handlers moved verbatim from server.js; shared deps injected via ctx.
 import { z } from "zod";
 import { v4 as uuid } from "uuid";
-import { assessments, courses, chapters, assignments, attempts, archives, settings, now, isAdmin, ASSESSMENT_TIME_GRACE_SECONDS } from "../../core.js";
+import { assessments, courses, chapters, assignments, attempts, archives, settings, now, isAdmin } from "../../core.js";
 import { audit, canManageCourse, assessmentsVisibleTo, assessmentForUser, questionPointsTotal, addAssessmentTime } from "../../domain.js";
 import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
 import { canAttemptAssessment, ENROLLMENT_STATUS } from "../enrollments/progress.service.js";
@@ -207,10 +207,7 @@ export function registerAssessments(app) {
   app.post("/api/assessments/attempts/:attemptId/submit", authenticate, (req, res) => {
     const schema = z.object({
       answers: z.record(z.string(), z.any()).optional(),
-      selectedQuestionIds: z.array(z.string()).optional(),
-      tabSwitchWarnings: z.coerce.number().int().min(0).optional(),
-      autoSubmittedReason: z.string().nullable().optional(),
-      timeSpentSeconds: z.coerce.number().int().min(0).optional()
+      tabSwitchWarnings: z.coerce.number().int().min(0).optional()
     });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -221,21 +218,23 @@ export function registerAssessments(app) {
     const assessment = assessments.find((item) => item.id === attempt.assessmentId);
     if (!assessment) return res.status(404).json({ error: "Assessment not found" });
 
-    const result = finalizeAttempt({
-      attempt,
-      assessment,
-      answers: parsed.data.answers,
-      autoSubmittedReason: parsed.data.autoSubmittedReason,
-      tabSwitchWarnings: parsed.data.tabSwitchWarnings,
-      elapsedSeconds: parsed.data.timeSpentSeconds
-    });
+    try {
+      const result = finalizeAttempt({
+        attempt,
+        assessment,
+        answers: parsed.data.answers,
+        tabSwitchWarnings: parsed.data.tabSwitchWarnings,
+      });
 
-    res.json({
-      data: result.attempt,
-      score: result.score,
-      passed: result.passed,
-      feedback: result.feedback
-    });
+      res.json({
+        data: result.attempt,
+        score: result.score,
+        passed: result.passed,
+        feedback: result.feedback
+      });
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
   });
 
   // ── Pending Descriptive Review Queue ──
