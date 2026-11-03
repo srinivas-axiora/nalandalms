@@ -132,6 +132,10 @@ export const errorHandler = (err, _req, res, _next) => {
     if (!res.headersSent) res.status(413).json({ error: "Uploaded file is too large (max 15MB)." });
     return;
   }
+  if (err?.type === "entity.too.large") {
+    if (!res.headersSent) res.status(413).json({ error: "Uploaded file is too large (max 15MB)." });
+    return;
+  }
   if (err?.message === "Unsupported file type") {
     if (!res.headersSent) res.status(415).json({ error: "Unsupported file type." });
     return;

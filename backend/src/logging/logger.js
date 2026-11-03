@@ -1,5 +1,6 @@
 // Enterprise Structured JSON Logger with Correlation IDs
 import crypto from "node:crypto";
+import { safeRequestPath } from "../security/request-path.js";
 
 export const LOG_LEVELS = {
   DEBUG: 10,
@@ -50,7 +51,7 @@ export function requestCorrelationMiddleware(req, res, next) {
     logger.info("HTTP_REQUEST", {
       requestId: reqId,
       method: req.method,
-      path: req.originalUrl || req.path,
+      path: safeRequestPath(req.originalUrl || req.path),
       statusCode: res.statusCode,
       durationMs,
       ip: req.ip,

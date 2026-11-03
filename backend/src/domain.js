@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { JWT_SECRET } from "./config.js";
 import { tokenize } from "./lib.js";
 import { redactSensitive } from "./security/redaction.js";
+import { safeRequestPath } from "./security/request-path.js";
 import {
   now, isAdmin, sessionVersions, auditLogs, securityEvents, users, courses,
   assessments, assignments, attempts, chapters, acharyaFeedbackMemory, learningTimeEvents,
@@ -34,7 +35,7 @@ export const securityEvent = (req, type, metadata = {}) => {
     actorId: req?.user?.id || null,
     ip: req?.ip || null,
     method: req?.method || null,
-    path: req?.originalUrl || req?.url || null,
+    path: safeRequestPath(req?.originalUrl || req?.url || ""),
     userAgent: req?.headers?.["user-agent"] || null,
     metadata: redactSensitive(metadata),
     createdAt: now(),

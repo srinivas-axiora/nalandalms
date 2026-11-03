@@ -8,6 +8,6 @@ tmp-dev-logs/
 # Runtime datastore (contains live data + password hashes — never commit)
 database/db.json
 database/db.json.tmp
-uploads/
+/uploads/
 
 build_*.cjs

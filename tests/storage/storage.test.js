@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import request from "supertest";
 import { app } from "../../backend/server.js";
 import { testUsers, getCsrfPair, authCookieFor } from "../helpers/auth.js";
-import { storage, loadDb } from "../../backend/src/core.js";
+import { storage, loadDb, attempts } from "../../backend/src/core.js";
 import { uploadBuffer, deleteObject } from "../../backend/src/storage/object-store.js";
 import { rateLimitCheckAndIncr } from "../../backend/src/cache/redis.js";
 
@@ -11,6 +11,18 @@ describe("Nalanda LMS — Cloud Storage, Media & Redis Rate Limiting", () => {
     process.env.NODE_ENV = "test";
     await storage.init();
     await loadDb();
+    if (!attempts.some((item) => item.id === "ATT-TEST-001")) {
+      attempts.push({
+        id: "ATT-TEST-001",
+        assessmentId: "ASM-TEST-UPLOAD",
+        courseId: "CRS-001",
+        userId: testUsers.employee.id,
+        status: "InProgress",
+        answers: {},
+        flags: [],
+        startedAt: new Date().toISOString(),
+      });
+    }
   });
 
   describe("Object Storage Adapter", () => {

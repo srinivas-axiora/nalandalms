@@ -7,6 +7,7 @@ import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { USER_ROLES } from "./roles.js";
+import { allowedUploadMimeTypes, uploadMetadataIsAllowed, MAX_COURSE_UPLOAD_BYTES } from "./security/file-validation.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -42,10 +43,7 @@ if (IS_PRODUCTION && !process.env.DATABASE_URL) {
 }
 
 // File uploads are buffered in memory, so cap size aggressively and validate type.
-export const ALLOWED_UPLOAD_MIME = new Set([
-  "application/pdf", "video/mp4", "video/webm",
-  "image/png", "image/jpeg", "image/webp", "image/gif",
-]);
+export const ALLOWED_UPLOAD_MIME = allowedUploadMimeTypes;
 export const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => {
@@ -59,9 +57,9 @@ export const upload = multer({
       cb(null, `${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}-${safeBase}${ext}`);
     },
   }),
-  limits: { fileSize: 15 * 1024 * 1024, files: 5 },
+  limits: { fileSize: MAX_COURSE_UPLOAD_BYTES, files: 5 },
   fileFilter: (_req, file, cb) => {
-    if (ALLOWED_UPLOAD_MIME.has(file.mimetype)) return cb(null, true);
+    if (ALLOWED_UPLOAD_MIME.has(file.mimetype) && uploadMetadataIsAllowed(file.originalname, file.mimetype)) return cb(null, true);
     return cb(new Error("Unsupported file type"));
   },
 });

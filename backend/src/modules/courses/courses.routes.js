@@ -2,10 +2,12 @@
 // Handlers moved verbatim from server.js; shared deps injected via ctx.
 import { z } from "zod";
 import { v4 as uuid } from "uuid";
+import fs from "node:fs";
 import { upload } from "../../config.js";
 import { courses, chapters, assessments, assignments, archives, users, now, nextCourseId } from "../../core.js";
 import { audit, canManageCourse, coursesVisibleTo } from "../../domain.js";
 import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
+import { bufferMatchesContentType } from "../../security/file-validation.js";
 
 export function registerCourses(app) {
   // ── Public Course Catalog (No Auth Required) ──
@@ -103,6 +105,15 @@ export function registerCourses(app) {
   });
 
   app.post("/api/courses", authenticate, requireRole("Admin", "Manager"), upload.fields([{ name: "pdf" }, { name: "video" }]), (req, res) => {
+    const uploadedFiles = Object.values(req.files || {}).flat();
+    const unsafeFile = uploadedFiles.find((file) => {
+      try { return !bufferMatchesContentType(fs.readFileSync(file.path), file.mimetype); }
+      catch { return true; }
+    });
+    if (unsafeFile) {
+      for (const file of uploadedFiles) fs.rmSync(file.path, { force: true });
+      return res.status(415).json({ error: "Uploaded file signature does not match its declared content type" });
+    }
     let body;
     try {
       body = typeof req.body.payload === "string" ? JSON.parse(req.body.payload) : req.body;
@@ -134,11 +145,11 @@ export function registerCourses(app) {
       createdAt: now(),
       updatedAt: now(),
       storage: {
-        files: Object.values(req.files || {}).flat().map((f) => ({
+        files: uploadedFiles.map((f) => ({
           field: f.fieldname,
           originalName: f.originalname,
           filename: f.filename,
-          path: `/uploads/${f.filename}`,
+          key: f.filename,
           size: f.size,
           mimetype: f.mimetype,
         })),

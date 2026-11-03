@@ -181,7 +181,9 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   });
 });
 
-app.use("/uploads", express.static(path.resolve(process.cwd(), "uploads")));
+// Runtime objects are private. They are delivered only through scoped API or
+// object-store grants; never publish the local storage directory same-origin.
+app.use("/uploads", (_req, res) => res.status(404).json({ error: "Not found" }));
 
 // ── Serve Frontend Production Build ──
 const frontendDistPath = path.resolve(__dirname, "../frontend/dist");

@@ -295,6 +295,78 @@ describe("Nalanda release-blocking security regressions", () => {
     expect([401, 403, 404]).toContain(publicRead.status);
   });
 
+  it("SEC-P3-001 direct uploads require a server-issued scoped upload grant", async () => {
+    const admin = core.users.find((item) => item.id === "EMP-1001");
+    const csrf = await csrfPair();
+    const response = await request(app)
+      .put("/api/uploads/direct?key=course_media/forged.pdf")
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(admin)}`)
+      .set("x-csrf-token", csrf.token)
+      .set("Content-Type", "application/pdf")
+      .send(Buffer.from("%PDF-1.7 forged"));
+
+    expect([400, 403]).toContain(response.status);
+  });
+
+  it("SEC-P3-002 upload MIME claims are verified against file signatures", async () => {
+    const admin = core.users.find((item) => item.id === "EMP-1001");
+    const csrf = await csrfPair();
+    const grant = await request(app)
+      .post("/api/uploads/presign")
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(admin)}`)
+      .set("x-csrf-token", csrf.token)
+      .send({ filename: "spoofed.pdf", contentType: "application/pdf", category: "chapter_pdf" });
+    const response = await request(app)
+      .put(grant.body.uploadUrl)
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(admin)}`)
+      .set("x-csrf-token", csrf.token)
+      .set("Content-Type", "application/pdf")
+      .send(Buffer.from("<html><script>alert(1)</script></html>"));
+
+    expect(response.status).toBe(415);
+  });
+
+  it("SEC-P3-003 local downloads require the intended authenticated recipient and force attachment", async () => {
+    const admin = core.users.find((item) => item.id === "EMP-1001");
+    const csrf = await csrfPair();
+    const grant = await request(app)
+      .post("/api/uploads/presign")
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(admin)}`)
+      .set("x-csrf-token", csrf.token)
+      .send({ filename: "safe.pdf", contentType: "application/pdf", category: "chapter_pdf" });
+    const uploaded = await request(app)
+      .put(grant.body.uploadUrl)
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(admin)}`)
+      .set("x-csrf-token", csrf.token)
+      .set("Content-Type", "application/pdf")
+      .send(Buffer.from("%PDF-1.7\n%%EOF"));
+    expect(uploaded.status).toBe(200);
+
+    const anonymous = await request(app).get(grant.body.downloadUrl);
+    const authorized = await request(app)
+      .get(grant.body.downloadUrl)
+      .set("Cookie", cookieFor(admin));
+
+    expect(anonymous.status).toBe(401);
+    expect(authorized.status).toBe(200);
+    expect(authorized.headers["content-disposition"]).toMatch(/^attachment;/);
+    expect(authorized.headers["x-content-type-options"]).toBe("nosniff");
+  });
+
+  it("SEC-P3-004 proctor captures cannot be uploaded to another candidate's attempt", async () => {
+    const csrf = await csrfPair();
+    const response = await request(app)
+      .post("/api/proctoring/captures")
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(learnerA)}`)
+      .set("x-csrf-token", csrf.token)
+      .send({
+        attemptId: victimAttempt.id,
+        imageData: "data:image/jpeg;base64,/9j/4AAQSkZJRg==",
+      });
+
+    expect(response.status).toBe(403);
+  });
+
   it("SEC-008 expired attempts reject bulk final answers", async () => {
     victimAttempt.status = "InProgress";
     victimAttempt.submittedAt = null;
