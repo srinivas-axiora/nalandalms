@@ -36,6 +36,7 @@ import { requestCorrelationMiddleware, logger } from "./src/logging/logger.js";
 import { objectStoreHealth } from "./src/storage/object-store.js";
 import { ensureRedisReady, redisHealth, closeRedis } from "./src/cache/redis.js";
 import { startRetentionDaemon } from "./src/workers/retention-cleanup.js";
+import { startPrivacyErasureDaemon } from "./src/workers/privacy-erasure.js";
 import { registerGovernance } from "./src/modules/governance/governance.routes.js";
 import { registerSettings } from "./src/modules/settings/settings.routes.js";
 import { registerSkills } from "./src/modules/skills/skills.routes.js";
@@ -74,6 +75,9 @@ const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
 const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
 const USE_PG_CERTIFICATES = process.env.USE_PG_CERTIFICATES === "1";
 const USE_PG_CANDIDATE_ASSESSMENTS = process.env.USE_PG_CANDIDATE_ASSESSMENTS === "1";
+const USE_PG_PRIVACY = process.env.USE_PG_PRIVACY === "1";
+const ENABLE_PRIVACY_ERASURE_WORKER = process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1";
+const PRIVACY_COVERAGE_ACK = process.env.PRIVACY_COVERAGE_ACK === "normalized-v1";
 
 const app = express();
 app.set("trust proxy", TRUST_PROXY);
@@ -140,7 +144,10 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/ready", async (_req, res) => {
-  const [database, redis, objects, payments, identity, attemptRuntime, certificateAuthority, candidateRuntime] = await Promise.all([
+  const [
+    database, redis, objects, payments, identity, attemptRuntime,
+    certificateAuthority, candidateRuntime, privacyAuthority,
+  ] = await Promise.all([
     storage.health(),
     redisHealth(),
     objectStoreHealth(),
@@ -281,12 +288,42 @@ app.get("/api/ready", async (_req, res) => {
           mode: "normalized",
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
+    USE_PG_PRIVACY
+      ? relationalQuery(
+          `SELECT
+             to_regclass('public.privacy_requests') IS NOT NULL AS requests,
+             to_regclass('public.privacy_erasure_objects') IS NOT NULL AS objects,
+             to_regclass('public.idx_privacy_one_active_request') IS NOT NULL AS active_uniqueness,
+             to_regclass('public.uq_privacy_object_key') IS NOT NULL AS object_uniqueness,
+             NOT EXISTS (
+               SELECT 1 FROM privacy_requests
+               WHERE status = 'Completed'
+                 AND (completed_at IS NULL OR completion_evidence = '{}'::jsonb)
+             ) AS completion_evidence,
+             NOT EXISTS (
+               SELECT 1 FROM privacy_erasure_objects
+               WHERE status = 'Deleted' AND object_key IS NOT NULL
+             ) AS deleted_keys_redacted`
+        ).then(({ rows }) => ({
+          ok: Object.values(rows[0] || {}).every(Boolean)
+            && ENABLE_PRIVACY_ERASURE_WORKER
+            && PRIVACY_COVERAGE_ACK
+            && USE_PG_PAYMENTS
+            && USE_PG_IDENTITY
+            && USE_PG_ATTEMPTS
+            && USE_PG_CERTIFICATES
+            && USE_PG_CANDIDATE_ASSESSMENTS,
+          mode: "normalized",
+          worker: ENABLE_PRIVACY_ERASURE_WORKER ? "enabled" : "disabled",
+        })).catch(() => ({ ok: false, mode: "normalized", worker: "unknown" }))
+      : Promise.resolve({ ok: true, mode: "disabled", worker: "disabled" }),
   ]);
   const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok
-    && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok;
+    && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok && privacyAuthority.ok;
   if (!ok) logger.error("READINESS_CHECK_FAILED", {
     database, redis, objects, payments, identity, attempts: attemptRuntime,
-    certificates: certificateAuthority, candidateAssessments: candidateRuntime, startupReady,
+    certificates: certificateAuthority, candidateAssessments: candidateRuntime,
+    privacy: privacyAuthority, startupReady,
   });
   res.status(ok ? 200 : 503).json({
     ok,
@@ -300,6 +337,11 @@ app.get("/api/ready", async (_req, res) => {
       attempts: { ok: attemptRuntime.ok, mode: attemptRuntime.mode },
       certificates: { ok: certificateAuthority.ok, mode: certificateAuthority.mode },
       candidateAssessments: { ok: candidateRuntime.ok, mode: candidateRuntime.mode },
+      privacy: {
+        ok: privacyAuthority.ok,
+        mode: privacyAuthority.mode,
+        worker: privacyAuthority.worker,
+      },
     },
   });
 });
@@ -385,6 +427,7 @@ app.use(errorHandler);
 // ── Startup & graceful shutdown ──
 let httpServer = null;
 let retentionTimer = null;
+let privacyErasureTimer = null;
 
 const start = async () => {
   try {
@@ -400,6 +443,9 @@ const start = async () => {
     const objects = await objectStoreHealth();
     if (!objects.ok) throw new Error(`Object storage is unavailable: ${objects.error || objects.mode}`);
     retentionTimer = startRetentionDaemon();
+    if (USE_PG_PRIVACY && ENABLE_PRIVACY_ERASURE_WORKER) {
+      privacyErasureTimer = startPrivacyErasureDaemon();
+    }
     startupReady = true;
   } catch (err) {
     console.error(`FATAL: storage initialization failed (${storage.describe?.() || "unknown"}):`, err?.message || err);
@@ -418,6 +464,7 @@ const shutdown = async (signal) => {
   console.log(`[shutdown] ${signal} received — flushing state and closing connections...`);
   if (httpServer) await new Promise((resolve) => httpServer.close(resolve)).catch(() => {});
   if (retentionTimer) clearInterval(retentionTimer);
+  if (privacyErasureTimer) clearInterval(privacyErasureTimer);
   try { await saveDb(); } catch (err) { console.error("[shutdown] final save failed:", err?.message || err); }
   try { await storage.close(); } catch { /* ignore */ }
   try { await closeRedis(); } catch { /* ignore */ }

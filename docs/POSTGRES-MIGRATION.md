@@ -1,6 +1,6 @@
 # Nalanda — PostgreSQL data-layer migration
 
-Status: **in progress — skills, payment, identity, attempt, certificate and candidate boundaries built.**
+Status: **in progress — skills, payment, identity, attempt, certificate, candidate and privacy boundaries built.**
 Owner: Engineering. Updated: 2026-11-03.
 
 > ⚠️ **This code is UNVERIFIED by the author.** It was written without a live
@@ -11,7 +11,8 @@ Owner: Engineering. Updated: 2026-11-03.
 > in-memory/JSONB snapshot store. `USE_PG_SKILLS`, `USE_PG_PAYMENTS`,
 > `USE_PG_IDENTITY`, `USE_PG_ATTEMPTS`, `USE_PG_CERTIFICATES` and
 > `USE_PG_CANDIDATE_ASSESSMENTS` must stay off until their live-database gates
-> pass.
+> pass. `USE_PG_PRIVACY` and its separate erasure-worker switch must also stay
+> off until the Phase 11 coverage audit passes.
 
 ---
 
@@ -47,6 +48,9 @@ backend/src/db/verify-certificates.mjs          signature/issuance/revocation ve
 database/migrations/0009_candidate_assessment_runtime.sql durable public candidate runtime
 backend/src/repositories/candidate-assessments.repository.pg.js transactional candidate authority
 backend/src/db/verify-candidate-assessments.mjs live candidate/deadline/proctor verifier
+database/migrations/0010_privacy_erasure_workflow.sql durable privacy state machine/object outbox
+backend/src/repositories/privacy.repository.pg.js privacy request/export/erasure authority
+backend/src/db/verify-privacy.mjs                 live privacy lifecycle verifier
 ```
 
 The **skills** bounded context is the pilot (like the certificates pilot for the
@@ -92,6 +96,7 @@ npm run db:verify-identity
 npm run db:verify-attempts
 npm run db:verify-certificates
 npm run db:verify-candidate-assessments
+npm run db:verify-privacy
 ```
 
 If `verify-skills.mjs` prints all `ok`, the pilot pattern is sound and we proceed
@@ -147,6 +152,10 @@ For each bounded context, in roughly ascending coupling:
       deadlines and grading are implemented behind
       `USE_PG_CANDIDATE_ASSESSMENTS=1` (Phase 10; live-DB/cross-task gate still
       pending)
+- [x] Durable privacy intake, review, legal hold, object retry, pseudonymization
+      and completion evidence are implemented behind `USE_PG_PRIVACY=1` and
+      `ENABLE_PRIVACY_ERASURE_WORKER=1` (Phase 11; live-DB, coverage and AWS
+      restore/erasure gates still pending)
 - [ ] courses (price/currency schema and repository mapping complete; route-wide
       source-of-truth cutover remains)
 - [ ] chapters  (+ chapter_time_totals / learning_time_events)
@@ -173,6 +182,9 @@ Each entity: add migration SQL → repository → backfill → verify → wire m
 - **Candidate cutover remains disabled** until the migration, reconciliation,
   verifier and cross-task gates in `SECURITY-PHASE-10-CANDIDATE-RUNTIME.md`
   pass. Candidate email must not be treated as verified identity.
+- **Privacy execution remains disabled** until the source-of-truth flags,
+  `normalized-v1` coverage register, live verifier and AWS backup/S3-version
+  erasure drill in `SECURITY-PHASE-11-PRIVACY-ERASURE.md` pass.
 - **`now()`-seeded timestamps** are identical across seed rows, so list ordering
   by `created_at` is approximate; if exact order matters, add a sort key.
 - **Backfill source** prefers the PostgreSQL `app_state` snapshot, then local

@@ -171,9 +171,12 @@ The runtime-data ignore is anchored to `/uploads/`, so source modules under an
 | POST | `/api/archive/:id/restore` | SA | Y | Y | Y | G | Step-up required; restored user is inactive with a rotated credential/session |
 | GET | `/api/audit-logs` | A | N | N/A | N | G | Redacted view; normalized identity/attempt writes use database audit rows |
 | GET | `/api/security-events` | A | N | N/A | N | G | Mutable bounded array |
-| GET | `/api/users/me/data-export` | Any | N | N/A | N | G | Self-scoped; incomplete across all stores/logs |
-| POST | `/api/users/me/delete-request` | Any | Y | Y | Y | G | Step-up required; queue remains process-local pending privacy phase |
-| POST | `/api/users/me/cancel-delete` | Any | Y | Y | N | G | Self-scoped |
+| GET | `/api/users/me/data-export` | Any | N | N/A | Y | G | Self-scoped bulk export; step-up required; relational mode uses explicit allowlists and omits secrets/object keys |
+| GET | `/api/users/me/delete-request` | Any | N | N/A | N | G | Self-scoped durable workflow status in relational mode |
+| POST | `/api/users/me/delete-request` | Any | Y | Y | Y | G | Step-up/email verification; relational mode enforces one active durable request |
+| POST | `/api/users/me/cancel-delete` | Any | Y | Y | Y | G | Self-scoped; step-up required; processing requests cannot be cancelled |
+| GET | `/api/privacy/requests` | A | N | N/A | N | G | Administrator review queue containing subject PII |
+| POST | `/api/privacy/requests/:requestId/review` | A | Y | Y | Y | G | Administrator step-up; explicit approve or legal hold reason |
 | GET | `/api/settings` | A | N | N/A | N | G | Admin-only |
 | PATCH | `/api/settings` | A | Y | Y | Y | G | Step-up present |
 | GET | `/api/ai/generation-feedback` | A/M | N | N/A | N | G | Cross-manager feedback memory visible |

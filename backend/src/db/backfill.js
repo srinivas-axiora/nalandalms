@@ -653,6 +653,31 @@ export async function backfill() {
         ]
       );
     }
+
+    // 11. Durable privacy intake. Legacy scheduling fields are admitted only
+    // when both timestamps are valid; execution still requires explicit review.
+    const scheduledPrivacyUsers = users.filter((user) =>
+      Number.isFinite(Date.parse(user.deletionRequestedAt || ""))
+      && Number.isFinite(Date.parse(user.deletionScheduledAt || ""))
+    );
+    console.log(`[backfill] Upserting ${scheduledPrivacyUsers.length} privacy requests...`);
+    for (const user of scheduledPrivacyUsers) {
+      const requestedAt = new Date(user.deletionRequestedAt);
+      const scheduledAt = new Date(user.deletionScheduledAt);
+      const graceEndsAt = scheduledAt > requestedAt
+        ? scheduledAt.toISOString()
+        : new Date(requestedAt.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      const reason = String(user.deletionReason || "Legacy user-requested account erasure").slice(0, 2000);
+      const requestId = `PRIV-BACKFILL-${hashCandidateToken(user.id).slice(0, 32).toUpperCase()}`;
+      await client.query(
+        `INSERT INTO privacy_requests (
+           id, user_id, status, reason, reason_sha256,
+           requested_at, grace_ends_at, coverage_version
+         ) VALUES ($1, $2, 'PendingReview', $3, $4, $5, $6, 'normalized-v1')
+         ON CONFLICT DO NOTHING`,
+        [requestId, user.id, reason, hashCandidateToken(reason), requestedAt.toISOString(), graceEndsAt]
+      );
+    }
   });
 
   console.log("[backfill] Relational backfill complete!");

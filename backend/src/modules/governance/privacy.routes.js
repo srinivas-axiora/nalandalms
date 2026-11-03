@@ -14,12 +14,15 @@ import {
 } from "../../core.js";
 import { audit } from "../../domain.js";
 import { authenticate, requireStepUp } from "../../middleware.js";
+import { registerPrivacyPgRoutes } from "./privacy.pg.routes.js";
 
 const deletionQueue = new Map(); // userId -> { requestedAt, gracePeriodEndsAt, email, reason }
+const USE_PG_PRIVACY = process.env.USE_PG_PRIVACY === "1";
 
 export function registerPrivacyCompliance(app) {
+  if (USE_PG_PRIVACY) return registerPrivacyPgRoutes(app);
   // ── GDPR Article 20: Data Portability (Complete Personal Data Archive) ──
-  app.get("/api/users/me/data-export", authenticate, (req, res) => {
+  app.get("/api/users/me/data-export", authenticate, requireStepUp, (req, res) => {
     const userId = req.user.id;
     const user = users.find((u) => u.id === userId);
     if (!user) return res.status(404).json({ error: "User not found" });
@@ -115,7 +118,7 @@ export function registerPrivacyCompliance(app) {
   });
 
   // ── Cancel Deletion Request ──
-  app.post("/api/users/me/cancel-delete", authenticate, (req, res) => {
+  app.post("/api/users/me/cancel-delete", authenticate, requireStepUp, (req, res) => {
     const user = users.find((u) => u.id === req.user.id);
     if (!user) return res.status(404).json({ error: "User not found" });
 

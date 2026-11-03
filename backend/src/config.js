@@ -61,6 +61,11 @@ if (IS_PRODUCTION) {
     console.error("FATAL: PGSSL=require is mandatory in production.");
     process.exit(1);
   }
+  if (process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1"
+    && String(process.env.PRIVACY_PSEUDONYM_SECRET || "").trim().length < 32) {
+    console.error("FATAL: PRIVACY_PSEUDONYM_SECRET must be at least 32 characters when privacy erasure is enabled.");
+    process.exit(1);
+  }
 }
 
 // File uploads are buffered in memory, so cap size aggressively and validate type.

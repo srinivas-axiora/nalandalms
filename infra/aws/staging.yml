@@ -280,6 +280,14 @@ Resources:
         PasswordLength: 64
         ExcludePunctuation: true
 
+  PrivacyPseudonymSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub ${EnvironmentName} privacy pseudonymization secret
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+
   BootstrapAdminSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -315,6 +323,7 @@ Resources:
                 Resource:
                   - !Ref JwtSecret
                   - !Ref CertificateSecret
+                  - !Ref PrivacyPseudonymSecret
                   - !Ref BootstrapAdminSecret
                   - !GetAtt Database.MasterUserSecret.SecretArn
                   - !Ref RazorpayKeyIdSecretArn
@@ -385,6 +394,9 @@ Resources:
             - { Name: USE_PG_ATTEMPTS, Value: "0" }
             - { Name: USE_PG_CERTIFICATES, Value: "0" }
             - { Name: USE_PG_CANDIDATE_ASSESSMENTS, Value: "0" }
+            - { Name: USE_PG_PRIVACY, Value: "0" }
+            - { Name: ENABLE_PRIVACY_ERASURE_WORKER, Value: "0" }
+            - { Name: PRIVACY_COVERAGE_ACK, Value: "" }
             - { Name: REDIS_URL, Value: !Sub "rediss://${Cache.PrimaryEndPoint.Address}:${Cache.PrimaryEndPoint.Port}" }
             - { Name: S3_BUCKET, Value: !Ref MediaBucket }
             - { Name: S3_REGION, Value: !Ref AWS::Region }
@@ -393,6 +405,7 @@ Resources:
           Secrets:
             - { Name: JWT_SECRET, ValueFrom: !Ref JwtSecret }
             - { Name: CERTIFICATE_SIGNING_SECRET, ValueFrom: !Ref CertificateSecret }
+            - { Name: PRIVACY_PSEUDONYM_SECRET, ValueFrom: !Ref PrivacyPseudonymSecret }
             - { Name: SEED_SUPERADMIN_PASSWORD, ValueFrom: !Ref BootstrapAdminSecret }
             - { Name: PGUSER, ValueFrom: !Sub "${Database.MasterUserSecret.SecretArn}:username::" }
             - { Name: PGPASSWORD, ValueFrom: !Sub "${Database.MasterUserSecret.SecretArn}:password::" }

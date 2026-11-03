@@ -75,9 +75,15 @@ describe("Sprint 11: Production Polish, Health Telemetry & Privacy Compliance", 
 
   describe("2. GDPR Article 20: Complete Personal Data Export", () => {
     it("Authenticated learner downloads complete portable JSON archive of personal data", async () => {
-      const res = await request(app)
+      const withoutStepUp = await request(app)
         .get("/api/users/me/data-export")
         .set("Cookie", authCookieFor(compliantUser));
+
+      expect(withoutStepUp.status).toBe(412);
+
+      const res = await request(app)
+        .get("/api/users/me/data-export")
+        .set("Cookie", [authCookieFor(compliantUser), stepUpCookieFor(compliantUser)]);
 
       expect(res.status).toBe(200);
       expect(res.headers["content-disposition"]).toContain("nalanda-data-export");
@@ -124,9 +130,16 @@ describe("Sprint 11: Production Polish, Health Telemetry & Privacy Compliance", 
     });
 
     it("Learner can cancel the scheduled deletion before grace period expires", async () => {
-      const res = await request(app)
+      const withoutStepUp = await request(app)
         .post("/api/users/me/cancel-delete")
         .set("Cookie", [csrf.cookie, authCookieFor(compliantUser)])
+        .set("x-csrf-token", csrf.token);
+
+      expect(withoutStepUp.status).toBe(412);
+
+      const res = await request(app)
+        .post("/api/users/me/cancel-delete")
+        .set("Cookie", [csrf.cookie, authCookieFor(compliantUser), stepUpCookieFor(compliantUser)])
         .set("x-csrf-token", csrf.token);
 
       expect(res.status).toBe(200);
