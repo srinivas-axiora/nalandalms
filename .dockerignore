@@ -1,0 +1,15 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+node_modules
+frontend/dist
+database/db.json
+uploads
+coverage
+docs
+security-tests
+tests
+*.log
+build_ssm_phase*.cjs

@@ -4,24 +4,26 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import crypto from "node:crypto";
 import { COOKIE_SECURE, COOKIE_SAMESITE, CSRF_COOKIE, STEP_UP_COOKIE, JWT_SECRET } from "../../config.js";
-import { rateLimitCheck, rateLimitRecord, loginSecurity, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS, users, sessionVersions, now } from "../../core.js";
+import { loginSecurity, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS, users, sessionVersions, now } from "../../core.js";
 import { signToken, signStepUpToken, audit, publicUser, securityEvent } from "../../domain.js";
-import { authenticate } from "../../middleware.js";
+import { authenticate, rateLimit } from "../../middleware.js";
 
 export function registerAuth(app) {
   const throttleIdentity = (identifier) => crypto
     .createHash("sha256")
     .update(String(identifier || "").trim().toLowerCase())
     .digest("hex");
+  const registrationRateLimit = rateLimit({ windowMs: 60_000, max: 10, name: "auth-register" });
+  const loginIpRateLimit = rateLimit({ windowMs: 60_000, max: 10, name: "auth-login-ip" });
+  const loginIdentityRateLimit = rateLimit({
+    windowMs: 60_000,
+    max: 10,
+    name: "auth-login-identity",
+    keyGenerator: (req) => throttleIdentity(req.body?.email || "missing"),
+  });
 
   // ── Public Self-Registration ──
-  app.post("/api/auth/register", (req, res) => {
-    const ip = req.ip || req.connection.remoteAddress;
-    if (rateLimitCheck(ip, "/api/auth/register")) {
-      return res.status(429).json({ error: "Too many registration attempts. Please try again later." });
-    }
-    rateLimitRecord(ip, "/api/auth/register");
-
+  app.post("/api/auth/register", registrationRateLimit, (req, res) => {
     const schema = z.object({
       name: z.string().min(2).max(100),
       email: z.string().email(),
@@ -80,7 +82,7 @@ export function registerAuth(app) {
   });
 
   // ── Login ──
-  app.post("/api/auth/login", (req, res) => {
+  app.post("/api/auth/login", loginIpRateLimit, loginIdentityRateLimit, (req, res) => {
     const ip = req.ip || req.connection.remoteAddress;
     const schema = z.object({ email: z.string().min(2), password: z.string().min(8) });
     const parsed = schema.safeParse(req.body);
@@ -89,13 +91,6 @@ export function registerAuth(app) {
     const identifier = parsed.data.email.trim();
     const normalizedIdentifier = identifier.toLowerCase();
     const identityKey = throttleIdentity(normalizedIdentifier);
-    const throttleEndpoint = `/api/auth/login/${identityKey}`;
-    if (rateLimitCheck(ip, "/api/auth/login") || rateLimitCheck(ip, throttleEndpoint)) {
-      return res.status(429).json({ error: "Too many login attempts. Please try again later." });
-    }
-    rateLimitRecord(ip, "/api/auth/login");
-    rateLimitRecord(ip, throttleEndpoint);
-
     // Lockouts are scoped to the account/IP pair. An attacker cannot lock a
     // victim out globally by repeatedly submitting that victim's identifier.
     const securityKey = `${identityKey}|${ip}`;

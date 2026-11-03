@@ -19,7 +19,7 @@ import pg from "pg";
 const { Pool } = pg;
 
 export function createStorage({ filePath, databaseUrl }) {
-  if (databaseUrl) return createPostgresStorage({ databaseUrl });
+  if (databaseUrl || process.env.PGHOST) return createPostgresStorage({ databaseUrl });
   return createFileStorage({ filePath });
 }
 
@@ -61,6 +61,9 @@ function createFileStorage({ filePath }) {
       }
     },
     async close() {},
+    async health() {
+      return { ok: true, mode: "file" };
+    },
   };
 }
 
@@ -76,13 +79,14 @@ function resolveSsl() {
 }
 
 function createPostgresStorage({ databaseUrl }) {
-  const pool = new Pool({
-    connectionString: databaseUrl,
+  const poolConfig = {
     max: Number(process.env.PGPOOL_MAX || 10),
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
     ssl: resolveSsl(),
-  });
+  };
+  if (databaseUrl) poolConfig.connectionString = databaseUrl;
+  const pool = new Pool(poolConfig);
 
   // Surface idle-client errors instead of crashing the process.
   pool.on("error", (err) => {
@@ -132,6 +136,14 @@ function createPostgresStorage({ databaseUrl }) {
     },
     async close() {
       await pool.end();
+    },
+    async health() {
+      try {
+        await pool.query("SELECT 1");
+        return { ok: true, mode: "postgres" };
+      } catch (err) {
+        return { ok: false, mode: "postgres", error: err?.message || "PostgreSQL check failed" };
+      }
     },
   };
 }

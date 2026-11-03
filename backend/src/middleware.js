@@ -26,22 +26,25 @@ export const verifyCsrf = (req, res, next) => {
   next();
 };
 
-// ── In-memory sliding-window rate limiter ──
-const rateBuckets = new Map();
-const RATE_BUCKET_LIMIT = 50000;
-export const rateLimit = ({ windowMs = 60_000, max = 600, scope = "ip", name = "" } = {}) => (req, res, next) => {
-  const who = scope === "user" ? (req.user?.id || req.ip || "anon") : (req.ip || "anon");
+// ── Distributed fixed-window rate limiter (Redis in production) ──
+export const rateLimit = ({ windowMs = 60_000, max = 600, scope = "ip", name = "", keyGenerator = null } = {}) => async (req, res, next) => {
+  const who = keyGenerator
+    ? keyGenerator(req)
+    : (scope === "user" ? (req.user?.id || req.ip || "anon") : (req.ip || "anon"));
   const key = `${name}|${scope}|${who}`;
-  const cutoff = Date.now() - windowMs;
-  const hits = (rateBuckets.get(key) || []).filter((t) => t > cutoff);
-  if (hits.length >= max) {
-    res.setHeader("Retry-After", String(Math.ceil(windowMs / 1000)));
-    return res.status(429).json({ error: "Too many requests. Please slow down and try again shortly." });
+  try {
+    const result = await rateLimitCheckAndIncr(key, Math.max(1, Math.ceil(windowMs / 1000)), max);
+    res.setHeader("X-RateLimit-Limit", String(max));
+    res.setHeader("X-RateLimit-Remaining", String(result.remaining));
+    if (!result.allowed) {
+      res.setHeader("Retry-After", String(Math.ceil(windowMs / 1000)));
+      return res.status(429).json({ error: "Too many requests. Please slow down and try again shortly." });
+    }
+    return next();
+  } catch (err) {
+    console.error("[rate-limit] unavailable:", err?.message || err);
+    return res.status(503).json({ error: "Request controls are temporarily unavailable. Please retry shortly." });
   }
-  hits.push(Date.now());
-  rateBuckets.set(key, hits);
-  if (rateBuckets.size > RATE_BUCKET_LIMIT) rateBuckets.clear();
-  next();
 };
 // Stricter per-user budget for cost-bearing AI endpoints; applied after authenticate.
 export const aiRateLimit = rateLimit({ windowMs: 60_000, max: 15, scope: "user", name: "ai" });

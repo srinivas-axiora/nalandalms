@@ -1,5 +1,12 @@
 name: CI
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [main, master]
@@ -24,6 +31,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify tracked runtime modules
+        run: git ls-files --error-unmatch backend/src/modules/uploads/uploads.routes.js
+
       - name: Run Backend Syntax Checks
         run: |
           node --check backend/server.js
@@ -35,6 +45,18 @@ jobs:
       - name: Run Automated Test Suite
         run: npm test
 
+      - name: Run Adversarial Security Suite
+        run: npm run test:security
+
+      - name: Run TypeScript Checks
+        run: npm run typecheck
+
+      - name: Audit Dependencies
+        run: npm audit --audit-level=high
+
       - name: Build Frontend Application
         run: npm run build
+
+      - name: Build Production Container
+        run: docker build --tag nalanda:${{ github.sha }} .
 

@@ -29,7 +29,8 @@ or step-up middleware disagrees with its declaration.
 
 | Method | Route | Auth | State | CSRF | Step | Rate | Scope / concern |
 |---|---|---|---:|---|---:|---|---|
-| GET | `/api/health` | Public | N | N/A | N | G | Exposes model/storage/system status and memory |
+| GET | `/api/health` | Public | N | N/A | N | G | Liveness, version, uptime and process memory |
+| GET | `/api/ready` | Public | N | N/A | N | G | Sanitized database, Redis and object-store readiness |
 | GET | `/api/csrf-token` | Public | Cookie | N/A | N | G | Token returned in body intentionally |
 | GET | `/api/app-data` | Any | N | N/A | N | G | Primary scoped aggregate; large response |
 | GET | `*splat` | Public | N | N/A | N | None | Frontend fallback; API paths return JSON 404 |

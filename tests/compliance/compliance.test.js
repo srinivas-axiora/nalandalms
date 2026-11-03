@@ -43,7 +43,7 @@ describe("Sprint 11: Production Polish, Health Telemetry & Privacy Compliance", 
   });
 
   describe("1. Deep Health Telemetry & Request Correlation", () => {
-    it("GET /api/health returns deep component diagnostics, memory stats and uptime", async () => {
+    it("GET /api/health returns liveness, memory stats and uptime", async () => {
       const res = await request(app).get("/api/health");
 
       expect(res.status).toBe(200);
@@ -51,14 +51,19 @@ describe("Sprint 11: Production Polish, Health Telemetry & Privacy Compliance", 
       expect(res.body.version).toBe("2.0.0-gtm");
       expect(res.body.uptimeSeconds).toBeGreaterThanOrEqual(0);
 
-      const status = res.body.status;
-      expect(status.api).toBe("healthy");
-      expect(status.storage.operational).toBe(true);
-      expect(status.database.connected).toBe(true);
-
       const system = res.body.system;
       expect(system.memoryRssMb).toBeGreaterThan(0);
       expect(system.memoryHeapUsedMb).toBeGreaterThan(0);
+    });
+
+    it("GET /api/ready verifies runtime dependencies", async () => {
+      const res = await request(app).get("/api/ready");
+
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.checks.database.ok).toBe(true);
+      expect(res.body.checks.redis.ok).toBe(true);
+      expect(res.body.checks.objects.ok).toBe(true);
     });
 
     it("Every HTTP response carries an x-request-id correlation header", async () => {
@@ -133,7 +138,7 @@ describe("Sprint 11: Production Polish, Health Telemetry & Privacy Compliance", 
   });
 
   describe("4. Automated Evidence Retention Cleanup Worker", () => {
-    it("Retention worker purges video chunks older than retention threshold", () => {
+    it("Retention worker purges video chunks older than retention threshold", async () => {
       // Seed an expired exam attempt older than 90 days with video chunks
       const oldSubmittedAt = new Date(Date.now() - 95 * 24 * 60 * 60 * 1000).toISOString();
       const oldAttempt = {
@@ -152,7 +157,7 @@ describe("Sprint 11: Production Polish, Health Telemetry & Privacy Compliance", 
       attempts.push(oldAttempt);
 
       // Run cleanup
-      const result = runRetentionCleanup({ retentionDays: 90, dryRun: false });
+      const result = await runRetentionCleanup({ retentionDays: 90, dryRun: false });
 
       expect(result.purgedAttemptsCount).toBeGreaterThanOrEqual(1);
       expect(result.deletedChunksCount).toBeGreaterThanOrEqual(2);

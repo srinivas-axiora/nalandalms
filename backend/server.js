@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 
 import {
-  PORT, corsOrigin, COOKIE_SECURE, COOKIE_SAMESITE, CSRF_COOKIE, GEMINI_MODEL, getGeminiApiKey, TRUST_PROXY,
+  PORT, corsOrigin, COOKIE_SECURE, COOKIE_SAMESITE, CSRF_COOKIE, TRUST_PROXY,
 } from "./src/config.js";
 import {
   now, isAdmin, users, courses, chapters, assessments, assignments, attempts, proctoringLogs,
@@ -33,7 +33,9 @@ import { registerPayments } from "./src/modules/payments/payments.routes.js";
 import { registerCohorts } from "./src/modules/cohorts/cohorts.routes.js";
 import { registerPrivacyCompliance } from "./src/modules/governance/privacy.routes.js";
 import { requestCorrelationMiddleware, logger } from "./src/logging/logger.js";
-import { storageMode } from "./src/storage/object-store.js";
+import { objectStoreHealth } from "./src/storage/object-store.js";
+import { ensureRedisReady, redisHealth, closeRedis } from "./src/cache/redis.js";
+import { startRetentionDaemon } from "./src/workers/retention-cleanup.js";
 import { registerGovernance } from "./src/modules/governance/governance.routes.js";
 import { registerSettings } from "./src/modules/settings/settings.routes.js";
 import { registerSkills } from "./src/modules/skills/skills.routes.js";
@@ -106,8 +108,9 @@ registerCohorts(app);
 registerPrivacyCompliance(app);
 
 // ── System routes ──
+let startupReady = process.env.NODE_ENV === "test";
+
 app.get("/api/health", (_req, res) => {
-  const apiKey = getGeminiApiKey();
   const mem = process.memoryUsage();
   res.json({
     ok: true,
@@ -115,18 +118,31 @@ app.get("/api/health", (_req, res) => {
     version: "2.0.0-gtm",
     uptimeSeconds: Math.round(process.uptime()),
     time: now(),
-    geminiConfigured: Boolean(apiKey),
-    geminiModel: GEMINI_MODEL,
-    status: {
-      api: "healthy",
-      storage: { mode: storageMode, operational: true },
-      database: { mode: "file-json", connected: true }
-    },
+    ready: startupReady,
     system: {
       memoryRssMb: Math.round(mem.rss / (1024 * 1024)),
       memoryHeapUsedMb: Math.round(mem.heapUsed / (1024 * 1024)),
       memoryHeapTotalMb: Math.round(mem.heapTotal / (1024 * 1024))
     }
+  });
+});
+
+app.get("/api/ready", async (_req, res) => {
+  const [database, redis, objects] = await Promise.all([
+    storage.health(),
+    redisHealth(),
+    objectStoreHealth(),
+  ]);
+  const ok = startupReady && database.ok && redis.ok && objects.ok;
+  if (!ok) logger.error("READINESS_CHECK_FAILED", { database, redis, objects, startupReady });
+  res.status(ok ? 200 : 503).json({
+    ok,
+    service: "Nalanda API",
+    checks: {
+      database: { ok: database.ok, mode: database.mode },
+      redis: { ok: redis.ok, mode: redis.mode },
+      objects: { ok: objects.ok, mode: objects.mode },
+    },
   });
 });
 
@@ -201,11 +217,17 @@ app.use(errorHandler);
 
 // ── Startup & graceful shutdown ──
 let httpServer = null;
+let retentionTimer = null;
 
 const start = async () => {
   try {
     await storage.init();
     await loadDb();
+    await ensureRedisReady();
+    const objects = await objectStoreHealth();
+    if (!objects.ok) throw new Error(`Object storage is unavailable: ${objects.error || objects.mode}`);
+    retentionTimer = startRetentionDaemon();
+    startupReady = true;
   } catch (err) {
     console.error(`FATAL: storage initialization failed (${storage.describe?.() || "unknown"}):`, err?.message || err);
     process.exit(1);
@@ -219,10 +241,13 @@ let shuttingDown = false;
 const shutdown = async (signal) => {
   if (shuttingDown) return;
   shuttingDown = true;
+  startupReady = false;
   console.log(`[shutdown] ${signal} received — flushing state and closing connections...`);
   if (httpServer) await new Promise((resolve) => httpServer.close(resolve)).catch(() => {});
+  if (retentionTimer) clearInterval(retentionTimer);
   try { await saveDb(); } catch (err) { console.error("[shutdown] final save failed:", err?.message || err); }
   try { await storage.close(); } catch { /* ignore */ }
+  try { await closeRedis(); } catch { /* ignore */ }
   process.exit(0);
 };
 process.on("SIGTERM", () => shutdown("SIGTERM"));

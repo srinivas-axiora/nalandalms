@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import jwt from "jsonwebtoken";
 import { v4 as uuid } from "uuid";
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { JWT_SECRET } from "../config.js";
 
@@ -31,6 +31,18 @@ if (isS3Configured) {
 }
 
 export const storageMode = isS3Configured ? "s3" : "local";
+
+export async function objectStoreHealth() {
+  if (!isS3Configured || !s3Client) {
+    return { ok: process.env.NODE_ENV !== "production", mode: "local" };
+  }
+  try {
+    await s3Client.send(new HeadBucketCommand({ Bucket: bucketName }));
+    return { ok: true, mode: "s3" };
+  } catch (err) {
+    return { ok: false, mode: "s3", error: err?.message || "S3 check failed" };
+  }
+}
 
 export const normalizeObjectKey = (value) => {
   if (typeof value !== "string" || !value || value.length > 700 || value.includes("\0") || value.includes("\\")) {

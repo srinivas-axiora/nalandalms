@@ -1,127 +1,76 @@
-# Nalanda LMS — Production Deployment Guide & Architecture Topology
+# Nalanda deployment architecture
 
-This document outlines the Go-To-Market (GTM) production deployment architecture, security configuration, and operational runbook for **Nalanda LMS**.
+Current release decision: **staging permitted; production remains gated**.
 
----
+## Approved AWS topology for the current architecture
 
-## 1. High-Level Architecture Topology
-
-```
-                   [ Cloudflare Edge CDN / WAF / DDoS Protection ]
-                                         │
-                                         ▼
-                     [ Ingress Nginx / AWS ALB (TLS 1.3 Termination) ]
-                                         │
-                 ┌───────────────────────┴───────────────────────┐
-                 ▼                                               ▼
-     [ Nalanda Node.js Express 5 API ]               [ Nalanda Node.js Express 5 API ]
-               (Cluster Node 1)                                (Cluster Node 2)
-                 │               │                               │               │
-                 ▼               ▼                               ▼               ▼
-        [ Redis Cluster ]  [ Cloudflare R2 / S3 ]       [ Redis Cluster ]  [ Cloudflare R2 / S3 ]
-        (Sliding Window)   (Video Chunks & Media)       (Session Cache)    (Signed Documents)
-                 │                                               │
-                 └───────────────────────┬───────────────────────┘
-                                         ▼
-                     [ Managed PostgreSQL 16 (Primary + Replica) ]
-                                (PgBouncer Pooling)
+```text
+Browser
+  -> CloudFront (HTTPS, cache disabled for authenticated application traffic)
+  -> Application Load Balancer (accepts CloudFront origin traffic only)
+  -> one ECS Fargate task (single writer)
+       -> private RDS PostgreSQL (current JSONB collection snapshot)
+       -> private TLS ElastiCache Redis (distributed request budgets)
+       -> private encrypted S3 (uploaded objects)
+       -> Secrets Manager (runtime credentials)
+       -> CloudWatch Logs / Container Insights
 ```
 
----
+The one-task limit is a correctness constraint, not a sizing recommendation.
+The running application still holds its authoritative working set in process
+memory and persists whole collections. Multiple tasks or overlapping rolling
+deployments can overwrite each other's state. The staging CloudFormation stack
+therefore uses `DesiredCount: 1`, `MaximumPercent: 100` and
+`MinimumHealthyPercent: 0`.
 
-## 2. Infrastructure Requirements & Sizing
+## Production runtime contract
 
-| Component | Minimum Production Spec | Recommended Enterprise Spec | High-Availability Config |
-|---|---|---|---|
-| **API Servers** | 2 vCPU, 4GB RAM (2 instances) | 4 vCPU, 8GB RAM (3+ auto-scaling) | Multi-AZ with Health Checks |
-| **PostgreSQL** | 2 vCPU, 8GB RAM, 100GB SSD | 4 vCPU, 16GB RAM, 500GB NVMe | Multi-AZ with Read Replica & Automated PITR |
-| **Redis** | 1GB RAM (Standalone) | 4GB RAM (Redis Cluster with persistence) | Redis Sentinel / Multi-node Cluster |
-| **Object Store** | Cloudflare R2 / AWS S3 | Cloudflare R2 / AWS S3 + Global CDN | Zero-egress R2 or S3 Cross-Region Replication |
+Production startup fails closed unless all of these are configured:
 
----
+- PostgreSQL via `DATABASE_URL` or the standard `PGHOST`, `PGPORT`,
+  `PGDATABASE`, `PGUSER`, `PGPASSWORD` variables, with `PGSSL=require`.
+- `REDIS_URL`; request rate controls do not fall back to process memory in
+  production.
+- `S3_BUCKET` and `S3_REGION`; ECS uses its IAM task role, not static access
+  keys.
+- Strong `JWT_SECRET` and `CERTIFICATE_SIGNING_SECRET` values.
+- Razorpay key ID, key secret and webhook secret.
+- An explicit `CERTIFICATE_ISSUANCE_APPROVAL_ROLE`.
 
-## 3. Environment Variable Manifest (`.env.production`)
+`GET /api/health` is the process liveness probe. `GET /api/ready` verifies the
+database, Redis and object store and returns 503 if a dependency is unavailable.
 
-```bash
-# Core Environment
-NODE_ENV=production
-PORT=4000
-BASE_URL=https://platform.nalanda.edu
+## Container
 
-# Security & Sessions
-JWT_SECRET=YOUR_64_CHAR_CRYPTOGRAPHIC_JWT_SECRET
-CERTIFICATE_SIGNING_SECRET=YOUR_64_CHAR_CERTIFICATE_SECRET
-COOKIE_SECURE=true
-COOKIE_SAMESITE=strict
-CORS_ORIGIN=https://platform.nalanda.edu
+The root `Dockerfile` builds the frontend in a separate stage and runs the API
+as a non-root user with production dependencies only. It pins the checksum of
+the official AWS RDS global CA bundle and exposes port 8080.
 
-# PostgreSQL (Production Connection)
-USE_PG=1
-DATABASE_URL=postgresql://nalanda_admin:SECURE_PASSWORD@pgbouncer.internal:6432/nalanda_prod
-PGSSL=require
+The CI gate runs functional tests, the adversarial security suite, TypeScript,
+the dependency audit, the production build and a clean container build.
 
-# Redis (Rate Limiting & Session Cache)
-REDIS_URL=redis://default:REDIS_PASSWORD@redis.internal:6379
+## Deploy staging
 
-# Cloud Object Storage (S3 / Cloudflare R2 / MinIO)
-AWS_ACCESS_KEY_ID=R2_OR_S3_ACCESS_KEY
-AWS_SECRET_ACCESS_KEY=R2_OR_S3_SECRET_KEY
-S3_BUCKET=nalanda-production-media
-S3_REGION=auto
-S3_ENDPOINT=https://<account_id>.r2.cloudflarestorage.com
+Use [the AWS deployment package](../infra/aws/README.md) and the associated
+runbook. The deploy script builds an immutable ARM64 image, pushes it to an
+immutable/scanned ECR repository and deploys the CloudFormation stack in
+`ap-south-1` by default.
 
-# Razorpay Commercial Payment Gateway
-RAZORPAY_KEY_ID=rzp_live_xxxxxxxxxxxxxx
-RAZORPAY_KEY_SECRET=YOUR_RAZORPAY_SECRET_KEY
-RAZORPAY_WEBHOOK_SECRET=YOUR_WEBHOOK_SIGNING_SECRET
-PAYMENT_ORDER_TTL_SECONDS=1800
+## Production go criteria
 
-# AI Vision & Course Generation
-GEMINI_API_KEY=YOUR_ENTERPRISE_GEMINI_API_KEY
-GEMINI_MODEL=gemini-2.5-flash
+Do not promote staging to production until all of the following are evidenced:
 
-# Compliance & Retention
-PROCTORING_RETENTION_DAYS=90
-LOG_LEVEL=info
-```
-
----
-
-## 4. Production Deployment Checklist
-
-1. **Database Schema & Migrations**:
-   ```bash
-   # Initialize tables, indexes, triggers, and views
-   psql -d $DATABASE_URL -f database/schema.sql
-   node backend/src/db/backfill.js
-   ```
-
-2. **Frontend Production Build**:
-   ```bash
-   npm ci --omit=dev
-   npm run build
-   ```
-
-3. **Process Supervision (PM2 / Systemd / Docker)**:
-   ```bash
-   # PM2 Cluster Mode (Utilizes all CPU cores)
-   pm2 start backend/server.js -i max --name nalanda-api
-   pm2 save
-   ```
-
-4. **Verify Health & Telemetry**:
-   ```bash
-   curl -s http://localhost:4000/api/health | jq .
-   ```
-
----
-
-## 5. Security & Compliance Verification
-
-- [x] All mutating routes (POST/PUT/PATCH/DELETE) enforce Double-Submit Cookie CSRF headers.
-- [x] Passwords hashed with bcrypt (salt cost 10).
-- [x] Proctoring video chunks stream directly to durable object storage.
-- [x] Certificates cryptographically signed with HMAC-SHA256.
-- [x] Candidate test browsers stripped of answer keys.
-- [x] GDPR Article 17 (Right to Erasure) and Article 20 (Data Export) verified.
-
+1. Normalized transactional repositories replace whole-state snapshot writes
+   for identity, enrollment, assessment, attempt, payment, certificate, audit
+   and privacy workflows.
+2. Two or more ECS tasks pass concurrency and failover tests without lost
+   updates; zero-downtime rolling deployment is restored.
+3. AWS WAF, custom domain/ACM, access logs, alarms and incident routing are
+   enabled and exercised.
+4. S3 malware scanning/quarantine prevents unscanned objects from being served.
+5. Privacy deletion and retention workflows operate durably across PostgreSQL,
+   S3, logs and backups with legal-hold handling.
+6. RDS point-in-time restore, application rollback and secret rotation drills
+   meet the agreed RTO/RPO.
+7. Production-like load, soak, payment reconciliation and negative-security
+   tests pass with approved evidence.

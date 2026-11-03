@@ -37,9 +37,30 @@ loadLocalEnv();
 export const IS_PRODUCTION = process.env.NODE_ENV === "production";
 export const PORT = process.env.PORT || 8080;
 
-if (IS_PRODUCTION && !process.env.DATABASE_URL) {
-  console.error("FATAL: DATABASE_URL is required in production. Refusing to use local JSON-file persistence.");
+if (IS_PRODUCTION && !process.env.DATABASE_URL && !process.env.PGHOST) {
+  console.error("FATAL: DATABASE_URL or PGHOST is required in production. Refusing to use local JSON-file persistence.");
   process.exit(1);
+}
+
+if (IS_PRODUCTION) {
+  const required = [
+    "REDIS_URL",
+    "S3_BUCKET",
+    "S3_REGION",
+    "RAZORPAY_KEY_ID",
+    "RAZORPAY_KEY_SECRET",
+    "RAZORPAY_WEBHOOK_SECRET",
+    "CERTIFICATE_ISSUANCE_APPROVAL_ROLE",
+  ];
+  const missing = required.filter((name) => !String(process.env[name] || "").trim());
+  if (missing.length) {
+    console.error(`FATAL: missing required production configuration: ${missing.join(", ")}`);
+    process.exit(1);
+  }
+  if (process.env.PGSSL !== "require") {
+    console.error("FATAL: PGSSL=require is mandatory in production.");
+    process.exit(1);
+  }
 }
 
 // File uploads are buffered in memory, so cap size aggressively and validate type.
