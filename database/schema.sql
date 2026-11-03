@@ -33,6 +33,8 @@ CREATE TABLE users (
   manager_id TEXT REFERENCES users(id),
   status lifecycle_status NOT NULL DEFAULT 'Active',
   session_version INTEGER NOT NULL DEFAULT 0,
+  preferences JSONB NOT NULL DEFAULT '{}',
+  joined_at DATE,
   last_login_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -54,7 +56,7 @@ BEGIN
   IF OLD.status IS DISTINCT FROM NEW.status
      OR OLD.role IS DISTINCT FROM NEW.role
      OR OLD.password_hash IS DISTINCT FROM NEW.password_hash THEN
-    NEW.session_version := OLD.session_version + 1;
+    NEW.session_version := GREATEST(OLD.session_version + 1, NEW.session_version);
   END IF;
   NEW.updated_at := now();
   RETURN NEW;

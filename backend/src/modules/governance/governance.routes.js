@@ -4,14 +4,39 @@ import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
 import { redactSensitive } from "../../security/redaction.js";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
+import { identityRepository } from "../../repositories/identity.repository.pg.js";
+import { upsertIdentityProjection } from "../../identity-projection.js";
+
+const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
 // Module: Governance (audit logs, security events, archive + restore).
 // Handlers moved verbatim from server.js; shared deps injected via ctx.
 export function registerGovernance(app) {
-  app.get("/api/archive", authenticate, requireRole("Super Admin"), (req, res) => {
-    res.json({ data: redactSensitive(archives), total: archives.length });
+  app.get("/api/archive", authenticate, requireRole("Super Admin"), async (req, res) => {
+    if (USE_PG_IDENTITY) {
+      const userArchives = await identityRepository.listUserArchives();
+      const nonUserArchives = archives.filter((item) => item.entityType !== "User");
+      const data = [...userArchives, ...nonUserArchives]
+        .sort((a, b) => new Date(b.deletedAt).getTime() - new Date(a.deletedAt).getTime());
+      return res.json({ data: redactSensitive(data), total: data.length });
+    }
+    return res.json({ data: redactSensitive(archives), total: archives.length });
   });
 
-  app.post("/api/archive/:id/restore", authenticate, requireRole("Super Admin"), requireStepUp, (req, res) => {
+  app.post("/api/archive/:id/restore", authenticate, requireRole("Super Admin"), requireStepUp, async (req, res) => {
+    if (USE_PG_IDENTITY) {
+      const restored = await identityRepository.restoreUserArchive({
+        archiveId: req.params.id,
+        actorId: req.user.id,
+        replacementPasswordHash: bcrypt.hashSync(crypto.randomBytes(32).toString("hex"), 10),
+      });
+      if (restored) {
+        upsertIdentityProjection(restored);
+        return res.json({
+          success: true,
+          message: "User restored as inactive; an administrator must set a new password before activation",
+        });
+      }
+    }
     const idx = archives.findIndex((item) => item.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: "Archived record not found" });
 

@@ -1,6 +1,6 @@
 # Nalanda — PostgreSQL data-layer migration
 
-Status: **in progress — skills pilot and payment transaction boundary built.**
+Status: **in progress — skills, payment and identity boundaries built.**
 Owner: Engineering. Updated: 2026-11-03.
 
 > ⚠️ **This code is UNVERIFIED by the author.** It was written without a live
@@ -8,8 +8,8 @@ Owner: Engineering. Updated: 2026-11-03.
 > approach). All JavaScript is syntax-checked; the SQL and runtime behavior MUST
 > be validated against a real database using the steps in §4 before any cutover.
 > It is feature-gated — most of the running app still uses the existing
-> in-memory/JSONB snapshot store. `USE_PG_SKILLS` and `USE_PG_PAYMENTS` must stay
-> off until their live-database gates pass.
+> in-memory/JSONB snapshot store. `USE_PG_SKILLS`, `USE_PG_PAYMENTS` and
+> `USE_PG_IDENTITY` must stay off until their live-database gates pass.
 
 ---
 
@@ -34,6 +34,9 @@ backend/src/repositories/skills.repository.pg.js   SQL repository (API-shaped ou
 database/migrations/0001_skills.sql         reconciled skills + target_skills tables
 database/migrations/0005_payment_runtime_cutover.sql price/currency + open-order invariant
 backend/src/repositories/payments.repository.pg.js atomic payment/enrollment/audit ledger
+database/migrations/0006_identity_runtime_cutover.sql identity runtime columns + trigger
+backend/src/repositories/identity.repository.pg.js transactional identity/session authority
+backend/src/db/verify-identity.mjs             live PostgreSQL identity verifier
 ```
 
 The **skills** bounded context is the pilot (like the certificates pilot for the
@@ -73,6 +76,9 @@ npm run db:backfill
 # 4. One-command pilot verification (migrate + backfill + exercise repo + cleanup)
 node backend/src/db/verify-skills.mjs
 #    Expect all lines to start with "ok"; any "FAIL" is a real problem to fix.
+
+# 5. Exercise identity/session invariants with self-cleaning synthetic data
+npm run db:verify-identity
 ```
 
 If `verify-skills.mjs` prints all `ok`, the pilot pattern is sound and we proceed
@@ -116,7 +122,8 @@ For each bounded context, in roughly ascending coupling:
 - [x] payment order/transaction/webhook repository and atomic entitlement/audit
       settlement built behind `USE_PG_PAYMENTS=1` (live-DB gate still pending)
 - [ ] chapter_feedbacks
-- [ ] users  (+ login_security, session_versions)
+- [x] users/session authority repository, audit and Redis login lockouts behind
+      `USE_PG_IDENTITY=1` (live-DB and failover gate still pending)
 - [ ] courses (price/currency schema and repository mapping complete; route-wide
       source-of-truth cutover remains)
 - [ ] chapters  (+ chapter_time_totals / learning_time_events)

@@ -32,10 +32,10 @@ export const PROCTORING_EVENT_TYPES = [
 ];
 
 export function registerProctoring(app) {
-  const authorizeAttemptOrCompanion = (req, res, next) => {
+  const authorizeAttemptOrCompanion = async (req, res, next) => {
     const companionToken = req.headers["x-companion-token"];
     if (typeof companionToken === "string") {
-      const authorized = authorizeCompanionToken(companionToken, req.params.attemptId);
+      const authorized = await authorizeCompanionToken(companionToken, req.params.attemptId);
       if (!authorized) return res.status(401).json({ error: "Invalid, expired, or revoked companion token" });
       req.authorizedAttempt = authorized.attempt;
       req.companionAuthenticated = true;
@@ -249,18 +249,18 @@ export function registerProctoring(app) {
   });
 
   // ── Mobile Companion Camera Pairing via QR Code ──
-  app.post("/api/proctoring/attempts/:attemptId/companion/token", authenticate, requireAttemptPermission("view"), (req, res) => {
+  app.post("/api/proctoring/attempts/:attemptId/companion/token", authenticate, requireAttemptPermission("view"), async (req, res) => {
     const attempt = req.authorizedAttempt;
 
     if (attempt.userId !== req.user.id && !isAdmin(req.user.role)) {
       return res.status(403).json({ error: "Only the candidate or an administrator can create a companion token" });
     }
 
-    const tokenData = createPairingToken(attempt.id, attempt.userId);
+    const tokenData = await createPairingToken(attempt.id, attempt.userId);
     res.json({ data: tokenData });
   });
 
-  app.post("/api/proctoring/companion/pair", (req, res) => {
+  app.post("/api/proctoring/companion/pair", async (req, res) => {
     const schema = z.object({
       pairingToken: z.string().min(10),
       deviceName: z.string().optional(),
@@ -272,7 +272,7 @@ export function registerProctoring(app) {
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     try {
-      const result = verifyAndPairCompanion(parsed.data.pairingToken, {
+      const result = await verifyAndPairCompanion(parsed.data.pairingToken, {
         deviceName: parsed.data.deviceName,
         userAgent: parsed.data.userAgent,
         batteryLevel: parsed.data.batteryLevel,
@@ -288,10 +288,10 @@ export function registerProctoring(app) {
     }
   });
 
-  app.post("/api/proctoring/attempts/:attemptId/companion/ping", (req, res) => {
+  app.post("/api/proctoring/attempts/:attemptId/companion/ping", async (req, res) => {
     const companionToken = req.headers["x-companion-token"];
     if (typeof companionToken !== "string") return res.status(401).json({ error: "Companion token required" });
-    const updated = updateCompanionHeartbeat(companionToken, req.params.attemptId, {
+    const updated = await updateCompanionHeartbeat(companionToken, req.params.attemptId, {
       batteryLevel: req.body.batteryLevel,
     });
     if (!updated) return res.status(401).json({ error: "Invalid, expired, or revoked companion token" });

@@ -3,10 +3,23 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import crypto from "node:crypto";
-import { COOKIE_SECURE, COOKIE_SAMESITE, CSRF_COOKIE, STEP_UP_COOKIE, JWT_SECRET } from "../../config.js";
-import { loginSecurity, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS, users, sessionVersions, now } from "../../core.js";
+import {
+  COOKIE_SECURE,
+  COOKIE_SAMESITE,
+  CSRF_COOKIE,
+  STEP_UP_COOKIE,
+  JWT_AUDIENCE,
+  JWT_ISSUER,
+  JWT_SECRET,
+} from "../../config.js";
+import { MAX_LOGIN_ATTEMPTS, LOCKOUT_MS, users, sessionVersions, now } from "../../core.js";
 import { signToken, signStepUpToken, audit, publicUser, securityEvent } from "../../domain.js";
 import { authenticate, rateLimit } from "../../middleware.js";
+import { identityRepository } from "../../repositories/identity.repository.pg.js";
+import { clearLoginFailures, getLoginSecurity, recordLoginFailure } from "../../cache/redis.js";
+import { setProjectedSessionVersion, upsertIdentityProjection } from "../../identity-projection.js";
+
+const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
 
 export function registerAuth(app) {
   const throttleIdentity = (identifier) => crypto
@@ -23,7 +36,7 @@ export function registerAuth(app) {
   });
 
   // ── Public Self-Registration ──
-  app.post("/api/auth/register", registrationRateLimit, (req, res) => {
+  app.post("/api/auth/register", registrationRateLimit, async (req, res) => {
     const schema = z.object({
       name: z.string().min(2).max(100),
       email: z.string().email(),
@@ -34,7 +47,10 @@ export function registerAuth(app) {
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     const normalizedEmail = parsed.data.email.trim().toLowerCase();
-    if (users.some((u) => u.email.toLowerCase() === normalizedEmail)) {
+    const existingUser = USE_PG_IDENTITY
+      ? await identityRepository.findUserByIdentifier(normalizedEmail)
+      : users.find((u) => u.email.toLowerCase() === normalizedEmail);
+    if (existingUser) {
       return res.status(409).json({ error: "An account with this email already exists" });
     }
 
@@ -67,22 +83,38 @@ export function registerAuth(app) {
       },
     };
 
-    users.push(newUser);
-    sessionVersions[newUser.id] = 0;
-    audit(newUser.id, "REGISTER", "USER", newUser.id, { role: newUser.role });
+    let createdUser = newUser;
+    if (USE_PG_IDENTITY) {
+      try {
+        createdUser = await identityRepository.insertUser(newUser, {
+          actorId: newUser.id,
+          action: "REGISTER",
+        });
+      } catch (error) {
+        if (error?.code === "23505") {
+          return res.status(409).json({ error: "An account with this email already exists" });
+        }
+        throw error;
+      }
+      upsertIdentityProjection(createdUser);
+    } else {
+      users.push(newUser);
+      sessionVersions[newUser.id] = 0;
+      audit(newUser.id, "REGISTER", "USER", newUser.id, { role: newUser.role });
+    }
 
-    res.cookie("token", signToken(newUser), {
+    res.cookie("token", signToken(createdUser), {
       httpOnly: true,
       secure: COOKIE_SECURE,
       sameSite: COOKIE_SAMESITE,
       maxAge: 30 * 60 * 1000,
     });
 
-    return res.status(201).json({ user: publicUser(newUser) });
+    return res.status(201).json({ user: publicUser(createdUser) });
   });
 
   // ── Login ──
-  app.post("/api/auth/login", loginIpRateLimit, loginIdentityRateLimit, (req, res) => {
+  app.post("/api/auth/login", loginIpRateLimit, loginIdentityRateLimit, async (req, res) => {
     const ip = req.ip || req.connection.remoteAddress;
     const schema = z.object({ email: z.string().min(2), password: z.string().min(8) });
     const parsed = schema.safeParse(req.body);
@@ -94,37 +126,41 @@ export function registerAuth(app) {
     // Lockouts are scoped to the account/IP pair. An attacker cannot lock a
     // victim out globally by repeatedly submitting that victim's identifier.
     const securityKey = `${identityKey}|${ip}`;
-    const security = loginSecurity[securityKey] || { failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
+    const security = await getLoginSecurity(securityKey, MAX_LOGIN_ATTEMPTS);
 
     if (security.lockedUntil && new Date(security.lockedUntil).getTime() > Date.now()) {
       return res.status(403).json({ error: "Account locked due to too many failed attempts", lockedUntil: security.lockedUntil });
     }
 
-    const user = users.find((item) => (
-      item.email.toLowerCase() === normalizedIdentifier
-      || (item.role === "Super Admin" && normalizedIdentifier === "super admin")
-    ) && item.status === "Active");
+    const candidate = USE_PG_IDENTITY
+      ? await identityRepository.findUserByIdentifier(normalizedIdentifier)
+      : users.find((item) => (
+          item.email.toLowerCase() === normalizedIdentifier
+          || (item.role === "Super Admin" && normalizedIdentifier === "super admin")
+        ));
+    const user = candidate?.status === "Active" ? candidate : null;
 
     if (!user || !bcrypt.compareSync(parsed.data.password, user.passwordHash)) {
-      security.failedAttempts += 1;
-      security.lastFailedAt = now();
-      if (security.failedAttempts >= MAX_LOGIN_ATTEMPTS) {
-        security.lockedUntil = new Date(Date.now() + LOCKOUT_MS).toISOString();
-      }
-      loginSecurity[securityKey] = security;
-      return res.status(401).json({ error: "Invalid credentials", failedAttempts: security.failedAttempts, lockedUntil: security.lockedUntil });
+      const failure = await recordLoginFailure(securityKey, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS);
+      return res.status(401).json({ error: "Invalid credentials", ...failure });
     }
 
-    loginSecurity[securityKey] = { failedAttempts: 0, lockedUntil: null, lastFailedAt: null };
-    audit(user.id, "LOGIN", "USER", user.id);
+    await clearLoginFailures(securityKey);
+    if (USE_PG_IDENTITY) await identityRepository.recordLogin(user.id);
+    else audit(user.id, "LOGIN", "USER", user.id);
     res.cookie("token", signToken(user), { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE, maxAge: 30 * 60 * 1000 });
     return res.json({ user: publicUser(user) });
   });
 
   // ── Logout ──
-  app.post("/api/auth/logout", authenticate, (req, res) => {
-    sessionVersions[req.user.id] = (sessionVersions[req.user.id] || 0) + 1;
-    audit(req.user.id, "LOGOUT_AND_REVOKE_SESSION", "USER", req.user.id);
+  app.post("/api/auth/logout", authenticate, async (req, res) => {
+    if (USE_PG_IDENTITY) {
+      const version = await identityRepository.revokeSessions(req.user.id);
+      setProjectedSessionVersion(req.user.id, version);
+    } else {
+      sessionVersions[req.user.id] = (sessionVersions[req.user.id] || 0) + 1;
+      audit(req.user.id, "LOGOUT_AND_REVOKE_SESSION", "USER", req.user.id);
+    }
     res.clearCookie("token", { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
     res.clearCookie(CSRF_COOKIE, { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
     res.clearCookie(STEP_UP_COOKIE, { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
@@ -132,13 +168,16 @@ export function registerAuth(app) {
   });
 
   // ── Forgot Password Request ──
-  app.post("/api/auth/forgot-password", (req, res) => {
+  app.post("/api/auth/forgot-password", async (req, res) => {
     const schema = z.object({ email: z.string().email() });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     const normalizedEmail = parsed.data.email.trim().toLowerCase();
-    const user = users.find((u) => u.email.toLowerCase() === normalizedEmail && u.status === "Active");
+    const candidate = USE_PG_IDENTITY
+      ? await identityRepository.findUserByIdentifier(normalizedEmail)
+      : users.find((u) => u.email.toLowerCase() === normalizedEmail);
+    const user = candidate?.status === "Active" ? candidate : null;
 
     // Don't leak whether account exists to protect privacy
     if (!user) {
@@ -149,12 +188,20 @@ export function registerAuth(app) {
     }
 
     const resetToken = jwt.sign(
-      { sub: user.id, email: user.email, purpose: "password-reset", sv: sessionVersions[user.id] || 0 },
+      { sub: user.id, email: user.email, purpose: "password-reset", sv: Number(user.sessionVersion ?? sessionVersions[user.id] ?? 0) },
       JWT_SECRET,
-      { expiresIn: "15m" }
+      { expiresIn: "15m", issuer: JWT_ISSUER, audience: JWT_AUDIENCE }
     );
 
-    audit(user.id, "REQUEST_PASSWORD_RESET", "USER", user.id);
+    if (USE_PG_IDENTITY) {
+      await identityRepository.recordUserAudit({
+        actorId: user.id,
+        action: "REQUEST_PASSWORD_RESET",
+        userId: user.id,
+      });
+    } else {
+      audit(user.id, "REQUEST_PASSWORD_RESET", "USER", user.id);
+    }
 
     return res.json({
       ok: true,
@@ -164,7 +211,7 @@ export function registerAuth(app) {
   });
 
   // ── Reset Password ──
-  app.post("/api/auth/reset-password", (req, res) => {
+  app.post("/api/auth/reset-password", async (req, res) => {
     const schema = z.object({
       token: z.string().min(10),
       newPassword: z.string().min(8).max(128),
@@ -172,30 +219,45 @@ export function registerAuth(app) {
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
+    let payload;
     try {
-      const payload = jwt.verify(parsed.data.token, JWT_SECRET);
-      if (payload.purpose !== "password-reset") {
-        return res.status(400).json({ error: "Invalid reset token" });
-      }
-
-      const user = users.find((u) => u.id === payload.sub && u.status === "Active");
-      if (!user) return res.status(404).json({ error: "User not found" });
-
-      const currentSv = sessionVersions[user.id] || 0;
-      if (payload.sv !== currentSv) {
-        return res.status(400).json({ error: "Reset token has expired or already been used" });
-      }
-
-      user.passwordHash = bcrypt.hashSync(parsed.data.newPassword, 10);
-      user.updatedAt = now();
-      // Invalidate existing sessions
-      sessionVersions[user.id] = (sessionVersions[user.id] || 0) + 1;
-
-      audit(user.id, "RESET_PASSWORD", "USER", user.id);
-      return res.json({ ok: true, message: "Password updated successfully. You can now sign in." });
+      payload = jwt.verify(parsed.data.token, JWT_SECRET, { issuer: JWT_ISSUER, audience: JWT_AUDIENCE });
     } catch {
       return res.status(400).json({ error: "Invalid or expired reset token" });
     }
+    if (payload.purpose !== "password-reset") {
+      return res.status(400).json({ error: "Invalid reset token" });
+    }
+
+    const candidate = USE_PG_IDENTITY
+      ? await identityRepository.findUserById(payload.sub)
+      : users.find((u) => u.id === payload.sub);
+    const user = candidate?.status === "Active" ? candidate : null;
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const currentSv = Number(user.sessionVersion ?? sessionVersions[user.id] ?? 0);
+    if (payload.sv !== currentSv) {
+      return res.status(400).json({ error: "Reset token has expired or already been used" });
+    }
+
+    const passwordHash = bcrypt.hashSync(parsed.data.newPassword, 10);
+    if (USE_PG_IDENTITY) {
+      const nextVersion = await identityRepository.resetPassword({
+        id: user.id,
+        expectedSessionVersion: currentSv,
+        passwordHash,
+      });
+      if (nextVersion === null) {
+        return res.status(400).json({ error: "Reset token has expired or already been used" });
+      }
+      setProjectedSessionVersion(user.id, nextVersion);
+    } else {
+      user.passwordHash = passwordHash;
+      user.updatedAt = now();
+      sessionVersions[user.id] = (sessionVersions[user.id] || 0) + 1;
+      audit(user.id, "RESET_PASSWORD", "USER", user.id);
+    }
+    return res.json({ ok: true, message: "Password updated successfully. You can now sign in." });
   });
 
   // ── Step-up Reauth ──

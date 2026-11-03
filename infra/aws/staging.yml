@@ -380,6 +380,8 @@ Resources:
             - { Name: PGDATABASE, Value: !Ref DatabaseName }
             - { Name: PGSSL, Value: require }
             - { Name: PGPOOL_MAX, Value: "8" }
+            - { Name: USE_PG_PAYMENTS, Value: "0" }
+            - { Name: USE_PG_IDENTITY, Value: "0" }
             - { Name: REDIS_URL, Value: !Sub "rediss://${Cache.PrimaryEndPoint.Address}:${Cache.PrimaryEndPoint.Port}" }
             - { Name: S3_BUCKET, Value: !Ref MediaBucket }
             - { Name: S3_REGION, Value: !Ref AWS::Region }

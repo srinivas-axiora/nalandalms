@@ -7,9 +7,13 @@ import { users, isAdmin, sessionVersions, archives, roles, now } from "../../cor
 import { audit, publicUser } from "../../domain.js";
 import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
 import { redactSensitive } from "../../security/redaction.js";
+import { identityRepository } from "../../repositories/identity.repository.pg.js";
+import { upsertIdentityProjection } from "../../identity-projection.js";
+
+const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
 
 export function registerUsers(app) {
-  app.patch("/api/users/me/preferences", authenticate, (req, res) => {
+  app.patch("/api/users/me/preferences", authenticate, async (req, res) => {
     const schema = z.object({
       theme: z.enum(["dark", "light", "system"]).optional(),
       fontSize: z.enum(["small", "medium", "large"]).optional(),
@@ -24,16 +28,36 @@ export function registerUsers(app) {
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const user = users.find((item) => item.id === req.user.id);
+    const user = USE_PG_IDENTITY
+      ? await identityRepository.findUserById(req.user.id)
+      : users.find((item) => item.id === req.user.id);
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    user.preferences = { ...(user.preferences || {}), ...parsed.data };
+    const preferences = { ...(user.preferences || {}), ...parsed.data };
+    if (USE_PG_IDENTITY) {
+      const updated = await identityRepository.updateUser(user.id, { preferences }, {
+        actorId: req.user.id,
+        action: "UPDATE_PREFERENCES",
+      });
+      upsertIdentityProjection(updated);
+      return res.json({ data: publicUser(updated) });
+    }
+    user.preferences = preferences;
     audit(req.user.id, "UPDATE_PREFERENCES", "USER", user.id, parsed.data);
-    res.json({ data: publicUser(user) });
+    return res.json({ data: publicUser(user) });
   });
 
-  app.get("/api/users", authenticate, requireRole("Admin", "Manager"), (req, res) => {
+  app.get("/api/users", authenticate, requireRole("Admin", "Manager"), async (req, res) => {
     const { department, role, status = "Active" } = req.query;
+    if (USE_PG_IDENTITY) {
+      const visible = await identityRepository.listUsers({
+        ...(!isAdmin(req.user.role) ? { managerId: req.user.id } : {}),
+        department,
+        role,
+        status,
+      });
+      return res.json({ data: visible.map(publicUser), total: visible.length });
+    }
     let visible = isAdmin(req.user.role) ? users : users.filter((user) => user.managerId === req.user.id || user.id === req.user.id);
     if (department) visible = visible.filter((user) => user.department === department);
     if (role) visible = visible.filter((user) => user.role === role);
@@ -41,7 +65,7 @@ export function registerUsers(app) {
     res.json({ data: visible.map(publicUser), total: visible.length });
   });
 
-  app.post("/api/users", authenticate, requireRole("Admin"), requireStepUp, (req, res) => {
+  app.post("/api/users", authenticate, requireRole("Admin"), requireStepUp, async (req, res) => {
     const schema = z.object({
       id: z.string().min(2).optional(),
       name: z.string().min(2),
@@ -61,18 +85,32 @@ export function registerUsers(app) {
       return res.status(403).json({ error: "Only a Super Admin can assign the Super Admin role" });
     }
     const requestedId = parsed.data.id || `EMP-${Math.floor(1000 + Math.random() * 9000)}`;
-    if (users.some((item) => item.id === requestedId || item.email === parsed.data.email)) {
+    const existing = USE_PG_IDENTITY
+      ? (await identityRepository.findUserById(requestedId))
+        || (await identityRepository.findUserByIdentifier(parsed.data.email))
+      : users.find((item) => item.id === requestedId || item.email === parsed.data.email);
+    if (existing) {
       return res.status(409).json({ error: "User ID or email already exists" });
     }
     const user = { id: requestedId, ...parsed.data, status: parsed.data.status || "Active", passwordHash: bcrypt.hashSync(parsed.data.password, 10), createdAt: now() };
     delete user.password;
+    if (USE_PG_IDENTITY) {
+      try {
+        const created = await identityRepository.insertUser(user, { actorId: req.user.id });
+        upsertIdentityProjection(created);
+        return res.status(201).json({ data: publicUser(created) });
+      } catch (error) {
+        if (error?.code === "23505") return res.status(409).json({ error: "User ID or email already exists" });
+        throw error;
+      }
+    }
     users.push(user);
     sessionVersions[user.id] = 0;
     audit(req.user.id, "CREATE_USER", "USER", user.id, { role: user.role });
-    res.status(201).json({ data: publicUser(user) });
+    return res.status(201).json({ data: publicUser(user) });
   });
 
-  app.patch("/api/users/:id", authenticate, requireRole("Admin"), requireStepUp, (req, res) => {
+  app.patch("/api/users/:id", authenticate, requireRole("Admin"), requireStepUp, async (req, res) => {
     const schema = z.object({
       name: z.string().min(2).optional(),
       email: z.string().email().optional(),
@@ -87,7 +125,9 @@ export function registerUsers(app) {
     });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    const user = users.find((item) => item.id === req.params.id);
+    const user = USE_PG_IDENTITY
+      ? await identityRepository.findUserById(req.params.id)
+      : users.find((item) => item.id === req.params.id);
     if (!user) return res.status(404).json({ error: "User not found" });
 
     if (user.role === "Super Admin" && req.user.role !== "Super Admin") {
@@ -103,30 +143,34 @@ export function registerUsers(app) {
       return res.status(403).json({ error: "You cannot deactivate your own account" });
     }
 
-    const revokesSessions = Boolean(
-      parsed.data.password
-      || (parsed.data.role && parsed.data.role !== user.role)
-      || (parsed.data.status === "Inactive" && user.status === "Active")
-    );
-    if (revokesSessions) {
-      sessionVersions[user.id] = (sessionVersions[user.id] || 0) + 1;
-    }
-
     const patch = { ...parsed.data };
     if (patch.password) {
       patch.passwordHash = bcrypt.hashSync(patch.password, 10);
       delete patch.password;
     }
+    if (USE_PG_IDENTITY) {
+      const updated = await identityRepository.updateUser(user.id, patch, { actorId: req.user.id });
+      upsertIdentityProjection(updated);
+      return res.json({ data: publicUser(updated) });
+    }
+    const revokesSessions = Boolean(
+      parsed.data.password
+      || (parsed.data.role && parsed.data.role !== user.role)
+      || (parsed.data.status === "Inactive" && user.status === "Active")
+    );
+    if (revokesSessions) sessionVersions[user.id] = (sessionVersions[user.id] || 0) + 1;
     Object.assign(user, patch);
     audit(req.user.id, "UPDATE_USER", "USER", user.id, patch);
-    res.json({ data: publicUser(user) });
+    return res.json({ data: publicUser(user) });
   });
 
-  app.patch("/api/users/:id/status", authenticate, requireRole("Admin"), requireStepUp, (req, res) => {
+  app.patch("/api/users/:id/status", authenticate, requireRole("Admin"), requireStepUp, async (req, res) => {
     const schema = z.object({ status: z.enum(["Active", "Inactive"]) });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    const user = users.find((item) => item.id === req.params.id);
+    const user = USE_PG_IDENTITY
+      ? await identityRepository.findUserById(req.params.id)
+      : users.find((item) => item.id === req.params.id);
     if (!user) return res.status(404).json({ error: "User not found" });
 
     if (user.role === "Super Admin" && req.user.role !== "Super Admin") {
@@ -136,6 +180,14 @@ export function registerUsers(app) {
       return res.status(403).json({ error: "You cannot deactivate your own account" });
     }
 
+    if (USE_PG_IDENTITY) {
+      const updated = await identityRepository.updateUser(user.id, { status: parsed.data.status }, {
+        actorId: req.user.id,
+        action: "CHANGE_USER_STATUS",
+      });
+      upsertIdentityProjection(updated);
+      return res.json({ data: publicUser(updated), note: "Session revoked if inactivated." });
+    }
     if (parsed.data.status === "Inactive" && user.status === "Active") {
       sessionVersions[user.id] = (sessionVersions[user.id] || 0) + 1;
     }
@@ -145,11 +197,25 @@ export function registerUsers(app) {
     res.json({ data: publicUser(user), note: "Session revoked if inactivated." });
   });
 
-  app.delete("/api/users/:id", authenticate, requireRole("Super Admin"), requireStepUp, (req, res) => {
+  app.delete("/api/users/:id", authenticate, requireRole("Super Admin"), requireStepUp, async (req, res) => {
     const schema = z.object({ deletionComment: z.string().min(10) });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
+    if (req.params.id === req.user.id) {
+      return res.status(403).json({ error: "You cannot archive your own account" });
+    }
+    if (USE_PG_IDENTITY) {
+      const archived = await identityRepository.archiveAndDeactivateUser({
+        id: req.params.id,
+        actor: req.user,
+        deletionComment: parsed.data.deletionComment,
+        replacementPasswordHash: bcrypt.hashSync(uuid(), 10),
+      });
+      if (!archived) return res.status(404).json({ error: "User not found" });
+      upsertIdentityProjection(archived);
+      return res.json({ success: true, message: "User archived, credentials revoked and account deactivated" });
+    }
     const idx = users.findIndex((item) => item.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: "User not found" });
     const user = users[idx];

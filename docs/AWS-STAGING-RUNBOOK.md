@@ -26,7 +26,7 @@ npm run build
 npm audit --audit-level=high
 ```
 
-Expected gate: 127 functional tests, 30 adversarial tests, type/build success
+Expected gate: 133 functional tests, 30 adversarial tests, type/build success
 and no high/critical dependency advisory.
 
 ## 2. Deploy
@@ -55,6 +55,10 @@ The two one-off tasks must exit zero. Reconcile the tables using
 `SECURITY-PHASE-6-PAYMENT-PERSISTENCE.md`. `USE_PG_PAYMENTS` remains off; do not
 manually add it to the task definition until the live database and concurrency
 gate is signed off.
+
+The task definition also pins `USE_PG_IDENTITY=0`. Run the verifier and all
+cutover/failover checks in `SECURITY-PHASE-7-IDENTITY-PERSISTENCE.md` before
+changing it. Enabling either feature flag without its evidence is a no-go.
 
 Do not change the ECS desired count or deployment percentages.
 

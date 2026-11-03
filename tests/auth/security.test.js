@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import request from "supertest";
+import jwt from "jsonwebtoken";
 import { app } from "../../backend/server.js";
 import { testUsers, getCsrfPair, authCookieFor } from "../helpers/auth.js";
-import { storage, loadDb } from "../../backend/src/core.js";
+import { storage, loadDb, sessionVersions } from "../../backend/src/core.js";
+import { JWT_SECRET } from "../../backend/src/config.js";
 
 describe("Nalanda LMS — Security Controls & Input Sanitization", () => {
   beforeAll(async () => {
@@ -12,6 +14,22 @@ describe("Nalanda LMS — Security Controls & Input Sanitization", () => {
   });
 
   describe("Authentication Brute-Force & Lockout", () => {
+    it("rejects a correctly signed JWT from the wrong issuer and audience", async () => {
+      const user = testUsers.learner;
+      const token = jwt.sign(
+        { sub: user.id, role: user.role, sv: sessionVersions[user.id] || 0 },
+        JWT_SECRET,
+        { expiresIn: "5m", issuer: "untrusted-issuer", audience: "other-application" }
+      );
+
+      const res = await request(app)
+        .get("/api/auth/me")
+        .set("Cookie", `token=${token}`);
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toMatch(/Invalid or expired token/i);
+    });
+
     it("should reject login with invalid credentials with 401", async () => {
       const { token, cookie } = await getCsrfPair();
       const res = await request(app)

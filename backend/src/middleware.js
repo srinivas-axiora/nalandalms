@@ -2,10 +2,13 @@ import { rateLimitCheckAndIncr } from "./cache/redis.js";
 // Foundation layer: HTTP middleware (CSRF, rate limiting, auth/authz, persistence
 // gate, security-event logging, error handler). Wired onto `app` by server.js.
 import jwt from "jsonwebtoken";
-import { JWT_SECRET, CSRF_COOKIE, STEP_UP_COOKIE } from "./config.js";
+import { JWT_AUDIENCE, JWT_ISSUER, JWT_SECRET, CSRF_COOKIE, STEP_UP_COOKIE } from "./config.js";
 import { timingSafeEqual } from "./lib.js";
 import { users, sessionVersions, saveDb } from "./core.js";
 import { securityEvent } from "./domain.js";
+import { identityRepository } from "./repositories/identity.repository.pg.js";
+
+const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
 
 // ── CSRF protection (double-submit cookie) ──
 export const verifyCsrf = (req, res, next) => {
@@ -49,22 +52,30 @@ export const rateLimit = ({ windowMs = 60_000, max = 600, scope = "ip", name = "
 // Stricter per-user budget for cost-bearing AI endpoints; applied after authenticate.
 export const aiRateLimit = rateLimit({ windowMs: 60_000, max: 15, scope: "user", name: "ai" });
 
-export const authenticate = (req, res, next) => {
+export const authenticate = async (req, res, next) => {
   const token = req.cookies?.token;
   if (!token) return res.status(401).json({ error: "Missing token" });
+  let payload;
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    const user = users.find((item) => item.id === payload.sub);
+    payload = jwt.verify(token, JWT_SECRET, { issuer: JWT_ISSUER, audience: JWT_AUDIENCE });
+  } catch {
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
+  try {
+    const user = USE_PG_IDENTITY
+      ? await identityRepository.findUserById(payload.sub)
+      : users.find((item) => item.id === payload.sub);
     if (!user) return res.status(401).json({ error: "Unknown user" });
     if (user.status !== "Active") return res.status(401).json({ error: "Account deactivated — session revoked" });
-    const currentSv = sessionVersions[user.id] || 0;
+    const currentSv = Number(user.sessionVersion ?? user.sv ?? sessionVersions[user.id] ?? 0);
     if (payload.sv !== currentSv) {
       return res.status(401).json({ error: "Session revoked — please sign in again" });
     }
     req.user = user;
     return next();
-  } catch {
-    return res.status(401).json({ error: "Invalid or expired token" });
+  } catch (err) {
+    console.error("[identity] authentication authority unavailable:", err?.message || err);
+    return res.status(503).json({ error: "Identity service is temporarily unavailable" });
   }
 };
 
@@ -82,8 +93,8 @@ export const requireStepUp = (req, res, next) => {
     return res.status(412).json({ error: "Recent re-authentication required", code: "STEP_UP_REQUIRED" });
   }
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    const currentSv = sessionVersions[req.user.id] || 0;
+    const payload = jwt.verify(token, JWT_SECRET, { issuer: JWT_ISSUER, audience: JWT_AUDIENCE });
+    const currentSv = Number(req.user.sessionVersion ?? req.user.sv ?? sessionVersions[req.user.id] ?? 0);
     if (payload.sub !== req.user.id || payload.purpose !== "step-up" || payload.sv !== currentSv) {
       securityEvent(req, "STEP_UP_INVALID");
       return res.status(412).json({ error: "Recent re-authentication required", code: "STEP_UP_REQUIRED" });

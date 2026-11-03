@@ -103,6 +103,8 @@ const resolveJwtSecret = () => {
   return fromEnv;
 };
 export const JWT_SECRET = resolveJwtSecret();
+export const JWT_ISSUER = process.env.JWT_ISSUER || "nalanda-api";
+export const JWT_AUDIENCE = process.env.JWT_AUDIENCE || "nalanda-web";
 const resolveCertificateSigningSecret = () => {
   const fromEnv = String(process.env.CERTIFICATE_SIGNING_SECRET || "").trim();
   if (IS_PRODUCTION && fromEnv.length < 32) {

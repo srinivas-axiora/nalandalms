@@ -18,6 +18,8 @@ const mapUser = (r) => ({
   status: r.status,
   sessionVersion: r.session_version || 0,
   sv: r.session_version || 0,
+  preferences: r.preferences || {},
+  joinedAt: r.joined_at ? iso(r.joined_at).slice(0, 10) : null,
   lastLoginAt: r.last_login_at ? iso(r.last_login_at) : null,
   createdAt: iso(r.created_at),
   updatedAt: iso(r.updated_at),
@@ -89,10 +91,12 @@ export async function insertUser(user) {
   const { rows } = await query(
     `INSERT INTO users (
        id, name, email, password_hash, role, department_id,
-       team, designation, manager_id, status, session_version, created_at, updated_at
+       team, designation, manager_id, status, session_version, preferences,
+       joined_at, created_at, updated_at
      ) VALUES (
        $1, $2, $3, $4, $5::user_role, $6,
-       $7, $8, $9, $10::lifecycle_status, $11, COALESCE($12::timestamptz, now()), now()
+       $7, $8, $9, $10::lifecycle_status, $11, $12::jsonb,
+       $13::date, COALESCE($14::timestamptz, now()), now()
      ) RETURNING *`,
     [
       user.id,
@@ -106,6 +110,8 @@ export async function insertUser(user) {
       user.managerId || null,
       user.status || "Active",
       user.sessionVersion || 0,
+      JSON.stringify(user.preferences || {}),
+      user.joinedAt || null,
       user.createdAt || null,
     ]
   );
@@ -149,6 +155,14 @@ export async function updateUser(id, updates) {
   if (updates.status !== undefined) {
     params.push(updates.status);
     fields.push(`status = $${params.length}::lifecycle_status`);
+  }
+  if (updates.preferences !== undefined) {
+    params.push(JSON.stringify(updates.preferences));
+    fields.push(`preferences = $${params.length}::jsonb`);
+  }
+  if (updates.joinedAt !== undefined) {
+    params.push(updates.joinedAt);
+    fields.push(`joined_at = $${params.length}::date`);
   }
   if (updates.department) {
     const deptId = await ensureDepartmentId(updates.department);

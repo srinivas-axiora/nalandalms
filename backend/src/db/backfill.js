@@ -63,19 +63,26 @@ export async function backfill() {
       await client.query(
         `INSERT INTO users (
            id, name, email, password_hash, role, department_id,
-           team, designation, manager_id, status, session_version, created_at, updated_at
+           team, designation, manager_id, status, session_version, preferences,
+           joined_at, created_at, updated_at
          ) VALUES (
            $1, $2, $3, $4, $5::user_role, $6,
-           $7, $8, $9, $10::lifecycle_status, $11, COALESCE($12::timestamptz, now()), now()
+           $7, $8, $9, $10::lifecycle_status, $11, $12::jsonb,
+           $13::date, COALESCE($14::timestamptz, now()), now()
          ) ON CONFLICT (id) DO UPDATE SET
-           name = EXCLUDED.name, email = EXCLUDED.email, role = EXCLUDED.role,
+           name = EXCLUDED.name, email = EXCLUDED.email,
+           password_hash = EXCLUDED.password_hash, role = EXCLUDED.role,
            department_id = EXCLUDED.department_id, team = EXCLUDED.team,
            designation = EXCLUDED.designation, manager_id = EXCLUDED.manager_id,
-           status = EXCLUDED.status`,
+           status = EXCLUDED.status,
+           session_version = GREATEST(users.session_version, EXCLUDED.session_version),
+           preferences = EXCLUDED.preferences,
+           joined_at = EXCLUDED.joined_at`,
         [
           u.id, u.name, u.email, u.passwordHash || null, u.role || "Employee", deptId,
           u.team || "Unassigned", u.designation || "Employee", null,
-          u.status || "Active", u.sessionVersion || 0, u.createdAt || null,
+          u.status || "Active", u.sessionVersion || 0,
+          JSON.stringify(u.preferences || {}), u.joinedAt || null, u.createdAt || null,
         ]
       );
     }

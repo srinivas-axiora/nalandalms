@@ -2,30 +2,38 @@
 import crypto from "node:crypto";
 import { attempts, now, sessionVersions, users } from "../../core.js";
 import { COMPANION_TOKEN_TTL_SECONDS } from "../../config.js";
+import { identityRepository } from "../../repositories/identity.repository.pg.js";
+import {
+  claimCompanionPairing,
+  deleteCompanionPairing,
+  getCompanionPairing,
+  storeCompanionPairing,
+} from "../../cache/redis.js";
 
-const activePairingTokens = new Map(); // token -> { attemptId, candidateUserId, expiresAt }
+const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
+const tokenDigest = (token) => crypto.createHash("sha256").update(token).digest("hex");
 
-// Cleanup expired pairing tokens
-setInterval(() => {
-  const cutoff = Date.now();
-  for (const [token, data] of activePairingTokens.entries()) {
-    if (data.expiresAt < cutoff) {
-      activePairingTokens.delete(token);
-    }
-  }
-}, 5 * 60 * 1000).unref();
+const getCandidate = (id) => USE_PG_IDENTITY
+  ? identityRepository.findUserById(id)
+  : Promise.resolve(users.find((user) => user.id === id));
 
-export function createPairingToken(attemptId, candidateUserId) {
+export async function createPairingToken(attemptId, candidateUserId) {
   const token = `NLD-PAIR-${crypto.randomBytes(16).toString("hex").toUpperCase()}`;
   const expiresAt = Date.now() + COMPANION_TOKEN_TTL_SECONDS * 1000;
+  const candidate = await getCandidate(candidateUserId);
+  if (!candidate || candidate.status !== "Active") {
+    const err = new Error("Candidate account is unavailable");
+    err.status = 401;
+    throw err;
+  }
 
-  activePairingTokens.set(token, {
+  await storeCompanionPairing(tokenDigest(token), {
     attemptId,
     candidateUserId,
-    sessionVersion: sessionVersions[candidateUserId] || 0,
+    sessionVersion: Number(candidate.sessionVersion ?? candidate.sv ?? sessionVersions[candidateUserId] ?? 0),
     expiresAt,
     paired: false,
-  });
+  }, COMPANION_TOKEN_TTL_SECONDS);
 
   const pairUrl = `/mobile-proctor?token=${token}`;
 
@@ -36,8 +44,9 @@ export function createPairingToken(attemptId, candidateUserId) {
   };
 }
 
-export function verifyAndPairCompanion(pairingToken, deviceMetadata = {}) {
-  const data = activePairingTokens.get(pairingToken);
+export async function verifyAndPairCompanion(pairingToken, deviceMetadata = {}) {
+  const digest = tokenDigest(pairingToken);
+  const data = await getCompanionPairing(digest);
   if (!data) {
     const err = new Error("Invalid or expired mobile pairing token");
     err.status = 404;
@@ -45,7 +54,7 @@ export function verifyAndPairCompanion(pairingToken, deviceMetadata = {}) {
   }
 
   if (data.expiresAt < Date.now()) {
-    activePairingTokens.delete(pairingToken);
+    await deleteCompanionPairing(digest);
     const err = new Error("Mobile pairing token has expired");
     err.status = 410;
     throw err;
@@ -64,15 +73,26 @@ export function verifyAndPairCompanion(pairingToken, deviceMetadata = {}) {
     throw err;
   }
 
-  const candidate = users.find((user) => user.id === data.candidateUserId);
-  if (!candidate || candidate.status !== "Active" || (sessionVersions[candidate.id] || 0) !== data.sessionVersion) {
-    activePairingTokens.delete(pairingToken);
+  const candidate = await getCandidate(data.candidateUserId);
+  const currentSessionVersion = Number(candidate?.sessionVersion ?? candidate?.sv ?? sessionVersions[data.candidateUserId] ?? 0);
+  if (!candidate || candidate.status !== "Active" || currentSessionVersion !== data.sessionVersion) {
+    await deleteCompanionPairing(digest);
     const err = new Error("Mobile pairing token has been revoked");
     err.status = 401;
     throw err;
   }
 
-  data.paired = true;
+  const claim = await claimCompanionPairing(digest);
+  if (claim.status === "paired") {
+    const err = new Error("Mobile pairing token has already been used");
+    err.status = 409;
+    throw err;
+  }
+  if (claim.status !== "claimed") {
+    const err = new Error("Invalid or expired mobile pairing token");
+    err.status = 404;
+    throw err;
+  }
 
   attempt.companion = {
     paired: true,
@@ -92,20 +112,22 @@ export function verifyAndPairCompanion(pairingToken, deviceMetadata = {}) {
   };
 }
 
-export function authorizeCompanionToken(token, attemptId) {
-  const data = activePairingTokens.get(token);
+export async function authorizeCompanionToken(token, attemptId) {
+  const digest = tokenDigest(token);
+  const data = await getCompanionPairing(digest);
   if (!data || !data.paired || data.attemptId !== attemptId || data.expiresAt < Date.now()) return null;
-  const candidate = users.find((user) => user.id === data.candidateUserId);
-  if (!candidate || candidate.status !== "Active" || (sessionVersions[candidate.id] || 0) !== data.sessionVersion) {
-    activePairingTokens.delete(token);
+  const candidate = await getCandidate(data.candidateUserId);
+  const currentSessionVersion = Number(candidate?.sessionVersion ?? candidate?.sv ?? sessionVersions[data.candidateUserId] ?? 0);
+  if (!candidate || candidate.status !== "Active" || currentSessionVersion !== data.sessionVersion) {
+    await deleteCompanionPairing(digest);
     return null;
   }
   const attempt = attempts.find((item) => item.id === attemptId && item.userId === data.candidateUserId);
   return attempt ? { attempt, candidate, tokenData: data } : null;
 }
 
-export function updateCompanionHeartbeat(token, attemptId, metadata = {}) {
-  const authorized = authorizeCompanionToken(token, attemptId);
+export async function updateCompanionHeartbeat(token, attemptId, metadata = {}) {
+  const authorized = await authorizeCompanionToken(token, attemptId);
   const attempt = authorized?.attempt;
   if (!attempt || !attempt.companion) return false;
 

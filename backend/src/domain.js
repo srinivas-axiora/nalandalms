@@ -4,7 +4,7 @@ import { v4 as uuid } from "uuid";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { JWT_SECRET } from "./config.js";
+import { JWT_AUDIENCE, JWT_ISSUER, JWT_SECRET } from "./config.js";
 import { tokenize } from "./lib.js";
 import { redactSensitive } from "./security/redaction.js";
 import { safeRequestPath } from "./security/request-path.js";
@@ -17,7 +17,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const publicUser = (user) => {
   const safe = redactSensitive(user);
-  const sessionVersion = sessionVersions[user.id] || 0;
+  const sessionVersion = Number(user.sessionVersion ?? user.sv ?? sessionVersions[user.id] ?? 0);
   return { ...safe, sessionVersion, sv: sessionVersion };
 };
 
@@ -44,13 +44,21 @@ export const securityEvent = (req, type, metadata = {}) => {
 };
 
 export const signToken = (user) => {
-  const sv = sessionVersions[user.id] || 0;
-  return jwt.sign({ sub: user.id, role: user.role, department: user.department, sv }, JWT_SECRET, { expiresIn: "30m" });
+  const sv = Number(user.sessionVersion ?? user.sv ?? sessionVersions[user.id] ?? 0);
+  return jwt.sign({ sub: user.id, role: user.role, department: user.department, sv }, JWT_SECRET, {
+    expiresIn: "30m",
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+  });
 };
 
 export const signStepUpToken = (user) => {
-  const sv = sessionVersions[user.id] || 0;
-  return jwt.sign({ sub: user.id, sv, purpose: "step-up" }, JWT_SECRET, { expiresIn: "10m" });
+  const sv = Number(user.sessionVersion ?? user.sv ?? sessionVersions[user.id] ?? 0);
+  return jwt.sign({ sub: user.id, sv, purpose: "step-up" }, JWT_SECRET, {
+    expiresIn: "10m",
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+  });
 };
 
 export const canManageCourse = (user, course) => isAdmin(user.role) || course.ownerId === user.id;

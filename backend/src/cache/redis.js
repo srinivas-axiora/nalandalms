@@ -7,6 +7,8 @@ let connectionPromise = Promise.resolve(false);
 const redisRequired = process.env.NODE_ENV === "production";
 
 const memoryStore = new Map();
+const loginSecurityMemory = new Map();
+const companionPairingMemory = new Map();
 
 if (process.env.REDIS_URL) {
   try {
@@ -109,6 +111,167 @@ export async function rateLimitCheckAndIncr(key, windowSeconds = 60, maxHits = 6
   }
 
   return { allowed: true, current: timestamps.length, remaining: maxHits - timestamps.length };
+}
+
+const loginKey = (key) => `auth:failures:${key}`;
+
+export async function getLoginSecurity(key, maxAttempts = 5) {
+  if (isRedisAvailable()) {
+    try {
+      const result = await redis.multi().get(loginKey(key)).pttl(loginKey(key)).exec();
+      const failedAttempts = Number(result?.[0]?.[1] || 0);
+      const ttlMs = Number(result?.[1]?.[1] || -1);
+      return {
+        failedAttempts,
+        lockedUntil: failedAttempts >= maxAttempts && ttlMs > 0
+          ? new Date(Date.now() + ttlMs).toISOString()
+          : null,
+      };
+    } catch (err) {
+      if (redisRequired) throw new Error(`Redis login security unavailable: ${err?.message || "unknown error"}`);
+    }
+  }
+  if (redisRequired) throw new Error("Redis login security unavailable");
+  const entry = loginSecurityMemory.get(key);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    loginSecurityMemory.delete(key);
+    return { failedAttempts: 0, lockedUntil: null };
+  }
+  return {
+    failedAttempts: entry.failedAttempts,
+    lockedUntil: entry.failedAttempts >= maxAttempts ? new Date(entry.expiresAt).toISOString() : null,
+  };
+}
+
+export async function recordLoginFailure(key, maxAttempts = 5, lockoutMs = 15 * 60 * 1000) {
+  if (isRedisAvailable()) {
+    try {
+      const result = await redis.eval(
+        "local n=redis.call('INCR',KEYS[1]); redis.call('PEXPIRE',KEYS[1],ARGV[1]); local ttl=redis.call('PTTL',KEYS[1]); return {n,ttl}",
+        1,
+        loginKey(key),
+        lockoutMs,
+      );
+      const failedAttempts = Number(result?.[0] || 0);
+      const ttlMs = Number(result?.[1] || lockoutMs);
+      return {
+        failedAttempts,
+        lockedUntil: failedAttempts >= maxAttempts
+          ? new Date(Date.now() + ttlMs).toISOString()
+          : null,
+      };
+    } catch (err) {
+      if (redisRequired) throw new Error(`Redis login security unavailable: ${err?.message || "unknown error"}`);
+    }
+  }
+  if (redisRequired) throw new Error("Redis login security unavailable");
+  const current = loginSecurityMemory.get(key);
+  const failedAttempts = current && current.expiresAt > Date.now() ? current.failedAttempts + 1 : 1;
+  const expiresAt = Date.now() + lockoutMs;
+  loginSecurityMemory.set(key, { failedAttempts, expiresAt });
+  return {
+    failedAttempts,
+    lockedUntil: failedAttempts >= maxAttempts ? new Date(expiresAt).toISOString() : null,
+  };
+}
+
+export async function clearLoginFailures(key) {
+  if (isRedisAvailable()) {
+    try {
+      await redis.del(loginKey(key));
+      return;
+    } catch (err) {
+      if (redisRequired) throw new Error(`Redis login security unavailable: ${err?.message || "unknown error"}`);
+    }
+  }
+  if (redisRequired) throw new Error("Redis login security unavailable");
+  loginSecurityMemory.delete(key);
+}
+
+const companionKey = (tokenDigest) => `proctor:companion:${tokenDigest}`;
+
+export async function storeCompanionPairing(tokenDigest, value, ttlSeconds) {
+  if (isRedisAvailable()) {
+    try {
+      await redis.set(companionKey(tokenDigest), JSON.stringify(value), "EX", ttlSeconds);
+      return;
+    } catch (err) {
+      if (redisRequired) throw new Error(`Redis companion pairing unavailable: ${err?.message || "unknown error"}`);
+    }
+  }
+  if (redisRequired) throw new Error("Redis companion pairing unavailable");
+  companionPairingMemory.set(tokenDigest, {
+    value: structuredClone(value),
+    expiresAt: Date.now() + ttlSeconds * 1000,
+  });
+}
+
+export async function getCompanionPairing(tokenDigest) {
+  if (isRedisAvailable()) {
+    try {
+      const raw = await redis.get(companionKey(tokenDigest));
+      return raw ? JSON.parse(raw) : null;
+    } catch (err) {
+      if (redisRequired) throw new Error(`Redis companion pairing unavailable: ${err?.message || "unknown error"}`);
+    }
+  }
+  if (redisRequired) throw new Error("Redis companion pairing unavailable");
+  const entry = companionPairingMemory.get(tokenDigest);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    companionPairingMemory.delete(tokenDigest);
+    return null;
+  }
+  return structuredClone(entry.value);
+}
+
+export async function claimCompanionPairing(tokenDigest) {
+  if (isRedisAvailable()) {
+    try {
+      const result = await redis.eval(
+        `local raw=redis.call('GET',KEYS[1]);
+         if not raw then return {0,''}; end;
+         local data=cjson.decode(raw);
+         if data.paired then return {2,raw}; end;
+         local ttl=redis.call('PTTL',KEYS[1]);
+         if ttl <= 0 then return {0,''}; end;
+         data.paired=true;
+         local claimed=cjson.encode(data);
+         redis.call('SET',KEYS[1],claimed,'PX',ttl);
+         return {1,claimed};`,
+        1,
+        companionKey(tokenDigest),
+      );
+      const status = Number(result?.[0] || 0);
+      return {
+        status: status === 1 ? "claimed" : status === 2 ? "paired" : "missing",
+        data: result?.[1] ? JSON.parse(result[1]) : null,
+      };
+    } catch (err) {
+      if (redisRequired) throw new Error(`Redis companion pairing unavailable: ${err?.message || "unknown error"}`);
+    }
+  }
+  if (redisRequired) throw new Error("Redis companion pairing unavailable");
+  const entry = companionPairingMemory.get(tokenDigest);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    companionPairingMemory.delete(tokenDigest);
+    return { status: "missing", data: null };
+  }
+  if (entry.value.paired) return { status: "paired", data: structuredClone(entry.value) };
+  entry.value.paired = true;
+  return { status: "claimed", data: structuredClone(entry.value) };
+}
+
+export async function deleteCompanionPairing(tokenDigest) {
+  if (isRedisAvailable()) {
+    try {
+      await redis.del(companionKey(tokenDigest));
+      return;
+    } catch (err) {
+      if (redisRequired) throw new Error(`Redis companion pairing unavailable: ${err?.message || "unknown error"}`);
+    }
+  }
+  if (redisRequired) throw new Error("Redis companion pairing unavailable");
+  companionPairingMemory.delete(tokenDigest);
 }
 
 export async function closeRedis() {

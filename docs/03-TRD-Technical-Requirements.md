@@ -92,12 +92,12 @@ The normalized PostgreSQL schema is defined in `database/schema.sql` (department
 
 ## 5. Security Architecture (implemented baseline)
 
-- **AuthN:** JWT (HS256) in HttpOnly cookie, 30-min expiry, `Secure` + `SameSite` in production; `trust proxy` enabled for correct client IP/secure cookies behind TLS terminators.
+- **AuthN:** JWT (HS256) in HttpOnly cookie, 30-min expiry, issuer/audience validation, server-authoritative session version, `Secure` + `SameSite` in production; `trust proxy` enabled for correct client IP/secure cookies behind TLS terminators.
 - **Secrets:** `JWT_SECRET` required (≥32 chars) in production — process **refuses to boot** on missing/default; ephemeral dev secret otherwise. Seed passwords are env-driven (`SEED_*_PASSWORD`); no shipped credentials.
 - **AuthZ:** role + ownership checks server-side on every protected route; privilege-escalation guards (only SA grants/edits Super Admin; no self role-change/self-deactivation).
 - **CSRF:** double-submit cookie + `X-CSRF-Token` header with constant-time compare.
 - **CORS:** strict allow-list (`ALLOWED_ORIGINS`); credentials enabled; same-origin in prod.
-- **Rate limiting:** in-memory sliding window — global per-IP (600/min), per-user AI (15/min), per-IP login (10/min) + 5-attempt lockout.
+- **Rate limiting:** Redis-backed production limits — global per-IP (600/min), per-user AI (15/min), per-IP login (10/min) plus account/IP-scoped failed-login lockout; development has in-memory fallbacks.
 - **Input validation:** zod schemas on writes; JSON body limit; payload JSON parse guarded.
 - **Output protection:** assessment answer-keys stripped for learners; `/api/app-data` role-scoped.
 - **Content safety:** server-side HTML sanitizer for chapter/AI bodies; helmet security headers.
@@ -140,6 +140,7 @@ The normalized PostgreSQL schema is defined in `database/schema.sql` (department
 | `NODE_ENV` | environment | `production` enables secure cookies + secret enforcement |
 | `PORT` | listen port | default 8080 |
 | `JWT_SECRET` | session signing | required ≥32 chars in prod |
+| `JWT_ISSUER` / `JWT_AUDIENCE` | token namespace | defaults `nalanda-api` / `nalanda-web` |
 | `ALLOWED_ORIGINS` | CORS allow-list | comma-separated |
 | `DATABASE_URL` | Postgres connection | enables durable DB mode |
 | `PGSSL` / `PGPOOL_MAX` | DB TLS / pool size | `require`/`no-verify`; default pool 10 |

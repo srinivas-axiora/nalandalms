@@ -286,6 +286,15 @@ describe("Sprint 8: WebRTC Proctoring, Continuous Chunking & Dual-Camera Pairing
       expect(companionToken).toBe(pairingToken);
     });
 
+    it("Rejects replay of an already claimed mobile pairing token", async () => {
+      const res = await request(app)
+        .post("/api/proctoring/companion/pair")
+        .send({ pairingToken });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toContain("already been used");
+    });
+
     it("Companion heartbeat requires and accepts the scoped token", async () => {
       const denied = await request(app)
         .post(`/api/proctoring/attempts/${candidateAttemptId}/companion/ping`)

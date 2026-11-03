@@ -59,11 +59,14 @@ import * as enrollmentsRepo from "./src/repositories/enrollments.repository.pg.j
 import * as skillsRepo from "./src/repositories/skills.repository.pg.js";
 import { query as relationalQuery } from "./src/db/pool.js";
 import { redactSensitive } from "./src/security/redaction.js";
+import { identityRepository } from "./src/repositories/identity.repository.pg.js";
+import { replaceIdentityProjection } from "./src/identity-projection.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG = process.env.USE_PG === "1";
 const USE_PG_SKILLS = USE_PG || process.env.USE_PG_SKILLS === "1";
 const USE_PG_PAYMENTS = process.env.USE_PG_PAYMENTS === "1";
+const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
 
 const app = express();
 app.set("trust proxy", TRUST_PROXY);
@@ -130,7 +133,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/ready", async (_req, res) => {
-  const [database, redis, objects, payments] = await Promise.all([
+  const [database, redis, objects, payments, identity] = await Promise.all([
     storage.health(),
     redisHealth(),
     objectStoreHealth(),
@@ -146,9 +149,32 @@ app.get("/api/ready", async (_req, res) => {
           mode: "normalized",
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
+    USE_PG_IDENTITY
+      ? relationalQuery(
+          `SELECT
+             to_regclass('public.users') IS NOT NULL AS users,
+             to_regclass('public.audit_logs') IS NOT NULL AS audits,
+             to_regclass('public.deleted_archives') IS NOT NULL AS archives,
+             EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'preferences'
+             ) AS preferences,
+             EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'joined_at'
+             ) AS joined_at,
+             EXISTS (
+               SELECT 1 FROM pg_trigger
+               WHERE tgname = 'trg_revoke_user_sessions_on_trust_change' AND NOT tgisinternal
+             ) AS session_trigger`
+        ).then(({ rows }) => ({
+          ok: Object.values(rows[0] || {}).every(Boolean),
+          mode: "normalized",
+        })).catch(() => ({ ok: false, mode: "normalized" }))
+      : Promise.resolve({ ok: true, mode: "disabled" }),
   ]);
-  const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok;
-  if (!ok) logger.error("READINESS_CHECK_FAILED", { database, redis, objects, payments, startupReady });
+  const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok;
+  if (!ok) logger.error("READINESS_CHECK_FAILED", { database, redis, objects, payments, identity, startupReady });
   res.status(ok ? 200 : 503).json({
     ok,
     service: "Nalanda API",
@@ -157,6 +183,7 @@ app.get("/api/ready", async (_req, res) => {
       redis: { ok: redis.ok, mode: redis.mode },
       objects: { ok: objects.ok, mode: objects.mode },
       payments: { ok: payments.ok, mode: payments.mode },
+      identity: { ok: identity.ok, mode: identity.mode },
     },
   });
 });
@@ -238,6 +265,9 @@ const start = async () => {
   try {
     await storage.init();
     await loadDb();
+    if (USE_PG_IDENTITY) {
+      replaceIdentityProjection(await identityRepository.listUsers({ status: "All" }));
+    }
     await ensureRedisReady();
     const objects = await objectStoreHealth();
     if (!objects.ok) throw new Error(`Object storage is unavailable: ${objects.error || objects.mode}`);

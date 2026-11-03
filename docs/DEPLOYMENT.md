@@ -33,12 +33,14 @@ Production startup fails closed unless all of these are configured:
   production.
 - `S3_BUCKET` and `S3_REGION`; ECS uses its IAM task role, not static access
   keys.
-- Strong `JWT_SECRET` and `CERTIFICATE_SIGNING_SECRET` values.
+- Strong `JWT_SECRET` and `CERTIFICATE_SIGNING_SECRET` values; keep stable,
+  deployment-specific `JWT_ISSUER` and `JWT_AUDIENCE` values.
 - Razorpay key ID, key secret and webhook secret.
 - An explicit `CERTIFICATE_ISSUANCE_APPROVAL_ROLE`.
 
 `GET /api/health` is the process liveness probe. `GET /api/ready` verifies the
-database, Redis and object store and returns 503 if a dependency is unavailable.
+database, Redis, object store and any enabled normalized payment/identity schema
+and returns 503 if a required dependency is unavailable.
 
 ## Container
 
