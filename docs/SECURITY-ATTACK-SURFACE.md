@@ -135,7 +135,8 @@ or step-up middleware disagrees with its declaration.
 | GET | `/verify/:certificateId` | Public | N | N/A | N | None | HTML shortcut outside API limiter |
 | GET | `/api/certificates` | Any | N | N/A | N | G | Role-scoped service |
 | POST | `/api/certificates` | A/M/I | Y | Y | Y | G | Configured approver, course authority, eligibility and step-up required |
-| POST | `/api/certificates/auto-issue` | Any | Y | Y | N | G | Self-scoped but accepts caller-selected attemptId |
+| POST | `/api/certificates/:certificateId/revoke` | A/M/I | Y | Y | Y | G | Course authority, durable revocation reason and step-up required |
+| POST | `/api/certificates/auto-issue` | Any | Y | Y | N | G | Self-scoped; selected attempt must be passed and bound to learner/course |
 | POST | `/api/payments/create-order` | Any | Y | Y | N | G | Server-priced order ledger binds user/course/amount/currency and expires |
 | POST | `/api/payments/verify` | Any | Y | Y | N | G | Mandatory HMAC, order ownership/binding and payment-level idempotency |
 | POST | `/api/payments/webhook` | Public | Y | Exempt | N | G | Mandatory raw-body HMAC and provider event-ID replay protection |

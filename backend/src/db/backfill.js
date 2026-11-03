@@ -37,6 +37,8 @@ async function loadSource() {
       assessments: core.assessments || [],
       assignments: core.assignments || [],
       attempts: core.attempts || [],
+      proctoringLogs: core.proctoringLogs || [],
+      issuedCertificates: core.issuedCertificates || [],
     },
     source: "in-memory seed",
   };
@@ -327,7 +329,95 @@ export async function backfill() {
       );
     }
 
-    // 8. Payment ledger. This preserves existing settlement evidence before
+    // 8. Issued certificates. Only signed credentials with resolvable subjects
+    // are admitted to the normalized authority; reconciliation reports any
+    // quarantined legacy rows before the feature flag can be enabled.
+    const certificates = data.issuedCertificates || [];
+    const coursesById = new Map(courses.map((course) => [course.id, course]));
+    const enrollmentKeys = new Set(enrollments.map((enrollment) => `${enrollment.userId}:${enrollment.courseId}`));
+    const activePairCounts = certificates.reduce((counts, certificate) => {
+      if ((certificate.status || "Active") !== "Active") return counts;
+      const key = `${certificate.employeeId}:${certificate.courseId}`;
+      counts.set(key, (counts.get(key) || 0) + 1);
+      return counts;
+    }, new Map());
+    const eligibleCertificates = certificates.filter((certificate) => {
+      const course = coursesById.get(certificate.courseId);
+      const status = certificate.status || "Active";
+      const pairKey = `${certificate.employeeId}:${certificate.courseId}`;
+      const hasValidRevocation = status === "Active"
+        ? !certificate.revokedBy && !certificate.revokedAt && !certificate.revocationReason
+        : status === "Revoked"
+          && userIds.has(certificate.revokedBy)
+          && Boolean(certificate.revokedAt)
+          && String(certificate.revocationReason || "").trim().length >= 10;
+      return Boolean(certificate.id || certificate.certificateId)
+        && userIds.has(certificate.employeeId)
+        && Boolean(course)
+        && enrollmentKeys.has(pairKey)
+        && (status !== "Active" || activePairCounts.get(pairKey) === 1)
+        && userIds.has(userIds.has(certificate.issuedBy) ? certificate.issuedBy : course?.ownerId)
+        && [1, 2].includes(Number(certificate.signatureVersion || 1))
+        && /^[a-f0-9]{64}$/i.test(certificate.signature || "")
+        && hasValidRevocation;
+    });
+    console.log(`[backfill] Upserting ${eligibleCertificates.length} signed certificates (${certificates.length - eligibleCertificates.length} quarantined)...`);
+    for (const certificate of eligibleCertificates) {
+      const course = coursesById.get(certificate.courseId);
+      const issuerId = userIds.has(certificate.issuedBy) ? certificate.issuedBy : course.ownerId;
+      const inserted = await client.query(
+        `INSERT INTO issued_certificates (
+           id, employee_id, course_id, attempt_id, recipient_name,
+           recipient_email, course_title, title, template, accent, duration,
+           subtitle, footer, issued_by, issued_by_name, html_snapshot,
+           proctoring_verified, exam_score, signature_version, signature, verification_url,
+           linkedin_share_url, status, revoked_by, revoked_at,
+           revocation_reason, issued_at
+         ) VALUES (
+           $1, $2, $3, $4, $5,
+           $6, $7, $8, $9, $10, $11,
+           $12, $13, $14, $15, '',
+           $16, $17, $18, $19, $20,
+           $21, $22, $23, $24,
+           $25, COALESCE($26::timestamptz, now())
+         ) ON CONFLICT (id) DO NOTHING
+         RETURNING id, employee_id, course_id, status, issued_at`,
+        [
+          certificate.id || certificate.certificateId, certificate.employeeId,
+          certificate.courseId, attemptIds.has(certificate.attemptId) ? certificate.attemptId : null,
+          certificate.recipientName || users.find((user) => user.id === certificate.employeeId)?.name,
+          certificate.recipientEmail || users.find((user) => user.id === certificate.employeeId)?.email,
+          certificate.courseTitle || course.title, certificate.title || "Certificate of Completion",
+          certificate.template || "Executive", certificate.accent || "#0f766e",
+          certificate.duration || "", certificate.subtitle || "", certificate.footer || "",
+          issuerId, certificate.issuedByName || "Nalanda Academic Board",
+          Boolean(certificate.proctoringVerified), certificate.examScore ?? null,
+          certificate.signatureVersion || 1, certificate.signature.toLowerCase(),
+          certificate.verificationUrl || `/verify/${certificate.id || certificate.certificateId}`,
+          certificate.linkedinShareUrl || "", certificate.status || "Active",
+          userIds.has(certificate.revokedBy) ? certificate.revokedBy : null,
+          certificate.revokedAt || null, certificate.revocationReason || null,
+          certificate.issuedAt || null,
+        ]
+      );
+      const admitted = inserted.rows[0];
+      if (admitted?.status === "Active") {
+        await client.query(
+          `UPDATE enrollments SET status = 'Certified', certificate_id = $3,
+             completed_at = COALESCE(completed_at, $4)
+           WHERE user_id = $1 AND course_id = $2`,
+          [admitted.employee_id, admitted.course_id, admitted.id, admitted.issued_at]
+        );
+      } else if (admitted?.status === "Revoked") {
+        await client.query(
+          `UPDATE enrollments SET status = 'Passed', certificate_id = NULL
+           WHERE user_id = $1 AND course_id = $2 AND certificate_id = $3`,
+          [admitted.employee_id, admitted.course_id, admitted.id]
+        );
+      }
+    }
+
+    // 9. Payment ledger. This preserves existing settlement evidence before
     // USE_PG_PAYMENTS is enabled. Foreign keys require users/courses/enrollments
     // to be loaded first.
     const paymentOrders = data.paymentOrders || [];

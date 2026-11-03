@@ -2,7 +2,10 @@
 import crypto from "node:crypto";
 import { CERTIFICATE_SIGNING_SECRET } from "../../config.js";
 
-export function canonicalizePayload(cert) {
+const text = (value) => String(value ?? "").trim().normalize("NFC");
+const date = (value) => value ? new Date(value).toISOString() : "";
+
+function canonicalizeLegacyPayload(cert) {
   return [
     cert.id || cert.certificateId,
     cert.employeeId || cert.recipientId,
@@ -12,6 +15,29 @@ export function canonicalizePayload(cert) {
     cert.issuedAt ? new Date(cert.issuedAt).toISOString().slice(0, 10) : "",
     cert.proctoringVerified ? "VERIFIED" : "UNVERIFIED",
   ].join("|");
+}
+
+export function canonicalizePayload(cert) {
+  if (Number(cert.signatureVersion || 2) === 1) return canonicalizeLegacyPayload(cert);
+  return JSON.stringify([
+    "nalanda-certificate-v2",
+    text(cert.id || cert.certificateId),
+    text(cert.employeeId || cert.recipientId),
+    text(cert.recipientName),
+    text(cert.recipientEmail).toLowerCase(),
+    text(cert.courseId),
+    text(cert.courseTitle),
+    text(cert.attemptId),
+    text(cert.title),
+    text(cert.duration),
+    text(cert.subtitle),
+    text(cert.footer),
+    text(cert.issuedBy),
+    text(cert.issuedByName),
+    date(cert.issuedAt),
+    Boolean(cert.proctoringVerified),
+    cert.examScore === null || cert.examScore === undefined ? null : Number(cert.examScore),
+  ]);
 }
 
 export function signCertificatePayload(cert) {

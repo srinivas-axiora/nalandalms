@@ -1,6 +1,6 @@
 # Nalanda — PostgreSQL data-layer migration
 
-Status: **in progress — skills, payment and identity boundaries built.**
+Status: **in progress — skills, payment, identity, attempt and certificate boundaries built.**
 Owner: Engineering. Updated: 2026-11-03.
 
 > ⚠️ **This code is UNVERIFIED by the author.** It was written without a live
@@ -9,7 +9,7 @@ Owner: Engineering. Updated: 2026-11-03.
 > be validated against a real database using the steps in §4 before any cutover.
 > It is feature-gated — most of the running app still uses the existing
 > in-memory/JSONB snapshot store. `USE_PG_SKILLS`, `USE_PG_PAYMENTS`,
-> `USE_PG_IDENTITY` and `USE_PG_ATTEMPTS` must stay off until their
+> `USE_PG_IDENTITY`, `USE_PG_ATTEMPTS` and `USE_PG_CERTIFICATES` must stay off until their
 > live-database gates pass.
 
 ---
@@ -38,6 +38,11 @@ backend/src/repositories/payments.repository.pg.js atomic payment/enrollment/aud
 database/migrations/0006_identity_runtime_cutover.sql identity runtime columns + trigger
 backend/src/repositories/identity.repository.pg.js transactional identity/session authority
 backend/src/db/verify-identity.mjs             live PostgreSQL identity verifier
+database/migrations/0007_attempt_runtime_cutover.sql transactional exam/proctor state
+backend/src/db/verify-attempts.mjs              live PostgreSQL attempt verifier
+database/migrations/0008_certificate_authority.sql signed credential/revocation authority
+backend/src/repositories/certificates.repository.pg.js transactional certificate authority
+backend/src/db/verify-certificates.mjs          signature/issuance/revocation verifier
 ```
 
 The **skills** bounded context is the pilot (like the certificates pilot for the
@@ -80,6 +85,8 @@ node backend/src/db/verify-skills.mjs
 
 # 5. Exercise identity/session invariants with self-cleaning synthetic data
 npm run db:verify-identity
+npm run db:verify-attempts
+npm run db:verify-certificates
 ```
 
 If `verify-skills.mjs` prints all `ok`, the pilot pattern is sound and we proceed
@@ -128,12 +135,17 @@ For each bounded context, in roughly ascending coupling:
 - [x] Authenticated assessment attempts, grading/enrollment transitions and
       proctor evidence are implemented behind `USE_PG_ATTEMPTS=1` (Phase 8;
       live-DB concurrency and cross-task gate still pending)
+- [x] Signed certificate issuance, active-credential uniqueness, enrollment
+      certification, public verification and revocation are implemented behind
+      `USE_PG_CERTIFICATES=1` (Phase 9; live-DB/cross-task gate still pending)
 - [ ] courses (price/currency schema and repository mapping complete; route-wide
       source-of-truth cutover remains)
 - [ ] chapters  (+ chapter_time_totals / learning_time_events)
 - [ ] assessments (+ questions as JSONB)  ·  enrollments(assignments)
-- [ ] attempts (+ answers/flags as JSONB; reconcile status CHECK)
-- [ ] proctoring_logs  ·  certificates  ·  archives  ·  audit_logs / security_events
+- [x] attempts (+ answers/flags as JSONB; reconcile status CHECK)
+- [x] proctoring_logs  ·  certificates
+- [ ] archives  ·  audit_logs / security_events (certificate/attempt audit rows
+      are durable, but application-wide audit authority remains incomplete)
 - [ ] reports, analytics → convert aggregates to SQL (`GROUP BY`, views)
 - [ ] remove the in-memory arrays + JSON-blob adapter; externalize rate-limit /
       session / lockout state to enable **multi-instance** horizontal scaling

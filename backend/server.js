@@ -63,6 +63,7 @@ import { identityRepository } from "./src/repositories/identity.repository.pg.js
 import { replaceIdentityProjection } from "./src/identity-projection.js";
 import { attemptsRepository } from "./src/repositories/attempts.repository.pg.js";
 import { replaceAttemptProjection } from "./src/attempt-projection.js";
+import { certificatesPgRepository } from "./src/repositories/certificates.repository.pg.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG = process.env.USE_PG === "1";
@@ -70,6 +71,7 @@ const USE_PG_SKILLS = USE_PG || process.env.USE_PG_SKILLS === "1";
 const USE_PG_PAYMENTS = process.env.USE_PG_PAYMENTS === "1";
 const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
 const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
+const USE_PG_CERTIFICATES = process.env.USE_PG_CERTIFICATES === "1";
 
 const app = express();
 app.set("trust proxy", TRUST_PROXY);
@@ -136,7 +138,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/ready", async (_req, res) => {
-  const [database, redis, objects, payments, identity, attemptRuntime] = await Promise.all([
+  const [database, redis, objects, payments, identity, attemptRuntime, certificateAuthority] = await Promise.all([
     storage.health(),
     redisHealth(),
     objectStoreHealth(),
@@ -206,9 +208,56 @@ app.get("/api/ready", async (_req, res) => {
           mode: "normalized",
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
+    USE_PG_CERTIFICATES
+      ? relationalQuery(
+          `SELECT
+             to_regclass('public.issued_certificates') IS NOT NULL AS certificates,
+             EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'issued_certificates'
+                 AND column_name = 'signature'
+             ) AS signatures,
+             EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'issued_certificates'
+                 AND column_name = 'signature_version'
+             ) AS signature_versions,
+             EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'issued_certificates'
+                 AND column_name = 'status'
+             ) AS revocation,
+             EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'issued_certificates'
+                 AND column_name = 'attempt_id'
+             ) AS attempt_evidence,
+             to_regclass('public.idx_certificates_one_active_per_course') IS NOT NULL
+               AS active_uniqueness,
+             NOT EXISTS (
+               SELECT 1 FROM issued_certificates WHERE signature IS NULL
+             ) AS signatures_backfilled,
+             NOT EXISTS (
+               SELECT 1 FROM enrollments e
+               LEFT JOIN issued_certificates c ON c.id = e.certificate_id
+               WHERE e.status = 'Certified'
+                 AND (e.certificate_id IS NULL OR c.id IS NULL OR c.status <> 'Active')
+             ) AS certified_enrollments_bound,
+             NOT EXISTS (
+               SELECT 1 FROM issued_certificates c
+               LEFT JOIN enrollments e
+                 ON e.user_id = c.employee_id AND e.course_id = c.course_id
+               WHERE c.status = 'Active'
+                 AND (e.certificate_id IS DISTINCT FROM c.id OR e.status <> 'Certified')
+             ) AS active_certificates_bound`
+        ).then(({ rows }) => ({
+          ok: Object.values(rows[0] || {}).every(Boolean),
+          mode: "normalized",
+        })).catch(() => ({ ok: false, mode: "normalized" }))
+      : Promise.resolve({ ok: true, mode: "disabled" }),
   ]);
-  const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok && attemptRuntime.ok;
-  if (!ok) logger.error("READINESS_CHECK_FAILED", { database, redis, objects, payments, identity, attempts: attemptRuntime, startupReady });
+  const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok && attemptRuntime.ok && certificateAuthority.ok;
+  if (!ok) logger.error("READINESS_CHECK_FAILED", { database, redis, objects, payments, identity, attempts: attemptRuntime, certificates: certificateAuthority, startupReady });
   res.status(ok ? 200 : 503).json({
     ok,
     service: "Nalanda API",
@@ -219,6 +268,7 @@ app.get("/api/ready", async (_req, res) => {
       payments: { ok: payments.ok, mode: payments.mode },
       identity: { ok: identity.ok, mode: identity.mode },
       attempts: { ok: attemptRuntime.ok, mode: attemptRuntime.mode },
+      certificates: { ok: certificateAuthority.ok, mode: certificateAuthority.mode },
     },
   });
 });
@@ -250,7 +300,9 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   const scopedAttempts = authoritativeAttempts.filter((attempt) => admin || visibleUserIds.has(attempt.userId));
   const scopedProctoring = authoritativeProctoring.filter((event) => admin || visibleUserIds.has(event.userId));
   const scopedReports = admin ? reportExports : reportExports.filter((report) => report.requestedBy === req.user.id);
-  const scopedCertificates = issuedCertificates.filter((cert) => admin || visibleUserIds.has(cert.employeeId));
+  const scopedCertificates = USE_PG_CERTIFICATES
+    ? await certificatesPgRepository.listForUser(req.user)
+    : issuedCertificates.filter((cert) => admin || visibleUserIds.has(cert.employeeId));
   const scopedChapters = chapters.filter((chapter) => visibleCourseIds.has(chapter.courseId));
   const scopedAssessments = assessmentsVisibleTo(req.user).map((assessment) => assessmentForUser(assessment, req.user));
   const scopedUsers = users.filter((user) => visibleUserIds.has(user.id)).map(publicUser);

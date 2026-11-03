@@ -35,6 +35,7 @@ function autoIssueCert(attempt, assignment) {
     proctoringVerified: (attempt.trustScore ?? 100) >= 70,
     examScore: attempt.score,
     verificationUrl: `/verify/${certId}`,
+    signatureVersion: 2,
   };
   cert.signature = signCertificatePayload(cert);
   cert.linkedinShareUrl = buildLinkedInShareUrl({

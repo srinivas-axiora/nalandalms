@@ -92,8 +92,9 @@ normalized rows for reconciliation and do not run a destructive down migration.
 
 ## Remaining architecture risk
 
-This phase does not make the whole application multi-instance safe. Public
-candidate-link submissions, certificates, privacy workflows and several admin
-bounded contexts still use snapshot/process-local state. Those authorities
-must move to PostgreSQL/Redis and pass cross-task tests before production
-approval.
+This phase does not make the whole application multi-instance safe. Phase 9
+adds a feature-gated certificate authority, but its live cutover is also still
+pending. Public candidate-link submissions, privacy workflows and several admin
+bounded contexts continue to use snapshot/process-local state. Those
+authorities must move to PostgreSQL/Redis and pass cross-task tests before
+production approval.

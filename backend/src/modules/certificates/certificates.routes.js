@@ -2,14 +2,16 @@
 import { createCertificatesRepository } from "./certificates.repository.js";
 import { createCertificatesService } from "./certificates.service.js";
 import { createCertificatesController } from "./certificates.controller.js";
-import { issuedCertificates, users, courses, assignments, now } from "../../core.js";
+import { issuedCertificates, users, courses, now } from "../../core.js";
 import { audit } from "../../domain.js";
 import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
-import { canManageCourseResource, certificateEligibility } from "../../security/authorization.js";
+import { certificatesPgRepository } from "../../repositories/certificates.repository.pg.js";
+
+const USE_PG_CERTIFICATES = process.env.USE_PG_CERTIFICATES === "1";
 
 export function registerCertificates(app) {
   const store = { issuedCertificates, users, courses };
-  const repo = createCertificatesRepository(store);
+  const repo = USE_PG_CERTIFICATES ? certificatesPgRepository : createCertificatesRepository(store);
   const service = createCertificatesService({ repo, audit, now });
   const controller = createCertificatesController(service);
 
@@ -31,40 +33,31 @@ export function registerCertificates(app) {
     "/api/certificates",
     authenticate,
     requireRole("Admin", "Manager", "Instructor"),
-    (req, res, next) => {
-      const course = courses.find((item) => item.id === req.body?.courseId);
-      if (!course) return res.status(404).json({ error: "Course not found" });
-      if (!canManageCourseResource(req.user, course)) return res.status(403).json({ error: "Forbidden" });
-      return next();
-    },
+    controller.authorizeCreate,
     requireStepUp,
     controller.create
   );
 
+  app.post(
+    "/api/certificates/:certificateId/revoke",
+    authenticate,
+    requireRole("Admin", "Manager", "Instructor"),
+    requireStepUp,
+    controller.revoke,
+  );
+
   // ── Auto-Issue Endpoint upon Course & Screening Completion ──
-  app.post("/api/certificates/auto-issue", authenticate, (req, res) => {
+  app.post("/api/certificates/auto-issue", authenticate, async (req, res) => {
     const { courseId, attemptId } = req.body;
     if (!courseId) return res.status(400).json({ error: "courseId is required" });
 
-    // Validate assignment state
-    const assignment = assignments.find((a) => a.courseId === courseId && a.userId === req.user.id);
-    if (!assignment) return res.status(404).json({ error: "Enrollment not found" });
-
-    if (!certificateEligibility({ recipientId: req.user.id, courseId, attemptId }).eligible) {
-      return res.status(403).json({ error: "Course requirements and proctored assessment screening must be passed before certificate can be issued" });
-    }
-
-    const cert = service.autoIssueCredential({
+    const result = await service.autoIssueCredential({
       userId: req.user.id,
       courseId,
       attemptId,
     });
-
-    if (!cert) {
-      return res.status(400).json({ error: "Could not issue certificate" });
-    }
-
-    res.status(201).json({ ok: true, data: cert });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    res.status(result.status).json({ ok: true, data: result.data });
   });
 
   // Export service instance for internal pipeline hooks

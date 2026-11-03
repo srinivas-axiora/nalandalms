@@ -199,6 +199,36 @@ describe("Sprint 10: Cryptographic Certificates & Public QR Verification", () =>
       const check = verifyCertificateSignature(forgedCert);
       expect(check).toBe(false);
     });
+
+    it("Version 2 signatures bind assessment evidence while legacy signatures remain verifiable", () => {
+      const credential = {
+        id: "NLD-CERT-2026-V2-EVIDENCE",
+        signatureVersion: 2,
+        employeeId: graduate.id,
+        recipientName: graduate.name,
+        recipientEmail: graduate.email,
+        courseId,
+        courseTitle: "Applied Cryptography",
+        attemptId: "ATTEMPT-EVIDENCE-1",
+        title: "Certificate of Cryptographic Mastery",
+        duration: "24 Hours",
+        subtitle: "Verified completion",
+        footer: "Nalanda Academic Board",
+        issuedBy: testUsers.admin.id,
+        issuedByName: testUsers.admin.name,
+        issuedAt: "2026-11-03T09:00:00.000Z",
+        proctoringVerified: true,
+        examScore: 92,
+      };
+      credential.signature = signCertificatePayload(credential);
+      expect(verifyCertificateSignature(credential)).toBe(true);
+      expect(verifyCertificateSignature({ ...credential, examScore: 99 })).toBe(false);
+      expect(verifyCertificateSignature({ ...credential, attemptId: "ATTEMPT-SWAPPED" })).toBe(false);
+
+      const legacy = { ...credential, signatureVersion: 1 };
+      legacy.signature = signCertificatePayload(legacy);
+      expect(verifyCertificateSignature(legacy)).toBe(true);
+    });
   });
 
   describe("2. Public Verification Portal (Zero Auth Required)", () => {
@@ -237,6 +267,34 @@ describe("Sprint 10: Cryptographic Certificates & Public QR Verification", () =>
 
       expect(res.status).toBe(404);
       expect(res.body.error).toContain("not found");
+    });
+
+    it("Revokes with step-up and makes public verification fail closed", async () => {
+      const revokeRes = await request(app)
+        .post(`/api/certificates/${sampleCertId}/revoke`)
+        .set("Cookie", [csrf.cookie, authCookieFor(testUsers.admin), stepUpCookieFor(testUsers.admin)])
+        .set("x-csrf-token", csrf.token)
+        .send({ reason: "Confirmed credential issuance error" });
+
+      expect(revokeRes.status).toBe(200);
+      expect(revokeRes.body.data).toMatchObject({
+        id: sampleCertId,
+        status: "Revoked",
+        revocationReason: "Confirmed credential issuance error",
+      });
+
+      const verifyRes = await request(app).get(`/api/certificates/verify/${sampleCertId}`);
+      expect(verifyRes.status).toBe(200);
+      expect(verifyRes.body).toMatchObject({
+        verified: false,
+        isActive: false,
+        isValidSignature: true,
+        certificate: {
+          certificateId: sampleCertId,
+          status: "Revoked",
+          revocationReason: "Confirmed credential issuance error",
+        },
+      });
     });
   });
 

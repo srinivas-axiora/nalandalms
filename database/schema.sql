@@ -461,6 +461,10 @@ CREATE TABLE issued_certificates (
   id TEXT PRIMARY KEY,
   employee_id TEXT NOT NULL REFERENCES users(id),
   course_id TEXT NOT NULL REFERENCES courses(id),
+  attempt_id TEXT REFERENCES assessment_attempts(id),
+  recipient_name TEXT NOT NULL,
+  recipient_email TEXT NOT NULL,
+  course_title TEXT NOT NULL,
   title TEXT NOT NULL DEFAULT 'Certificate of Completion',
   template TEXT NOT NULL DEFAULT 'Executive',
   accent TEXT NOT NULL DEFAULT '#0f766e',
@@ -469,13 +473,31 @@ CREATE TABLE issued_certificates (
   footer TEXT NOT NULL DEFAULT '',
   issued_by TEXT NOT NULL REFERENCES users(id),
   issued_by_name TEXT NOT NULL DEFAULT '',
-  html_snapshot TEXT NOT NULL,
-  issued_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  html_snapshot TEXT NOT NULL DEFAULT '',
+  proctoring_verified BOOLEAN NOT NULL DEFAULT false,
+  exam_score NUMERIC(5,2),
+  signature_version INTEGER NOT NULL DEFAULT 2 CHECK (signature_version IN (1, 2)),
+  signature TEXT NOT NULL CHECK (signature ~ '^[a-f0-9]{64}$'),
+  verification_url TEXT NOT NULL,
+  linkedin_share_url TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Revoked')),
+  revoked_by TEXT REFERENCES users(id),
+  revoked_at TIMESTAMPTZ,
+  revocation_reason TEXT,
+  issued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (
+    (status = 'Active' AND revoked_by IS NULL AND revoked_at IS NULL AND revocation_reason IS NULL)
+    OR
+    (status = 'Revoked' AND revoked_by IS NOT NULL AND revoked_at IS NOT NULL AND length(trim(revocation_reason)) >= 10)
+  )
 );
 
 CREATE INDEX idx_certificates_employee ON issued_certificates(employee_id);
 CREATE INDEX idx_certificates_course ON issued_certificates(course_id);
 CREATE INDEX idx_certificates_issued_by ON issued_certificates(issued_by);
+CREATE INDEX idx_certificates_status ON issued_certificates(status, issued_at DESC);
+CREATE UNIQUE INDEX idx_certificates_one_active_per_course
+  ON issued_certificates(employee_id, course_id) WHERE status = 'Active';
 
 -- ── Payment integrity ledger ──
 CREATE TABLE payment_orders (
