@@ -5,6 +5,17 @@ Scope: local source tree and local Express application only
 Decision: **NO-GO for production**  
 Overall risk: **Critical**
 
+> **Historical assessment notice (updated 2026-11-03):** This document preserves
+> the 2026-11-01 point-in-time findings. Remediation Phases 1–5 have since made
+> all 30 adversarial tests green and reduced the dependency audit to zero known
+> vulnerabilities. A production-shaped, single-writer AWS staging package is
+> available, but the production decision remains **NO-GO** until normalized
+> transactional persistence, multi-instance safety, malware quarantine and the
+> operational release drills are complete. See
+> [Phase 3](./SECURITY-PHASE-3-UPLOAD-ISOLATION.md),
+> [Phase 4](./SECURITY-PHASE-4-EXAM-INTEGRITY.md) and
+> [Phase 5](./SECURITY-PHASE-5-RUNTIME-AWS-STAGING.md).
+
 ## 1. Executive summary
 
 Nalanda is a React and Express learning, assessment and proctoring platform with
