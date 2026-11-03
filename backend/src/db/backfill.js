@@ -228,25 +228,106 @@ export async function backfill() {
         `INSERT INTO enrollments (
            id, course_id, user_id, assigned_by, due_at, priority,
            mandatory, progress, completed_chapters, time_spent_minutes,
-           time_spent_seconds, chapter_time_spent_seconds, started_at
+           time_spent_seconds, chapter_time_spent_seconds, status,
+           certificate_id, started_at, completed_at
          ) VALUES (
            $1, $2, $3, $4, $5, $6,
            $7, $8, $9, $10,
-           $11, $12, COALESCE($13::timestamptz, now())
+           $11, $12, $13, $14,
+           COALESCE($15::timestamptz, now()), $16
          ) ON CONFLICT (course_id, user_id) DO UPDATE SET
-           progress = EXCLUDED.progress, completed_chapters = EXCLUDED.completed_chapters`,
+           progress = EXCLUDED.progress, completed_chapters = EXCLUDED.completed_chapters,
+           status = EXCLUDED.status, certificate_id = EXCLUDED.certificate_id,
+           completed_at = EXCLUDED.completed_at`,
         [
           e.id, e.courseId, e.userId,
           userIds.has(e.assignedBy) ? e.assignedBy : e.userId,
           e.dueAt || null, e.priority || "Medium", e.mandatory ?? false,
           e.progress || 0, e.completedChapters || [], e.timeSpentMinutes || 0,
           e.timeSpentSeconds || 0, JSON.stringify(e.chapterTimeSpentSeconds || {}),
-          e.startedAt || null,
+          e.status || "Enrolled", e.certificateId || null,
+          e.startedAt || null, e.completedAt || null,
         ]
       );
     }
 
-    // 7. Payment ledger. This preserves existing settlement evidence before
+    // 7. Assessment attempts and proctoring evidence. Attempt IDs are TEXT to
+    // preserve the public API contract and historical identifiers.
+    const attempts = data.attempts || [];
+    const attemptIds = new Set(attempts.map((attempt) => attempt.id));
+    console.log(`[backfill] Upserting ${attempts.length} assessment attempts...`);
+    for (const attempt of attempts) {
+      await client.query(
+        `INSERT INTO assessment_attempts (
+           id, assessment_id, chapter_id, course_id, user_id, status, score,
+           max_score, feedback, answers, selected_question_ids, question_map,
+           manual_grades, flags, warnings, video_chunks, companion, trust_score,
+           tab_switch_warnings, auto_submitted_reason, expires_at, is_paused,
+           paused_at, resumed_at, terminated_reason, terminated_by, terminated_at,
+           assigned_proctor_id, time_spent_seconds, started_at, submitted_at,
+           evaluated_by, version
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7,
+           $8, $9, $10::jsonb, $11, $12::jsonb,
+           $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb, $18,
+           $19, $20, $21, $22,
+           $23, $24, $25, $26, $27,
+           $28, $29, COALESCE($30::timestamptz, now()), $31,
+           $32, $33
+         ) ON CONFLICT (id) DO UPDATE SET
+           status = EXCLUDED.status, score = EXCLUDED.score,
+           feedback = EXCLUDED.feedback, answers = EXCLUDED.answers,
+           question_map = EXCLUDED.question_map, manual_grades = EXCLUDED.manual_grades,
+           flags = EXCLUDED.flags, warnings = EXCLUDED.warnings,
+           video_chunks = EXCLUDED.video_chunks, companion = EXCLUDED.companion,
+           trust_score = EXCLUDED.trust_score, expires_at = EXCLUDED.expires_at,
+           submitted_at = EXCLUDED.submitted_at,
+           version = GREATEST(assessment_attempts.version, EXCLUDED.version)`,
+        [
+          attempt.id, attempt.assessmentId, attempt.chapterId || null,
+          attempt.courseId || null, attempt.userId, attempt.status || "InProgress",
+          attempt.score ?? null, attempt.maxScore ?? null, attempt.feedback || "",
+          JSON.stringify(attempt.answers || {}), attempt.selectedQuestionIds || [],
+          JSON.stringify(attempt.questionMap || {}), JSON.stringify(attempt.manualGrades || {}),
+          JSON.stringify(attempt.flags || []), JSON.stringify(attempt.warnings || []),
+          JSON.stringify(attempt.videoChunks || []), JSON.stringify(attempt.companion || null),
+          attempt.trustScore ?? 100, attempt.tabSwitchWarnings || 0,
+          attempt.autoSubmittedReason || null, attempt.expiresAt || null,
+          Boolean(attempt.isPaused), attempt.pausedAt || null, attempt.resumedAt || null,
+          attempt.terminatedReason || null,
+          userIds.has(attempt.terminatedBy) ? attempt.terminatedBy : null,
+          attempt.terminatedAt || null,
+          userIds.has(attempt.assignedProctorId) ? attempt.assignedProctorId : null,
+          attempt.timeSpentSeconds || 0, attempt.startedAt || null,
+          attempt.submittedAt || null,
+          userIds.has(attempt.evaluatedBy) ? attempt.evaluatedBy : null,
+          attempt.version || 0,
+        ]
+      );
+    }
+
+    const proctorEvents = data.proctoringLogs || [];
+    const eligibleEvents = proctorEvents.filter((event) => (
+      attemptIds.has(event.attemptId) && userIds.has(event.userId)
+    ));
+    console.log(`[backfill] Upserting ${eligibleEvents.length} proctoring events...`);
+    for (const event of eligibleEvents) {
+      await client.query(
+        `INSERT INTO proctoring_logs (
+           id, attempt_id, user_id, event_type, severity, confidence,
+           capture_key, trust_score_after, metadata, created_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, COALESCE($10::timestamptz, now()))
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          event.id, event.attemptId, event.userId, event.eventType,
+          event.severity, event.confidence ?? null, event.captureKey || null,
+          event.trustScoreAfter ?? null, JSON.stringify(event.metadata || {}),
+          event.createdAt || null,
+        ]
+      );
+    }
+
+    // 8. Payment ledger. This preserves existing settlement evidence before
     // USE_PG_PAYMENTS is enabled. Foreign keys require users/courses/enrollments
     // to be loaded first.
     const paymentOrders = data.paymentOrders || [];

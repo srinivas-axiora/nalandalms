@@ -9,6 +9,7 @@ const redisRequired = process.env.NODE_ENV === "production";
 const memoryStore = new Map();
 const loginSecurityMemory = new Map();
 const companionPairingMemory = new Map();
+const proctorSignalMemory = new Map();
 
 if (process.env.REDIS_URL) {
   try {
@@ -272,6 +273,70 @@ export async function deleteCompanionPairing(tokenDigest) {
   }
   if (redisRequired) throw new Error("Redis companion pairing unavailable");
   companionPairingMemory.delete(tokenDigest);
+}
+
+const signalKey = (attemptId) => `proctor:signals:${attemptId}`;
+const SIGNAL_TTL_SECONDS = 4 * 60 * 60;
+
+export async function appendProctorSignal(attemptId, signal) {
+  if (isRedisAvailable()) {
+    try {
+      await redis.eval(
+        `redis.call('RPUSH',KEYS[1],ARGV[1]);
+         redis.call('LTRIM',KEYS[1],-200,-1);
+         redis.call('EXPIRE',KEYS[1],ARGV[2]);
+         return 1;`,
+        1,
+        signalKey(attemptId),
+        JSON.stringify(signal),
+        SIGNAL_TTL_SECONDS,
+      );
+      return signal;
+    } catch (err) {
+      if (redisRequired) throw new Error(`Redis proctor signaling unavailable: ${err?.message || "unknown error"}`);
+    }
+  }
+  if (redisRequired) throw new Error("Redis proctor signaling unavailable");
+  const current = proctorSignalMemory.get(attemptId);
+  const signals = current?.expiresAt > Date.now() ? current.signals : [];
+  signals.push(structuredClone(signal));
+  if (signals.length > 200) signals.splice(0, signals.length - 200);
+  proctorSignalMemory.set(attemptId, {
+    signals,
+    expiresAt: Date.now() + SIGNAL_TTL_SECONDS * 1000,
+  });
+  return signal;
+}
+
+export async function listProctorSignals(attemptId) {
+  if (isRedisAvailable()) {
+    try {
+      const values = await redis.lrange(signalKey(attemptId), 0, -1);
+      return values.map((value) => JSON.parse(value));
+    } catch (err) {
+      if (redisRequired) throw new Error(`Redis proctor signaling unavailable: ${err?.message || "unknown error"}`);
+    }
+  }
+  if (redisRequired) throw new Error("Redis proctor signaling unavailable");
+  const current = proctorSignalMemory.get(attemptId);
+  if (!current || current.expiresAt <= Date.now()) {
+    proctorSignalMemory.delete(attemptId);
+    return [];
+  }
+  return structuredClone(current.signals);
+}
+
+export async function clearProctorSignals(attemptId) {
+  if (isRedisAvailable()) {
+    try {
+      await redis.del(signalKey(attemptId));
+      return;
+    } catch (err) {
+      if (redisRequired) throw new Error(`Redis proctor signaling unavailable: ${err?.message || "unknown error"}`);
+    }
+  }
+  if (redisRequired) throw new Error("Redis proctor signaling unavailable");
+  proctorSignalMemory.delete(attemptId);
 }
 
 export async function closeRedis() {

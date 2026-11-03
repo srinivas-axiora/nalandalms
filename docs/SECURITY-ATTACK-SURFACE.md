@@ -18,8 +18,8 @@ or step-up middleware disagrees with its declaration.
 - CSRF: `Y` means the global double-submit middleware applies. `Exempt` means
   the route is explicitly excluded. `N/A` is a safe-method request.
 - Step: `Y` means `requireStepUp` is present.
-- Rate: `G` is the process-local global `/api` budget (600/minute/IP); `AI` is
-  the additional process-local 15/minute/user budget. Non-API routes and public
+- Rate: `G` is the Redis-backed global `/api` budget (600/minute/IP); `AI` is
+  the additional Redis-backed 15/minute/user budget in production. Non-API routes and public
   `/uploads` are outside `G`.
 - Scope flags identify missing or incomplete object-level authorization.
 - All state-changing `/api` routes use CSRF unless marked Exempt. Because CSRF
@@ -86,9 +86,9 @@ or step-up middleware disagrees with its declaration.
 | DELETE | `/api/assessments/:id` | A/M | Y | Y | Y | G | Course ownership checked |
 | PATCH | `/api/assessments/:id/approval` | A | Y | Y | N | G | Sensitive approval lacks step-up |
 | POST | `/api/assessments/:id/attempts/start` | A/M/I/E/L | Y | Y | N | G | Enrollment/progression check for non-admin |
-| GET | `/api/assessments/attempts/:attemptId/questions` | Any | N | N/A | N | G | Any Instructor can read any attempt questions |
-| POST | `/api/assessments/attempts/:attemptId/answer` | Any | Y | Y | N | G | Ownership and expiry checks present |
-| POST | `/api/assessments/attempts/:attemptId/submit` | Any | Y | Y | N | G | Ownership present; expiry bypass via bulk answers |
+| GET | `/api/assessments/attempts/:attemptId/questions` | Any | N | N/A | N | G | Central attempt view policy; answer keys remain server-only |
+| POST | `/api/assessments/attempts/:attemptId/answer` | Any | Y | Y | N | G | Owner-only; database-clock and optimistic-version guard in relational mode |
+| POST | `/api/assessments/attempts/:attemptId/submit` | Any | Y | Y | N | G | Owner-only; deadline and duplicate submit enforced server-side |
 | GET | `/api/assessments/attempts/pending-review` | A/M/I | N | N/A | N | G | Manager sees all; Instructor listing partly scoped |
 | POST | `/api/assessments/attempts/:attemptId/grade` | A/M/I | Y | Y | Y | G | Central owner/assigned-proctor policy plus step-up |
 | GET | `/api/assessments/question-library` | A | N | N/A | N | G | Answer-bearing authoring view is administrator-only |
@@ -107,25 +107,25 @@ or step-up middleware disagrees with its declaration.
 
 | Method | Route | Auth | State | CSRF | Step | Rate | Scope / concern |
 |---|---|---|---:|---|---:|---|---|
-| POST | `/api/proctoring/attempts/:attemptId/events` | Any | Y | Y | N | G | Any Instructor can target any attempt |
+| POST | `/api/proctoring/attempts/:attemptId/events` | Any | Y | Y | N | G | Central attempt policy; event/trust/audit transaction in relational mode |
 | POST | `/api/proctoring/events` | Any | Y | Y | N | G | Same backward-compatible weakness |
-| GET | `/api/proctoring/attempts/:attemptId/events` | Any | N | N/A | N | G | Any Instructor can read any attempt |
+| GET | `/api/proctoring/attempts/:attemptId/events` | Any | N | N/A | N | G | Central attempt view policy |
 | POST | `/api/proctoring/attempts/:attemptId/chunks` | Public token | Y | Exempt | N | G | Candidate session or scoped companion token; companion is restricted to companion media |
-| GET | `/api/proctoring/attempts/:attemptId/chunks` | Any | N | N/A | N | G | Any Instructor can read any manifest |
-| POST | `/api/proctoring/attempts/:attemptId/signal` | Any | Y | Y | N | G | No object authorization |
-| GET | `/api/proctoring/attempts/:attemptId/signals` | Any | N | N/A | N | G | No object authorization; SDP/ICE exposure |
+| GET | `/api/proctoring/attempts/:attemptId/chunks` | Any | N | N/A | N | G | Central attempt view policy |
+| POST | `/api/proctoring/attempts/:attemptId/signal` | Any | Y | Y | N | G | Central attempt view policy; Redis-backed bounded stream |
+| GET | `/api/proctoring/attempts/:attemptId/signals` | Any | N | N/A | N | G | Central attempt view policy; role-filtered Redis stream |
 | POST | `/api/proctoring/attempts/:attemptId/companion/token` | Any | Y | Y | N | G | Candidate/admin scope present |
 | POST | `/api/proctoring/companion/pair` | Public token | Y | Exempt | N | G | Pair token expiry present; reusable token not deleted |
 | POST | `/api/proctoring/attempts/:attemptId/companion/ping` | Public token | Y | Exempt | N | G | Scoped companion token bound to attempt, candidate and session version |
-| GET | `/api/proctoring/attempts/:attemptId/companion/status` | Any | N | N/A | N | G | No object authorization |
+| GET | `/api/proctoring/attempts/:attemptId/companion/status` | Any | N | N/A | N | G | Central attempt view policy |
 | GET | `/api/proctoring/cockpit/active` | A/M/I | N | N/A | N | G | Manager sees all; Instructor owned-course filter only |
 | POST | `/api/proctoring/attempts/:attemptId/warn` | A/M/I | Y | Y | Y | G | Central attempt policy plus step-up |
-| GET | `/api/assessments/attempts/:attemptId/warnings` | Any | N | N/A | N | G | Any Instructor can read |
-| POST | `/api/assessments/attempts/:attemptId/warnings/:warningId/ack` | Any | Y | Y | N | G | No attempt ownership check |
+| GET | `/api/assessments/attempts/:attemptId/warnings` | Any | N | N/A | N | G | Central attempt view policy |
+| POST | `/api/assessments/attempts/:attemptId/warnings/:warningId/ack` | Any | Y | Y | N | G | Candidate/admin plus central attempt view policy |
 | POST | `/api/proctoring/attempts/:attemptId/pause` | A/M/I | Y | Y | Y | G | Central attempt policy plus step-up |
 | POST | `/api/proctoring/attempts/:attemptId/resume` | A/M/I | Y | Y | Y | G | Central attempt policy plus step-up |
 | POST | `/api/proctoring/attempts/:attemptId/terminate` | A/M/I | Y | Y | Y | G | Central attempt policy plus step-up |
-| GET | `/api/proctoring/attempts/:attemptId/timeline` | A/M/I | N | N/A | N | G | No resource scope |
+| GET | `/api/proctoring/attempts/:attemptId/timeline` | A/M/I | N | N/A | N | G | Central attempt control policy |
 
 ## Certificates, payments, uploads and reports
 
@@ -165,9 +165,9 @@ The runtime-data ignore is anchored to `/uploads/`, so source modules under an
 | GET | `/api/analytics/me` | Any | N | N/A | N | G | Hard-coded metrics |
 | GET | `/api/analytics/time` | A/M | N | N/A | N | G | Scope helper used |
 | GET | `/api/analytics/time/events` | A/M | N | N/A | N | G | Scope helper used; query coercion weak |
-| GET | `/api/archive` | SA | N | N/A | N | G | Contains full archived records/password hashes |
+| GET | `/api/archive` | SA | N | N/A | N | G | Redacted archive view; identity archives exclude password hashes |
 | POST | `/api/archive/:id/restore` | SA | Y | Y | Y | G | Step-up required; restored user is inactive with a rotated credential/session |
-| GET | `/api/audit-logs` | A | N | N/A | N | G | Mutable array; can contain password hashes |
+| GET | `/api/audit-logs` | A | N | N/A | N | G | Redacted view; normalized identity/attempt writes use database audit rows |
 | GET | `/api/security-events` | A | N | N/A | N | G | Mutable bounded array |
 | GET | `/api/users/me/data-export` | Any | N | N/A | N | G | Self-scoped; incomplete across all stores/logs |
 | POST | `/api/users/me/delete-request` | Any | Y | Y | Y | G | Step-up required; queue remains process-local pending privacy phase |

@@ -1,5 +1,9 @@
 import { assessments, attempts, courses, candidateAssessments, assignments } from "../core.js";
 import { isAdminRole } from "../roles.js";
+import { attemptsRepository } from "../repositories/attempts.repository.pg.js";
+import { upsertAttemptProjection } from "../attempt-projection.js";
+
+const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
 
 const assignedProctorId = (attempt) => (
   attempt?.assignedProctorId || attempt?.proctorId || attempt?.proctorUserId || null
@@ -82,13 +86,22 @@ const ATTEMPT_POLICIES = Object.freeze({
 export const requireAttemptPermission = (permission) => {
   const policy = ATTEMPT_POLICIES[permission];
   if (!policy) throw new TypeError(`Unknown attempt permission: ${permission}`);
-  return (req, res, next) => {
+  return async (req, res, next) => {
     const attemptId = req.params.attemptId || req.body?.attemptId;
-    const attempt = attempts.find((item) => item.id === attemptId);
-    if (!attempt) return res.status(404).json({ error: "Exam attempt not found" });
-    if (!policy(req.user, attempt)) return res.status(403).json({ error: "Forbidden" });
-    req.authorizedAttempt = attempt;
-    return next();
+    try {
+      const persisted = USE_PG_ATTEMPTS
+        ? await attemptsRepository.findById(attemptId)
+        : attempts.find((item) => item.id === attemptId);
+      if (!persisted) return res.status(404).json({ error: "Exam attempt not found" });
+      if (!policy(req.user, persisted)) return res.status(403).json({ error: "Forbidden" });
+      if (USE_PG_ATTEMPTS) upsertAttemptProjection(persisted);
+      // Keep the request-scoped object detached from the compatibility mirror.
+      // Mutations are projected only after a successful database commit.
+      req.authorizedAttempt = persisted;
+      return next();
+    } catch (error) {
+      return next(error);
+    }
   };
 };
 

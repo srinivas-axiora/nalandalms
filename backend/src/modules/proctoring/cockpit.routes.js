@@ -8,11 +8,44 @@ import { canControlProctoring, requireAttemptPermission } from "../../security/a
 import { getExamClock } from "../assessments/exam.service.js";
 import { postSignal } from "./signaling.js";
 import { ENROLLMENT_STATUS } from "../enrollments/progress.service.js";
+import { attemptsRepository, AttemptRepositoryError } from "../../repositories/attempts.repository.pg.js";
+import { upsertAttemptProjection } from "../../attempt-projection.js";
+
+const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
+const attemptErrorStatus = (error) => {
+  if (!(error instanceof AttemptRepositoryError)) return error.status || 400;
+  if (error.code === "ATTEMPT_NOT_FOUND") return 404;
+  if (["ATTEMPT_CONFLICT", "ATTEMPT_CLOSED"].includes(error.code)) return 409;
+  return 500;
+};
+
+const commitAttemptMutation = async (attempt, {
+  actorId,
+  action,
+  metadata = {},
+  enrollment = null,
+}) => {
+  if (!USE_PG_ATTEMPTS) {
+    audit(actorId, action, "ASSESSMENT_ATTEMPT", attempt.id, metadata);
+    return attempt;
+  }
+  const saved = await attemptsRepository.save(attempt, {
+    expectedVersion: attempt.version,
+    actorId,
+    action,
+    metadata,
+    enrollment,
+  });
+  return upsertAttemptProjection(saved);
+};
 
 export function registerCockpit(app) {
   // ── Live Active Exam Sessions Grid ──
-  app.get("/api/proctoring/cockpit/active", authenticate, requireRole("Admin", "Manager", "Instructor"), (req, res) => {
-    const activeAttempts = attempts.filter((attempt) => (
+  app.get("/api/proctoring/cockpit/active", authenticate, requireRole("Admin", "Manager", "Instructor"), async (req, res) => {
+    const attemptSource = USE_PG_ATTEMPTS
+      ? await attemptsRepository.list({ statuses: ["InProgress", "Paused"] })
+      : attempts;
+    const activeAttempts = attemptSource.filter((attempt) => (
       (attempt.status === "InProgress" || attempt.status === "Paused")
       && canControlProctoring(req.user, attempt)
     ));
@@ -67,7 +100,7 @@ export function registerCockpit(app) {
   });
 
   // ── Remote Candidate Warning Overlay ──
-  app.post("/api/proctoring/attempts/:attemptId/warn", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), requireStepUp, (req, res) => {
+  app.post("/api/proctoring/attempts/:attemptId/warn", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), requireStepUp, async (req, res) => {
     const schema = z.object({
       message: z.string().min(3),
       severity: z.enum(["low", "medium", "critical"]).default("medium"),
@@ -97,20 +130,23 @@ export function registerCockpit(app) {
       attempt.trustScore = Math.max(0, (attempt.trustScore ?? 100) - 10);
     }
 
-    // Push notification to candidate via signaling broker
-    postSignal(attempt.id, {
-      senderId: req.user.id,
-      targetRole: "candidate",
-      type: "ping",
-      data: { type: "REMOTE_WARNING", warning },
-    });
-
-    audit(req.user.id, "PROCTOR_WARN_CANDIDATE", "ASSESSMENT_ATTEMPT", attempt.id, {
-      warningId: warning.id,
-      message: warning.message,
-    });
-
-    res.status(201).json({ ok: true, data: warning });
+    try {
+      await commitAttemptMutation(attempt, {
+        actorId: req.user.id,
+        action: "PROCTOR_WARN_CANDIDATE",
+        metadata: { warningId: warning.id, message: warning.message },
+      });
+      // Notify only after the warning is durably committed.
+      await postSignal(attempt.id, {
+        senderId: req.user.id,
+        targetRole: "candidate",
+        type: "ping",
+        data: { type: "REMOTE_WARNING", warning },
+      });
+      res.status(201).json({ ok: true, data: warning });
+    } catch (error) {
+      res.status(attemptErrorStatus(error)).json({ error: error.message });
+    }
   });
 
   // ── Candidate Warning Polling & Acknowledgement ──
@@ -121,7 +157,7 @@ export function registerCockpit(app) {
     res.json({ data: unacknowledged, total: unacknowledged.length });
   });
 
-  app.post("/api/assessments/attempts/:attemptId/warnings/:warningId/ack", authenticate, requireAttemptPermission("view"), (req, res) => {
+  app.post("/api/assessments/attempts/:attemptId/warnings/:warningId/ack", authenticate, requireAttemptPermission("view"), async (req, res) => {
     const attempt = req.authorizedAttempt;
     if (attempt.userId !== req.user.id && !isAdmin(req.user.role)) {
       return res.status(403).json({ error: "Only the candidate can acknowledge a warning" });
@@ -133,11 +169,20 @@ export function registerCockpit(app) {
     warning.acknowledged = true;
     warning.acknowledgedAt = now();
 
-    res.json({ ok: true, data: warning });
+    try {
+      await commitAttemptMutation(attempt, {
+        actorId: req.user.id,
+        action: "ACKNOWLEDGE_PROCTOR_WARNING",
+        metadata: { warningId: warning.id },
+      });
+      res.json({ ok: true, data: warning });
+    } catch (error) {
+      res.status(attemptErrorStatus(error)).json({ error: error.message });
+    }
   });
 
   // ── Remote Clock Pause & Resume ──
-  app.post("/api/proctoring/attempts/:attemptId/pause", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), requireStepUp, (req, res) => {
+  app.post("/api/proctoring/attempts/:attemptId/pause", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), requireStepUp, async (req, res) => {
     const attempt = req.authorizedAttempt;
     if (attempt.status !== "InProgress") return res.status(400).json({ error: "Can only pause in-progress attempts" });
 
@@ -145,11 +190,18 @@ export function registerCockpit(app) {
     attempt.status = "Paused";
     attempt.pausedAt = now();
 
-    audit(req.user.id, "PROCTOR_PAUSE_EXAM", "ASSESSMENT_ATTEMPT", attempt.id);
-    res.json({ ok: true, message: "Exam session paused", status: attempt.status });
+    try {
+      const saved = await commitAttemptMutation(attempt, {
+        actorId: req.user.id,
+        action: "PROCTOR_PAUSE_EXAM",
+      });
+      res.json({ ok: true, message: "Exam session paused", status: saved.status });
+    } catch (error) {
+      res.status(attemptErrorStatus(error)).json({ error: error.message });
+    }
   });
 
-  app.post("/api/proctoring/attempts/:attemptId/resume", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), requireStepUp, (req, res) => {
+  app.post("/api/proctoring/attempts/:attemptId/resume", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), requireStepUp, async (req, res) => {
     const attempt = req.authorizedAttempt;
     if (!attempt.isPaused && attempt.status !== "Paused") return res.status(400).json({ error: "Attempt is not paused" });
 
@@ -163,12 +215,20 @@ export function registerCockpit(app) {
     attempt.status = "InProgress";
     attempt.resumedAt = now();
 
-    audit(req.user.id, "PROCTOR_RESUME_EXAM", "ASSESSMENT_ATTEMPT", attempt.id, { pausedSeconds: Math.round(pausedMs / 1000) });
-    res.json({ ok: true, message: "Exam session resumed", status: attempt.status, expiresAt: attempt.expiresAt });
+    try {
+      const saved = await commitAttemptMutation(attempt, {
+        actorId: req.user.id,
+        action: "PROCTOR_RESUME_EXAM",
+        metadata: { pausedSeconds: Math.round(pausedMs / 1000) },
+      });
+      res.json({ ok: true, message: "Exam session resumed", status: saved.status, expiresAt: saved.expiresAt });
+    } catch (error) {
+      res.status(attemptErrorStatus(error)).json({ error: error.message });
+    }
   });
 
   // ── Remote Candidate Disqualification & Immediate Termination ──
-  app.post("/api/proctoring/attempts/:attemptId/terminate", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), requireStepUp, (req, res) => {
+  app.post("/api/proctoring/attempts/:attemptId/terminate", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), requireStepUp, async (req, res) => {
     const schema = z.object({
       reason: z.string().min(5),
       evidenceSummary: z.string().optional(),
@@ -192,27 +252,34 @@ export function registerCockpit(app) {
     attempt.score = 0;
     attempt.feedback = `Disqualified by proctor: ${parsed.data.reason}`;
 
-    // Mark enrollment as Failed
-    const assignment = assignments.find((a) => a.courseId === attempt.courseId && a.userId === attempt.userId);
-    if (assignment) {
-      assignment.status = ENROLLMENT_STATUS.FAILED;
+    if (!USE_PG_ATTEMPTS) {
+      const assignment = assignments.find((a) => a.courseId === attempt.courseId && a.userId === attempt.userId);
+      if (assignment) assignment.status = ENROLLMENT_STATUS.FAILED;
     }
 
-    audit(req.user.id, "PROCTOR_TERMINATE_EXAM", "ASSESSMENT_ATTEMPT", attempt.id, {
-      reason: parsed.data.reason,
-      evidenceSummary: parsed.data.evidenceSummary || "",
-    });
-
-    res.json({
-      ok: true,
-      message: "Candidate disqualified and exam terminated immediately",
-      data: {
-        attemptId: attempt.id,
-        status: attempt.status,
-        score: attempt.score,
-        reason: attempt.terminatedReason,
-      },
-    });
+    try {
+      const saved = await commitAttemptMutation(attempt, {
+        actorId: req.user.id,
+        action: "PROCTOR_TERMINATE_EXAM",
+        metadata: {
+          reason: parsed.data.reason,
+          evidenceSummary: parsed.data.evidenceSummary || "",
+        },
+        enrollment: USE_PG_ATTEMPTS ? { status: ENROLLMENT_STATUS.FAILED } : null,
+      });
+      res.json({
+        ok: true,
+        message: "Candidate disqualified and exam terminated immediately",
+        data: {
+          attemptId: saved.id,
+          status: saved.status,
+          score: saved.score,
+          reason: saved.terminatedReason,
+        },
+      });
+    } catch (error) {
+      res.status(attemptErrorStatus(error)).json({ error: error.message });
+    }
   });
 
   // ── Chronological Incident Timeline & Session Replay ──

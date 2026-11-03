@@ -9,8 +9,11 @@ import {
   getCompanionPairing,
   storeCompanionPairing,
 } from "../../cache/redis.js";
+import { attemptsRepository } from "../../repositories/attempts.repository.pg.js";
+import { upsertAttemptProjection } from "../../attempt-projection.js";
 
 const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
+const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
 const tokenDigest = (token) => crypto.createHash("sha256").update(token).digest("hex");
 
 const getCandidate = (id) => USE_PG_IDENTITY
@@ -66,7 +69,9 @@ export async function verifyAndPairCompanion(pairingToken, deviceMetadata = {}) 
     throw err;
   }
 
-  const attempt = attempts.find((a) => a.id === data.attemptId);
+  const attempt = USE_PG_ATTEMPTS
+    ? await attemptsRepository.findById(data.attemptId)
+    : attempts.find((a) => a.id === data.attemptId);
   if (!attempt) {
     const err = new Error("Associated exam attempt not found");
     err.status = 404;
@@ -103,6 +108,22 @@ export async function verifyAndPairCompanion(pairingToken, deviceMetadata = {}) 
     batteryLevel: deviceMetadata.batteryLevel ?? null,
   };
 
+  if (USE_PG_ATTEMPTS) {
+    try {
+      const saved = await attemptsRepository.save(attempt, {
+        expectedVersion: attempt.version,
+        actorId: attempt.userId,
+        action: "PAIR_COMPANION_DEVICE",
+        metadata: { deviceName: attempt.companion.deviceName },
+      });
+      upsertAttemptProjection(saved);
+      attempt.version = saved.version;
+    } catch (error) {
+      await deleteCompanionPairing(digest);
+      throw error;
+    }
+  }
+
   return {
     attemptId: attempt.id,
     courseId: attempt.courseId,
@@ -122,7 +143,11 @@ export async function authorizeCompanionToken(token, attemptId) {
     await deleteCompanionPairing(digest);
     return null;
   }
-  const attempt = attempts.find((item) => item.id === attemptId && item.userId === data.candidateUserId);
+  const candidateAttempt = USE_PG_ATTEMPTS
+    ? await attemptsRepository.findById(attemptId)
+    : attempts.find((item) => item.id === attemptId);
+  const attempt = candidateAttempt?.userId === data.candidateUserId ? candidateAttempt : null;
+  if (attempt && USE_PG_ATTEMPTS) upsertAttemptProjection(attempt);
   return attempt ? { attempt, candidate, tokenData: data } : null;
 }
 
@@ -131,9 +156,19 @@ export async function updateCompanionHeartbeat(token, attemptId, metadata = {}) 
   const attempt = authorized?.attempt;
   if (!attempt || !attempt.companion) return false;
 
-  attempt.companion.lastPingAt = now();
-  if (metadata.batteryLevel !== undefined) {
-    attempt.companion.batteryLevel = metadata.batteryLevel;
+  if (USE_PG_ATTEMPTS) {
+    const saved = await attemptsRepository.saveCompanionHeartbeat({
+      attemptId: attempt.id,
+      at: now(),
+      batteryLevel: metadata.batteryLevel,
+      actorId: attempt.userId,
+    });
+    upsertAttemptProjection(saved);
+  } else {
+    attempt.companion.lastPingAt = now();
+    if (metadata.batteryLevel !== undefined) {
+      attempt.companion.batteryLevel = metadata.batteryLevel;
+    }
   }
   return true;
 }

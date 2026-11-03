@@ -8,8 +8,9 @@ Owner: Engineering. Updated: 2026-11-03.
 > approach). All JavaScript is syntax-checked; the SQL and runtime behavior MUST
 > be validated against a real database using the steps in §4 before any cutover.
 > It is feature-gated — most of the running app still uses the existing
-> in-memory/JSONB snapshot store. `USE_PG_SKILLS`, `USE_PG_PAYMENTS` and
-> `USE_PG_IDENTITY` must stay off until their live-database gates pass.
+> in-memory/JSONB snapshot store. `USE_PG_SKILLS`, `USE_PG_PAYMENTS`,
+> `USE_PG_IDENTITY` and `USE_PG_ATTEMPTS` must stay off until their
+> live-database gates pass.
 
 ---
 
@@ -124,6 +125,9 @@ For each bounded context, in roughly ascending coupling:
 - [ ] chapter_feedbacks
 - [x] users/session authority repository, audit and Redis login lockouts behind
       `USE_PG_IDENTITY=1` (live-DB and failover gate still pending)
+- [x] Authenticated assessment attempts, grading/enrollment transitions and
+      proctor evidence are implemented behind `USE_PG_ATTEMPTS=1` (Phase 8;
+      live-DB concurrency and cross-task gate still pending)
 - [ ] courses (price/currency schema and repository mapping complete; route-wide
       source-of-truth cutover remains)
 - [ ] chapters  (+ chapter_time_totals / learning_time_events)

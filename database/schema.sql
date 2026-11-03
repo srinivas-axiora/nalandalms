@@ -9,8 +9,6 @@ CREATE TYPE user_role AS ENUM ('Super Admin', 'Admin', 'InstituteAdmin', 'Manage
 CREATE TYPE lifecycle_status AS ENUM ('Active', 'Inactive');
 CREATE TYPE approval_status AS ENUM ('Draft', 'Pending', 'Approved', 'Rejected');
 CREATE TYPE assessment_type AS ENUM ('MCQ', 'Descriptive', 'Timed Quiz', 'Mixed');
-CREATE TYPE attempt_status AS ENUM ('InProgress', 'Submitted', 'AutoSubmitted', 'PendingManualReview', 'Evaluated');
-CREATE TYPE proctor_event_type AS ENUM ('FULLSCREEN_EXIT', 'TAB_SWITCH', 'NOISE', 'CAMERA_OFF', 'MIC_OFF', 'FACE_MISMATCH');
 
 CREATE TABLE departments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -211,6 +209,11 @@ CREATE TABLE enrollments (
   chapter_time_spent_total_seconds INTEGER NOT NULL DEFAULT 0,
   assessment_time_spent_seconds INTEGER NOT NULL DEFAULT 0,
   chapter_time_spent_seconds JSONB NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'Enrolled' CHECK (status IN (
+    'Enrolled', 'InProgress', 'ChaptersComplete', 'AssessmentEligible',
+    'Passed', 'Failed', 'Certified'
+  )),
+  certificate_id TEXT,
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   completed_at TIMESTAMPTZ,
   CHECK (time_spent_seconds >= 0),
@@ -273,23 +276,42 @@ CREATE TABLE questions (
 );
 
 CREATE TABLE assessment_attempts (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id TEXT PRIMARY KEY,
   assessment_id TEXT NOT NULL REFERENCES assessments(id),
   chapter_id TEXT REFERENCES chapters(id),
   course_id TEXT REFERENCES courses(id),
   user_id TEXT NOT NULL REFERENCES users(id),
-  status attempt_status NOT NULL DEFAULT 'InProgress',
+  status TEXT NOT NULL DEFAULT 'InProgress' CHECK (status IN (
+    'InProgress', 'Submitted', 'AutoSubmitted', 'PendingManualReview',
+    'Evaluated', 'Passed', 'Failed', 'Paused', 'Terminated'
+  )),
   score NUMERIC(5,2),
   max_score NUMERIC(5,2),
   feedback TEXT,
   answers JSONB NOT NULL DEFAULT '{}',
   selected_question_ids TEXT[] NOT NULL DEFAULT '{}',
+  question_map JSONB NOT NULL DEFAULT '{}',
+  manual_grades JSONB NOT NULL DEFAULT '{}',
+  flags JSONB NOT NULL DEFAULT '[]',
+  warnings JSONB NOT NULL DEFAULT '[]',
+  video_chunks JSONB NOT NULL DEFAULT '[]',
+  companion JSONB,
+  trust_score INTEGER NOT NULL DEFAULT 100 CHECK (trust_score BETWEEN 0 AND 100),
   tab_switch_warnings INTEGER NOT NULL DEFAULT 0,
   auto_submitted_reason TEXT,
+  expires_at TIMESTAMPTZ,
+  is_paused BOOLEAN NOT NULL DEFAULT false,
+  paused_at TIMESTAMPTZ,
+  resumed_at TIMESTAMPTZ,
+  terminated_reason TEXT,
+  terminated_by TEXT REFERENCES users(id),
+  terminated_at TIMESTAMPTZ,
+  assigned_proctor_id TEXT REFERENCES users(id),
   time_spent_seconds INTEGER NOT NULL DEFAULT 0,
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   submitted_at TIMESTAMPTZ,
-  evaluated_by TEXT REFERENCES users(id)
+  evaluated_by TEXT REFERENCES users(id),
+  version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0)
 );
 
 CREATE INDEX idx_attempts_user ON assessment_attempts(user_id, started_at DESC);
@@ -312,7 +334,7 @@ CREATE INDEX idx_learning_time_assessment ON learning_time_events(assessment_id,
 
 CREATE TABLE assessment_answers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  attempt_id UUID NOT NULL REFERENCES assessment_attempts(id) ON DELETE CASCADE,
+  attempt_id TEXT NOT NULL REFERENCES assessment_attempts(id) ON DELETE CASCADE,
   question_id UUID NOT NULL REFERENCES questions(id),
   answer JSONB NOT NULL,
   auto_score NUMERIC(6,2),
@@ -323,11 +345,18 @@ CREATE TABLE assessment_answers (
 
 -- ── Proctoring ──
 CREATE TABLE proctoring_logs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  attempt_id UUID NOT NULL REFERENCES assessment_attempts(id) ON DELETE CASCADE,
+  id TEXT PRIMARY KEY,
+  attempt_id TEXT NOT NULL REFERENCES assessment_attempts(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id),
-  event_type proctor_event_type NOT NULL,
+  event_type TEXT NOT NULL CHECK (event_type IN (
+    'FACE_ABSENT', 'MULTIPLE_FACES', 'GAZE_AWAY', 'DEVICE_DETECTED',
+    'TAB_SWITCH', 'FULLSCREEN_EXIT', 'AUDIO_SPIKE', 'CAMERA_OFF',
+    'MIC_OFF', 'COMPANION_DISCONNECTED', 'FACE_MISMATCH', 'NOISE'
+  )),
   severity TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high')),
+  confidence NUMERIC(4,3),
+  capture_key TEXT,
+  trust_score_after INTEGER CHECK (trust_score_after BETWEEN 0 AND 100),
   metadata JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

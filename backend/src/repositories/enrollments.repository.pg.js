@@ -16,6 +16,8 @@ const mapEnrollment = (r) => ({
   timeSpentMinutes: Number(r.time_spent_minutes || 0),
   timeSpentSeconds: Number(r.time_spent_seconds || 0),
   chapterTimeSpentSeconds: r.chapter_time_spent_seconds || {},
+  status: r.status || "Enrolled",
+  certificateId: r.certificate_id || null,
   startedAt: iso(r.started_at),
   completedAt: r.completed_at ? iso(r.completed_at) : null,
 });
@@ -49,11 +51,11 @@ export async function insertEnrollment(enrollment) {
     `INSERT INTO enrollments (
        id, course_id, user_id, assigned_by, due_at, priority,
        mandatory, progress, completed_chapters, time_spent_minutes,
-       time_spent_seconds, chapter_time_spent_seconds, started_at
+       time_spent_seconds, chapter_time_spent_seconds, status, certificate_id, started_at
      ) VALUES (
        $1, $2, $3, $4, $5, $6,
        $7, $8, $9, $10,
-       $11, $12, COALESCE($13::timestamptz, now())
+       $11, $12, $13, $14, COALESCE($15::timestamptz, now())
      ) RETURNING *`,
     [
       enrollment.id,
@@ -68,6 +70,8 @@ export async function insertEnrollment(enrollment) {
       enrollment.timeSpentMinutes || 0,
       enrollment.timeSpentSeconds || 0,
       JSON.stringify(enrollment.chapterTimeSpentSeconds || {}),
+      enrollment.status || "Enrolled",
+      enrollment.certificateId || null,
       enrollment.startedAt || null,
     ]
   );
@@ -101,6 +105,14 @@ export async function updateEnrollmentProgress(id, updates) {
   if (updates.completedAt !== undefined) {
     params.push(updates.completedAt);
     fields.push(`completed_at = $${params.length}::timestamptz`);
+  }
+  if (updates.status !== undefined) {
+    params.push(updates.status);
+    fields.push(`status = $${params.length}`);
+  }
+  if (updates.certificateId !== undefined) {
+    params.push(updates.certificateId);
+    fields.push(`certificate_id = $${params.length}`);
   }
 
   const sql = `UPDATE enrollments SET ${fields.join(", ")} WHERE id = $1 RETURNING *`;

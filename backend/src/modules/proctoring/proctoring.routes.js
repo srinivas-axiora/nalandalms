@@ -7,8 +7,18 @@ import { audit, addAssessmentTime } from "../../domain.js";
 import { authenticate } from "../../middleware.js";
 import { requireAttemptPermission } from "../../security/authorization.js";
 import { uploadBuffer } from "../../storage/object-store.js";
-import { postSignal, getSignals, clearSignals } from "./signaling.js";
+import { postSignal, getSignals } from "./signaling.js";
 import { authorizeCompanionToken, createPairingToken, verifyAndPairCompanion, updateCompanionHeartbeat } from "./pairing.js";
+import { attemptsRepository, AttemptRepositoryError } from "../../repositories/attempts.repository.pg.js";
+import { upsertAttemptProjection } from "../../attempt-projection.js";
+
+const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
+const attemptErrorStatus = (error) => {
+  if (!(error instanceof AttemptRepositoryError)) return error.status || 400;
+  if (error.code === "ATTEMPT_NOT_FOUND") return 404;
+  if (["ATTEMPT_CONFLICT", "ATTEMPT_CLOSED"].includes(error.code)) return 409;
+  return 500;
+};
 
 // In-memory multer storage for video chunks to stream directly into object storage
 const chunkUpload = multer({
@@ -45,7 +55,7 @@ export function registerProctoring(app) {
   };
 
   // ── Record Proctoring Anomaly Event (with Real-Time Trust Score Calculation) ──
-  const recordEvent = (req, res, attemptId) => {
+  const recordEvent = async (req, res, attemptId) => {
     const schema = z.object({
       attemptId: z.string().optional(),
       eventType: z.enum(PROCTORING_EVENT_TYPES),
@@ -85,9 +95,6 @@ export function registerProctoring(app) {
       createdAt: now(),
     };
 
-    proctoringLogs.unshift(event);
-    if (proctoringLogs.length > 5000) proctoringLogs.length = 5000;
-
     attempt.flags = attempt.flags || [];
     attempt.flags.push(event);
 
@@ -105,14 +112,33 @@ export function registerProctoring(app) {
         autoSubmittedReason: "TAB_SWITCH",
         timeSpentSeconds,
       });
-      addAssessmentTime({ attempt, assessment, seconds: timeSpentSeconds });
+      if (!USE_PG_ATTEMPTS) addAssessmentTime({ attempt, assessment, seconds: timeSpentSeconds });
     }
 
-    audit(req.user.id, "PROCTORING_EVENT", "PROCTORING_LOG", event.id, {
-      eventType: event.eventType,
-      severity: event.severity,
-      trustScore: attempt.trustScore,
-    });
+    if (USE_PG_ATTEMPTS) {
+      try {
+        const committed = await attemptsRepository.recordProctorEvent({
+          attempt,
+          event,
+          expectedVersion: attempt.version,
+          actorId: req.user.id,
+          enrollment: attempt.status === "AutoSubmitted"
+            ? { addTimeSeconds: attempt.timeSpentSeconds || 0 }
+            : null,
+        });
+        upsertAttemptProjection(committed.attempt);
+      } catch (error) {
+        return res.status(attemptErrorStatus(error)).json({ error: error.message });
+      }
+    } else {
+      proctoringLogs.unshift(event);
+      if (proctoringLogs.length > 5000) proctoringLogs.length = 5000;
+      audit(req.user.id, "PROCTORING_EVENT", "PROCTORING_LOG", event.id, {
+        eventType: event.eventType,
+        severity: event.severity,
+        trustScore: attempt.trustScore,
+      });
+    }
 
     res.status(201).json({
       data: event,
@@ -123,13 +149,13 @@ export function registerProctoring(app) {
   };
 
   // Modern scoped route
-  app.post("/api/proctoring/attempts/:attemptId/events", authenticate, requireAttemptPermission("view"), (req, res) => {
-    recordEvent(req, res, req.params.attemptId);
+  app.post("/api/proctoring/attempts/:attemptId/events", authenticate, requireAttemptPermission("view"), async (req, res) => {
+    await recordEvent(req, res, req.params.attemptId);
   });
 
   // Backward compatible route
-  app.post("/api/proctoring/events", authenticate, requireAttemptPermission("view"), (req, res) => {
-    recordEvent(req, res, req.body.attemptId);
+  app.post("/api/proctoring/events", authenticate, requireAttemptPermission("view"), async (req, res) => {
+    await recordEvent(req, res, req.body.attemptId);
   });
 
   // ── Retrieve Exam Attempt Proctoring Log & Trust Score ──
@@ -181,12 +207,24 @@ export function registerProctoring(app) {
           recordedAt: now(),
         };
 
-        attempt.videoChunks.push(chunkMeta);
+        let totalChunks;
+        if (USE_PG_ATTEMPTS) {
+          const saved = await attemptsRepository.appendVideoChunk({
+            attemptId: attempt.id,
+            chunk: chunkMeta,
+            actorId: req.user?.id || attempt.userId,
+          });
+          upsertAttemptProjection(saved);
+          totalChunks = saved.videoChunks.length;
+        } else {
+          attempt.videoChunks.push(chunkMeta);
+          totalChunks = attempt.videoChunks.length;
+        }
 
         res.status(201).json({
           ok: true,
           data: chunkMeta,
-          totalChunks: attempt.videoChunks.length,
+          totalChunks,
         });
       } catch (err) {
         res.status(500).json({ error: `Failed to persist video chunk: ${err.message}` });
@@ -214,7 +252,7 @@ export function registerProctoring(app) {
   });
 
   // ── WebRTC Signaling Broker (Offer, Answer, ICE Candidates) ──
-  app.post("/api/proctoring/attempts/:attemptId/signal", authenticate, requireAttemptPermission("view"), (req, res) => {
+  app.post("/api/proctoring/attempts/:attemptId/signal", authenticate, requireAttemptPermission("view"), async (req, res) => {
     const schema = z.object({
       targetRole: z.enum(["candidate", "proctor", "companion", "all"]),
       type: z.enum(["offer", "answer", "ice-candidate", "ping"]),
@@ -227,7 +265,7 @@ export function registerProctoring(app) {
 
     const attempt = req.authorizedAttempt;
 
-    const signal = postSignal(attempt.id, {
+    const signal = await postSignal(attempt.id, {
       senderId: req.user.id,
       targetRole: parsed.data.targetRole,
       type: parsed.data.type,
@@ -238,13 +276,13 @@ export function registerProctoring(app) {
     res.status(201).json({ ok: true, data: signal });
   });
 
-  app.get("/api/proctoring/attempts/:attemptId/signals", authenticate, requireAttemptPermission("view"), (req, res) => {
+  app.get("/api/proctoring/attempts/:attemptId/signals", authenticate, requireAttemptPermission("view"), async (req, res) => {
     const attempt = req.authorizedAttempt;
 
     const since = parseInt(req.query.since, 10) || 0;
     const targetRole = req.query.targetRole || null;
 
-    const signals = getSignals(attempt.id, { targetRole, sinceTimestamp: since });
+    const signals = await getSignals(attempt.id, { targetRole, sinceTimestamp: since });
     res.json({ data: signals, count: signals.length });
   });
 

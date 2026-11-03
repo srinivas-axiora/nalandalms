@@ -61,12 +61,15 @@ import { query as relationalQuery } from "./src/db/pool.js";
 import { redactSensitive } from "./src/security/redaction.js";
 import { identityRepository } from "./src/repositories/identity.repository.pg.js";
 import { replaceIdentityProjection } from "./src/identity-projection.js";
+import { attemptsRepository } from "./src/repositories/attempts.repository.pg.js";
+import { replaceAttemptProjection } from "./src/attempt-projection.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG = process.env.USE_PG === "1";
 const USE_PG_SKILLS = USE_PG || process.env.USE_PG_SKILLS === "1";
 const USE_PG_PAYMENTS = process.env.USE_PG_PAYMENTS === "1";
 const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
+const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
 
 const app = express();
 app.set("trust proxy", TRUST_PROXY);
@@ -133,7 +136,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/ready", async (_req, res) => {
-  const [database, redis, objects, payments, identity] = await Promise.all([
+  const [database, redis, objects, payments, identity, attemptRuntime] = await Promise.all([
     storage.health(),
     redisHealth(),
     objectStoreHealth(),
@@ -172,9 +175,40 @@ app.get("/api/ready", async (_req, res) => {
           mode: "normalized",
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
+    USE_PG_ATTEMPTS
+      ? relationalQuery(
+          `SELECT
+             to_regclass('public.assessment_attempts') IS NOT NULL AS attempts,
+             to_regclass('public.proctoring_logs') IS NOT NULL AS proctoring,
+             to_regclass('public.enrollments') IS NOT NULL AS enrollments,
+             EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'assessment_attempts'
+                 AND column_name = 'id' AND data_type = 'text'
+             ) AS text_ids,
+             EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'assessment_attempts'
+                 AND column_name = 'version'
+             ) AS optimistic_version,
+             EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'assessment_attempts'
+                 AND column_name = 'question_map'
+             ) AS question_map,
+             EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'enrollments'
+                 AND column_name = 'status'
+             ) AS enrollment_status`
+        ).then(({ rows }) => ({
+          ok: Object.values(rows[0] || {}).every(Boolean),
+          mode: "normalized",
+        })).catch(() => ({ ok: false, mode: "normalized" }))
+      : Promise.resolve({ ok: true, mode: "disabled" }),
   ]);
-  const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok;
-  if (!ok) logger.error("READINESS_CHECK_FAILED", { database, redis, objects, payments, identity, startupReady });
+  const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok && attemptRuntime.ok;
+  if (!ok) logger.error("READINESS_CHECK_FAILED", { database, redis, objects, payments, identity, attempts: attemptRuntime, startupReady });
   res.status(ok ? 200 : 503).json({
     ok,
     service: "Nalanda API",
@@ -184,6 +218,7 @@ app.get("/api/ready", async (_req, res) => {
       objects: { ok: objects.ok, mode: objects.mode },
       payments: { ok: payments.ok, mode: payments.mode },
       identity: { ok: identity.ok, mode: identity.mode },
+      attempts: { ok: attemptRuntime.ok, mode: attemptRuntime.mode },
     },
   });
 });
@@ -208,8 +243,12 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   const visibleCourses = coursesVisibleTo(req.user);
   const visibleCourseIds = new Set(visibleCourses.map((course) => course.id));
   const scopedAssignments = assignments.filter((assignment) => assignmentVisibleTo(assignment, req.user) && (admin || visibleCourseIds.has(assignment.courseId)));
-  const scopedAttempts = attempts.filter((attempt) => admin || visibleUserIds.has(attempt.userId));
-  const scopedProctoring = proctoringLogs.filter((event) => admin || visibleUserIds.has(event.userId));
+  const authoritativeAttempts = USE_PG_ATTEMPTS ? await attemptsRepository.list() : attempts;
+  const authoritativeProctoring = USE_PG_ATTEMPTS
+    ? await attemptsRepository.listProctorEvents(admin ? {} : { userIds: [...visibleUserIds] })
+    : proctoringLogs;
+  const scopedAttempts = authoritativeAttempts.filter((attempt) => admin || visibleUserIds.has(attempt.userId));
+  const scopedProctoring = authoritativeProctoring.filter((event) => admin || visibleUserIds.has(event.userId));
   const scopedReports = admin ? reportExports : reportExports.filter((report) => report.requestedBy === req.user.id);
   const scopedCertificates = issuedCertificates.filter((cert) => admin || visibleUserIds.has(cert.employeeId));
   const scopedChapters = chapters.filter((chapter) => visibleCourseIds.has(chapter.courseId));
@@ -267,6 +306,9 @@ const start = async () => {
     await loadDb();
     if (USE_PG_IDENTITY) {
       replaceIdentityProjection(await identityRepository.listUsers({ status: "All" }));
+    }
+    if (USE_PG_ATTEMPTS) {
+      replaceAttemptProjection(await attemptsRepository.list());
     }
     await ensureRedisReady();
     const objects = await objectStoreHealth();

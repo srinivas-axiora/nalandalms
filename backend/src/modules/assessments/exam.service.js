@@ -65,7 +65,12 @@ export function secureShuffle(array) {
   return arr;
 }
 
-export function buildBlindExamAttempt({ assessment, userId, userRole = "Learner" }) {
+export function buildBlindExamAttempt({
+  assessment,
+  userId,
+  userRole = "Learner",
+  persistSideEffects = true,
+}) {
   const course = courses.find((c) => c.id === assessment.courseId);
   const allQuestions = assessment.questions || [];
 
@@ -143,12 +148,14 @@ export function buildBlindExamAttempt({ assessment, userId, userRole = "Learner"
     flags: [],
   };
 
-  attempts.unshift(attempt);
-  audit(userId, "START_BLIND_EXAM", "ASSESSMENT_ATTEMPT", attempt.id, {
-    assessmentId: assessment.id,
-    questionCount: attempt.selectedQuestionIds.length,
-    durationMinutes,
-  });
+  if (persistSideEffects) {
+    attempts.unshift(attempt);
+    audit(userId, "START_BLIND_EXAM", "ASSESSMENT_ATTEMPT", attempt.id, {
+      assessmentId: assessment.id,
+      questionCount: attempt.selectedQuestionIds.length,
+      durationMinutes,
+    });
+  }
 
   return attempt;
 }
@@ -157,7 +164,13 @@ export function getExamClock(attempt, assessment) {
   return assessmentAttemptClock(attempt, assessment);
 }
 
-export function getBlindQuestions({ attempt, assessment, page = 1, limit = 50 }) {
+export function getBlindQuestions({
+  attempt,
+  assessment,
+  page = 1,
+  limit = 50,
+  persistSideEffects = true,
+}) {
   const clock = getExamClock(attempt, assessment);
 
   // If clock expired and not yet submitted, auto-submit
@@ -167,6 +180,7 @@ export function getBlindQuestions({ attempt, assessment, page = 1, limit = 50 })
       assessment,
       autoSubmittedReason: "TIME_EXPIRED",
       systemAutoSubmit: true,
+      persistSideEffects,
     });
   }
 
@@ -261,6 +275,7 @@ export function finalizeAttempt({
   autoSubmittedReason = null,
   tabSwitchWarnings = null,
   systemAutoSubmit = false,
+  persistSideEffects = true,
 }) {
   if (attempt.submittedAt) {
     return { attempt, alreadySubmitted: true };
@@ -273,6 +288,7 @@ export function finalizeAttempt({
       assessment,
       autoSubmittedReason: "TIME_EXPIRED",
       systemAutoSubmit: true,
+      persistSideEffects,
     });
     const err = new Error("Exam time has expired; saved answers were auto-submitted");
     err.status = 403;
@@ -347,28 +363,30 @@ export function finalizeAttempt({
   attempt.feedback = feedback;
 
   // ── Sync with Course Enrollment ──
-  const assignment = assignments.find(
-    (a) => a.courseId === attempt.courseId && a.userId === attempt.userId
-  );
-  if (assignment) {
-    assignment.timeSpentSeconds = (assignment.timeSpentSeconds || 0) + timeSpentSeconds;
-    assignment.timeSpentMinutes = Math.ceil(assignment.timeSpentSeconds / 60);
+  if (persistSideEffects) {
+    const assignment = assignments.find(
+      (a) => a.courseId === attempt.courseId && a.userId === attempt.userId
+    );
+    if (assignment) {
+      assignment.timeSpentSeconds = (assignment.timeSpentSeconds || 0) + timeSpentSeconds;
+      assignment.timeSpentMinutes = Math.ceil(assignment.timeSpentSeconds / 60);
 
-    if (attempt.status === "Passed") {
-      assignment.status = ENROLLMENT_STATUS.PASSED;
-      assignment.completedAt = assignment.completedAt || now();
-      autoIssueCert(attempt, assignment);
-    } else if (attempt.status === "Failed") {
-      assignment.status = ENROLLMENT_STATUS.FAILED;
+      if (attempt.status === "Passed") {
+        assignment.status = ENROLLMENT_STATUS.PASSED;
+        assignment.completedAt = assignment.completedAt || now();
+        autoIssueCert(attempt, assignment);
+      } else if (attempt.status === "Failed") {
+        assignment.status = ENROLLMENT_STATUS.FAILED;
+      }
     }
-  }
 
-  audit(attempt.userId, "SUBMIT_EXAM_ATTEMPT", "ASSESSMENT_ATTEMPT", attempt.id, {
-    score: attempt.score,
-    status: attempt.status,
-    autoSubmittedReason: attempt.autoSubmittedReason,
-    timeSpentSeconds,
-  });
+    audit(attempt.userId, "SUBMIT_EXAM_ATTEMPT", "ASSESSMENT_ATTEMPT", attempt.id, {
+      score: attempt.score,
+      status: attempt.status,
+      autoSubmittedReason: attempt.autoSubmittedReason,
+      timeSpentSeconds,
+    });
+  }
 
   return {
     attempt,
@@ -379,7 +397,14 @@ export function finalizeAttempt({
   };
 }
 
-export function manualGradeAttempt({ attempt, assessment, evaluatorId, grades, overallFeedback }) {
+export function manualGradeAttempt({
+  attempt,
+  assessment,
+  evaluatorId,
+  grades,
+  overallFeedback,
+  persistSideEffects = true,
+}) {
   if (attempt.status !== "PendingManualReview" && attempt.status !== "Submitted") {
     const err = new Error("Attempt is not awaiting manual evaluation");
     err.status = 400;
@@ -430,23 +455,25 @@ export function manualGradeAttempt({ attempt, assessment, evaluatorId, grades, o
   attempt.feedback = overallFeedback || (passed ? "Passed with instructor evaluation" : "Did not meet passing criteria");
 
   // Sync with course enrollment
-  const assignment = assignments.find(
-    (a) => a.courseId === attempt.courseId && a.userId === attempt.userId
-  );
-  if (assignment) {
-    if (passed) {
-      assignment.status = ENROLLMENT_STATUS.PASSED;
-      assignment.completedAt = assignment.completedAt || now();
-    } else {
-      assignment.status = ENROLLMENT_STATUS.FAILED;
+  if (persistSideEffects) {
+    const assignment = assignments.find(
+      (a) => a.courseId === attempt.courseId && a.userId === attempt.userId
+    );
+    if (assignment) {
+      if (passed) {
+        assignment.status = ENROLLMENT_STATUS.PASSED;
+        assignment.completedAt = assignment.completedAt || now();
+      } else {
+        assignment.status = ENROLLMENT_STATUS.FAILED;
+      }
     }
-  }
 
-  audit(evaluatorId, "MANUAL_GRADE_EXAM", "ASSESSMENT_ATTEMPT", attempt.id, {
-    score: percentage,
-    passed,
-    evaluatorId,
-  });
+    audit(evaluatorId, "MANUAL_GRADE_EXAM", "ASSESSMENT_ATTEMPT", attempt.id, {
+      score: percentage,
+      passed,
+      evaluatorId,
+    });
+  }
 
   return {
     ok: true,

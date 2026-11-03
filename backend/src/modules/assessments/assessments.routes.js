@@ -9,6 +9,23 @@ import { canAttemptAssessment, ENROLLMENT_STATUS } from "../enrollments/progress
 import { buildBlindExamAttempt, getBlindQuestions, recordQuestionAnswer, finalizeAttempt, manualGradeAttempt } from "./exam.service.js";
 import { users } from "../../core.js";
 import { canGradeAttempt, requireAttemptPermission } from "../../security/authorization.js";
+import { attemptsRepository, AttemptRepositoryError } from "../../repositories/attempts.repository.pg.js";
+import { upsertAttemptProjection } from "../../attempt-projection.js";
+
+const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
+
+const attemptErrorStatus = (error) => {
+  if (!(error instanceof AttemptRepositoryError)) return error.status || 400;
+  if (error.code === "ATTEMPT_NOT_FOUND") return 404;
+  if (["ATTEMPT_CONFLICT", "ATTEMPT_CLOSED"].includes(error.code)) return 409;
+  return 500;
+};
+
+const enrollmentTransition = (attempt, { includeAttemptTime = true } = {}) => ({
+  status: ["Passed", "Failed"].includes(attempt.status) ? attempt.status : null,
+  addTimeSeconds: includeAttemptTime ? (attempt.timeSpentSeconds || 0) : 0,
+  completedAt: attempt.status === "Passed" ? now() : null,
+});
 
 export function registerAssessments(app) {
   app.get("/api/assessments", authenticate, (req, res) => {
@@ -121,7 +138,7 @@ export function registerAssessments(app) {
     res.json({ data: assessment });
   });
 
-    app.post("/api/assessments/:id/attempts/start", authenticate, requireRole("Employee", "Manager", "Admin", "Learner", "Instructor"), (req, res) => {
+    app.post("/api/assessments/:id/attempts/start", authenticate, requireRole("Employee", "Manager", "Admin", "Learner", "Instructor"), async (req, res) => {
     const assessment = assessments.find((item) => item.id === req.params.id && item.approval === "Approved" && item.status === "Active");
     if (!assessment) return res.status(404).json({ error: "Approved assessment not found" });
     const course = courses.find((item) => item.id === assessment.courseId);
@@ -139,31 +156,35 @@ export function registerAssessments(app) {
       const attempt = buildBlindExamAttempt({
         assessment,
         userId: req.user.id,
-        userRole: req.user.role
+        userRole: req.user.role,
+        persistSideEffects: !USE_PG_ATTEMPTS,
       });
+      const committedAttempt = USE_PG_ATTEMPTS
+        ? upsertAttemptProjection(await attemptsRepository.insert(attempt))
+        : attempt;
 
       // Strip server-side answer keys from response
       const clientSafeAttempt = {
-        id: attempt.id,
-        assessmentId: attempt.assessmentId,
-        courseId: attempt.courseId,
-        chapterId: attempt.chapterId,
-        userId: attempt.userId,
-        startedAt: attempt.startedAt,
-        expiresAt: attempt.expiresAt,
-        status: attempt.status,
-        maxScore: attempt.maxScore,
-        selectedQuestionIds: attempt.selectedQuestionIds,
+        id: committedAttempt.id,
+        assessmentId: committedAttempt.assessmentId,
+        courseId: committedAttempt.courseId,
+        chapterId: committedAttempt.chapterId,
+        userId: committedAttempt.userId,
+        startedAt: committedAttempt.startedAt,
+        expiresAt: committedAttempt.expiresAt,
+        status: committedAttempt.status,
+        maxScore: committedAttempt.maxScore,
+        selectedQuestionIds: committedAttempt.selectedQuestionIds,
       };
 
       res.status(201).json({ data: clientSafeAttempt, strictRules: assessment.strictMode ? settings : null });
     } catch (err) {
-      res.status(400).json({ error: err.message });
+      res.status(attemptErrorStatus(err)).json({ error: err.message });
     }
   });
 
   // ── Blind Question Delivery (Zero Answer Key Leakage) ──
-  app.get("/api/assessments/attempts/:attemptId/questions", authenticate, requireAttemptPermission("view"), (req, res) => {
+  app.get("/api/assessments/attempts/:attemptId/questions", authenticate, requireAttemptPermission("view"), async (req, res) => {
     const attempt = req.authorizedAttempt;
     const assessment = assessments.find((item) => item.id === attempt.assessmentId);
     if (!assessment) return res.status(404).json({ error: "Assessment not found" });
@@ -171,12 +192,34 @@ export function registerAssessments(app) {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
 
-    const blindData = getBlindQuestions({ attempt, assessment, page, limit });
-    res.json({ data: blindData });
+    try {
+      const originalVersion = attempt.version;
+      const wasSubmitted = Boolean(attempt.submittedAt);
+      const blindData = getBlindQuestions({
+        attempt,
+        assessment,
+        page,
+        limit,
+        persistSideEffects: !USE_PG_ATTEMPTS,
+      });
+      if (USE_PG_ATTEMPTS && !wasSubmitted && attempt.submittedAt) {
+        const saved = await attemptsRepository.save(attempt, {
+          expectedVersion: originalVersion,
+          actorId: attempt.userId,
+          action: "AUTO_SUBMIT_EXAM_ATTEMPT",
+          metadata: { reason: attempt.autoSubmittedReason },
+          enrollment: enrollmentTransition(attempt),
+        });
+        upsertAttemptProjection(saved);
+      }
+      res.json({ data: blindData });
+    } catch (err) {
+      res.status(attemptErrorStatus(err)).json({ error: err.message });
+    }
   });
 
   // ── Autosave / Lock Question Answer ──
-  app.post("/api/assessments/attempts/:attemptId/answer", authenticate, (req, res) => {
+  app.post("/api/assessments/attempts/:attemptId/answer", authenticate, async (req, res) => {
     const schema = z.object({
       questionId: z.string().min(1),
       answer: z.any()
@@ -184,7 +227,9 @@ export function registerAssessments(app) {
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const attempt = attempts.find((item) => item.id === req.params.attemptId);
+    const attempt = USE_PG_ATTEMPTS
+      ? await attemptsRepository.findById(req.params.attemptId)
+      : attempts.find((item) => item.id === req.params.attemptId);
     if (!attempt) return res.status(404).json({ error: "Attempt not found" });
     const assessment = assessments.find((item) => item.id === attempt.assessmentId);
     if (!assessment) return res.status(404).json({ error: "Assessment not found" });
@@ -197,14 +242,38 @@ export function registerAssessments(app) {
         answer: parsed.data.answer,
         userId: req.user.id
       });
+      if (USE_PG_ATTEMPTS) {
+        const saved = await attemptsRepository.save(attempt, {
+          expectedVersion: attempt.version,
+          guard: "answer",
+          actorId: req.user.id,
+          action: "SAVE_EXAM_ANSWER",
+          metadata: { questionId: parsed.data.questionId },
+        });
+        upsertAttemptProjection(saved);
+      }
       res.json(result);
     } catch (err) {
-      res.status(err.status || 400).json({ error: err.message });
+      if (USE_PG_ATTEMPTS && attempt.submittedAt) {
+        try {
+          const saved = await attemptsRepository.save(attempt, {
+            expectedVersion: attempt.version,
+            actorId: req.user.id,
+            action: "AUTO_SUBMIT_EXAM_ATTEMPT",
+            metadata: { reason: attempt.autoSubmittedReason },
+            enrollment: enrollmentTransition(attempt),
+          });
+          upsertAttemptProjection(saved);
+        } catch (persistError) {
+          return res.status(attemptErrorStatus(persistError)).json({ error: persistError.message });
+        }
+      }
+      res.status(attemptErrorStatus(err)).json({ error: err.message });
     }
   });
 
   // ── Final Attempt Submission & Server-Side Scoring ──
-  app.post("/api/assessments/attempts/:attemptId/submit", authenticate, (req, res) => {
+  app.post("/api/assessments/attempts/:attemptId/submit", authenticate, async (req, res) => {
     const schema = z.object({
       answers: z.record(z.string(), z.any()).optional(),
       tabSwitchWarnings: z.coerce.number().int().min(0).optional()
@@ -212,7 +281,10 @@ export function registerAssessments(app) {
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const attempt = attempts.find((item) => item.id === req.params.attemptId && item.userId === req.user.id);
+    const candidateAttempt = USE_PG_ATTEMPTS
+      ? await attemptsRepository.findById(req.params.attemptId)
+      : attempts.find((item) => item.id === req.params.attemptId);
+    const attempt = candidateAttempt?.userId === req.user.id ? candidateAttempt : null;
     if (!attempt) return res.status(404).json({ error: "Attempt not found" });
     if (attempt.submittedAt) return res.status(409).json({ error: "Attempt already submitted", data: attempt });
     const assessment = assessments.find((item) => item.id === attempt.assessmentId);
@@ -224,7 +296,22 @@ export function registerAssessments(app) {
         assessment,
         answers: parsed.data.answers,
         tabSwitchWarnings: parsed.data.tabSwitchWarnings,
+        persistSideEffects: !USE_PG_ATTEMPTS,
       });
+      if (USE_PG_ATTEMPTS) {
+        result.attempt = upsertAttemptProjection(await attemptsRepository.save(attempt, {
+          expectedVersion: attempt.version,
+          guard: "submit",
+          actorId: req.user.id,
+          action: "SUBMIT_EXAM_ATTEMPT",
+          metadata: {
+            score: attempt.score,
+            status: attempt.status,
+            timeSpentSeconds: attempt.timeSpentSeconds,
+          },
+          enrollment: enrollmentTransition(attempt),
+        }));
+      }
 
       res.json({
         data: result.attempt,
@@ -233,13 +320,30 @@ export function registerAssessments(app) {
         feedback: result.feedback
       });
     } catch (err) {
-      res.status(err.status || 400).json({ error: err.message });
+      if (USE_PG_ATTEMPTS && attempt.submittedAt) {
+        try {
+          const saved = await attemptsRepository.save(attempt, {
+            expectedVersion: attempt.version,
+            actorId: req.user.id,
+            action: "AUTO_SUBMIT_EXAM_ATTEMPT",
+            metadata: { reason: attempt.autoSubmittedReason },
+            enrollment: enrollmentTransition(attempt),
+          });
+          upsertAttemptProjection(saved);
+        } catch (persistError) {
+          return res.status(attemptErrorStatus(persistError)).json({ error: persistError.message });
+        }
+      }
+      res.status(attemptErrorStatus(err)).json({ error: err.message });
     }
   });
 
   // ── Pending Descriptive Review Queue ──
-  app.get("/api/assessments/attempts/pending-review", authenticate, requireRole("Admin", "Manager", "Instructor"), (req, res) => {
-    const pending = attempts.filter((attempt) => (
+  app.get("/api/assessments/attempts/pending-review", authenticate, requireRole("Admin", "Manager", "Instructor"), async (req, res) => {
+    const sourceAttempts = USE_PG_ATTEMPTS
+      ? await attemptsRepository.list({ statuses: ["PendingManualReview"] })
+      : attempts;
+    const pending = sourceAttempts.filter((attempt) => (
       attempt.status === "PendingManualReview" && canGradeAttempt(req.user, attempt)
     ));
     const decorated = pending.map((a) => {
@@ -264,7 +368,7 @@ export function registerAssessments(app) {
     requireRole("Admin", "Manager", "Instructor"),
     requireAttemptPermission("grade"),
     requireStepUp,
-    (req, res) => {
+    async (req, res) => {
     const schema = z.object({
       grades: z.record(z.string(), z.object({
         pointsAwarded: z.number().nonnegative(),
@@ -285,11 +389,21 @@ export function registerAssessments(app) {
         assessment,
         evaluatorId: req.user.id,
         grades: parsed.data.grades,
-        overallFeedback: parsed.data.overallFeedback
+        overallFeedback: parsed.data.overallFeedback,
+        persistSideEffects: !USE_PG_ATTEMPTS,
       });
+      if (USE_PG_ATTEMPTS) {
+        result.attempt = upsertAttemptProjection(await attemptsRepository.save(attempt, {
+          expectedVersion: attempt.version,
+          actorId: req.user.id,
+          action: "MANUAL_GRADE_EXAM",
+          metadata: { score: attempt.score, passed: attempt.status === "Passed" },
+          enrollment: enrollmentTransition(attempt, { includeAttemptTime: false }),
+        }));
+      }
       res.json(result);
     } catch (err) {
-      res.status(err.status || 400).json({ error: err.message });
+      res.status(attemptErrorStatus(err)).json({ error: err.message });
     }
     },
   );
