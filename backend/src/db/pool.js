@@ -22,12 +22,21 @@ function resolveSsl() {
 let pool = null;
 
 export function getPool() {
-  if (!process.env.DATABASE_URL) {
-    throw new Error("DATABASE_URL is required for the relational data layer.");
+  if (!process.env.DATABASE_URL && !process.env.PGHOST) {
+    throw new Error("DATABASE_URL or PGHOST is required for the relational data layer.");
   }
   if (!pool) {
+    const connection = process.env.DATABASE_URL
+      ? { connectionString: process.env.DATABASE_URL }
+      : {
+          host: process.env.PGHOST,
+          port: Number(process.env.PGPORT || 5432),
+          database: process.env.PGDATABASE,
+          user: process.env.PGUSER,
+          password: process.env.PGPASSWORD,
+        };
     pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
+      ...connection,
       max: Number(process.env.PGPOOL_MAX || 10),
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,

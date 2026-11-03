@@ -26,7 +26,7 @@ npm run build
 npm audit --audit-level=high
 ```
 
-Expected gate: 120 functional tests, 30 adversarial tests, type/build success
+Expected gate: 127 functional tests, 30 adversarial tests, type/build success
 and no high/critical dependency advisory.
 
 ## 2. Deploy
@@ -37,7 +37,24 @@ Run `infra/aws/deploy-staging.ps1` using the three secret ARNs. The script:
 2. creates or locates the immutable/scanned ECR repository;
 3. builds and pushes an immutable ARM64 image;
 4. deploys the CloudFormation stack; and
-5. prints the CloudFront URL and operational identifiers.
+5. optionally runs guarded schema bootstrap and snapshot backfill as one-off ECS
+   tasks when `-PrepareRelationalDatabase` is supplied; and
+6. prints the CloudFront URL and operational identifiers.
+
+For a new staging database, prepare (but do not enable) the normalized tables:
+
+```powershell
+.\infra\aws\deploy-staging.ps1 `
+  -PrepareRelationalDatabase `
+  -RazorpayKeyIdSecretArn $keyIdArn `
+  -RazorpayKeySecretArn $keySecretArn `
+  -RazorpayWebhookSecretArn $webhookSecretArn
+```
+
+The two one-off tasks must exit zero. Reconcile the tables using
+`SECURITY-PHASE-6-PAYMENT-PERSISTENCE.md`. `USE_PG_PAYMENTS` remains off; do not
+manually add it to the task definition until the live database and concurrency
+gate is signed off.
 
 Do not change the ECS desired count or deployment percentages.
 

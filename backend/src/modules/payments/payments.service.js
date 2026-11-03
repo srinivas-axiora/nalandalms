@@ -15,8 +15,14 @@ import {
   paymentWebhookEvents,
 } from "../../core.js";
 import { audit } from "../../domain.js";
+import { findCourseById } from "../../repositories/courses.repository.pg.js";
+import {
+  PaymentRepositoryError,
+  paymentsRepository,
+} from "../../repositories/payments.repository.pg.js";
 
 const RAZORPAY_API_ORIGIN = "https://api.razorpay.com";
+const USE_PG_PAYMENTS = process.env.USE_PG_PAYMENTS === "1";
 
 export class PaymentError extends Error {
   constructor(status, message) {
@@ -28,6 +34,21 @@ export class PaymentError extends Error {
 
 const fail = (status, message) => {
   throw new PaymentError(status, message);
+};
+
+const translateRepositoryError = (error) => {
+  if (!(error instanceof PaymentRepositoryError)) throw error;
+  const statusByCode = {
+    ORDER_NOT_FOUND: 404,
+    PAYMENT_REUSED: 409,
+    ORDER_PAID: 409,
+    ORDER_NOT_PAYABLE: 409,
+    ORDER_EXPIRED: 410,
+    WEBHOOK_MISMATCH: 409,
+    EVENT_REPLAY_MISMATCH: 409,
+    ORDER_INSERT_CONFLICT: 409,
+  };
+  fail(statusByCode[error.code] || 409, error.message);
 };
 
 const normalizedCurrency = (value) => String(value || "INR").trim().toUpperCase();
@@ -162,6 +183,7 @@ const settleOrder = (order, paymentId, source, actorId) => {
 };
 
 export const createCheckoutOrder = async ({ user, courseId }) => {
+  if (USE_PG_PAYMENTS) return createCheckoutOrderPg({ user, courseId });
   const course = courses.find((item) => item.id === courseId && item.status === "Active" && item.approval === "Approved");
   if (!course) fail(404, "Course not found");
   if (enrollmentFor(user.id, course.id)) fail(409, "You are already enrolled in this course");
@@ -229,7 +251,71 @@ export const createCheckoutOrder = async ({ user, courseId }) => {
   };
 };
 
+const createCheckoutOrderPg = async ({ user, courseId }) => {
+  const course = await findCourseById(courseId);
+  if (!course || course.status !== "Active" || course.approval !== "Approved") fail(404, "Course not found");
+  if (await paymentsRepository.findEnrollment(user.id, course.id)) {
+    fail(409, "You are already enrolled in this course");
+  }
+
+  const amountCents = Number(course.priceCents);
+  const currency = normalizedCurrency(course.currency);
+  if (!Number.isSafeInteger(amountCents) || amountCents <= 0) fail(400, "Course is not configured for paid checkout");
+  if (!/^[A-Z]{3}$/.test(currency)) fail(500, "Course currency configuration is invalid");
+
+  const currentTime = new Date();
+  const reusable = await paymentsRepository.findReusableOrder(user.id, course.id, currentTime);
+  if (reusable) {
+    return {
+      orderId: reusable.orderId,
+      amount: reusable.amountCents,
+      currency: reusable.currency,
+      courseTitle: course.title,
+      keyId: getRazorpayKeyId() || "rzp_test_nalanda",
+      expiresAt: reusable.expiresAt,
+      idempotent: true,
+    };
+  }
+
+  const receipt = `nld_${uuid().replace(/-/g, "").slice(0, 24)}`;
+  const providerOrder = await createProviderOrder({
+    amountCents, currency, receipt, userId: user.id, courseId: course.id,
+  });
+  if (
+    !providerOrder?.id
+    || providerOrder.amount !== amountCents
+    || normalizedCurrency(providerOrder.currency) !== currency
+  ) {
+    fail(502, "Payment provider returned an invalid order");
+  }
+
+  const createdAt = now();
+  const saved = await paymentsRepository.insertOrder({
+    orderId: providerOrder.id,
+    receipt,
+    provider: "Razorpay",
+    userId: user.id,
+    courseId: course.id,
+    amountCents,
+    currency,
+    createdAt,
+    expiresAt: new Date(Date.parse(createdAt) + PAYMENT_ORDER_TTL_SECONDS * 1000).toISOString(),
+  });
+  return {
+    orderId: saved.order.orderId,
+    amount: saved.order.amountCents,
+    currency: saved.order.currency,
+    courseTitle: course.title,
+    keyId: getRazorpayKeyId() || "rzp_test_nalanda",
+    expiresAt: saved.order.expiresAt,
+    idempotent: saved.idempotent || undefined,
+  };
+};
+
 export const verifyCheckoutPayment = async ({ actor, orderId, paymentId, signature, courseId }) => {
+  if (USE_PG_PAYMENTS) {
+    return verifyCheckoutPaymentPg({ actor, orderId, paymentId, signature, courseId });
+  }
   const order = paymentOrders.find((item) => item.orderId === orderId);
   if (!order) fail(404, "Order not found or expired");
   if (order.userId !== actor.id) fail(403, "This payment order belongs to another account");
@@ -265,7 +351,39 @@ export const verifyCheckoutPayment = async ({ actor, orderId, paymentId, signatu
   };
 };
 
-export const processWebhook = ({ rawBody, body, signature, eventId }) => {
+const verifyCheckoutPaymentPg = async ({ actor, orderId, paymentId, signature, courseId }) => {
+  const order = await paymentsRepository.findOrderById(orderId);
+  if (!order) fail(404, "Order not found or expired");
+  if (order.userId !== actor.id) fail(403, "This payment order belongs to another account");
+  if (courseId && courseId !== order.courseId) fail(400, "Course does not match the payment order");
+
+  const keySecret = getRazorpayKeySecret();
+  if (!keySecret) fail(503, "Payment signature verification is not configured");
+  const expected = crypto.createHmac("sha256", keySecret).update(`${order.orderId}|${paymentId}`).digest("hex");
+  if (!secureHexEqual(signature, expected)) fail(400, "Invalid payment signature verification");
+
+  await verifyProviderPayment(order, paymentId);
+  let result;
+  try {
+    result = await paymentsRepository.settleOrder({
+      orderId: order.orderId,
+      paymentId,
+      source: "Checkout",
+      actorId: actor.id,
+      at: now(),
+    });
+  } catch (error) {
+    translateRepositoryError(error);
+  }
+  return {
+    ok: true,
+    message: result.idempotent ? "Payment was already verified." : "Payment verified successfully. You are now enrolled!",
+    enrollment: result.enrollment,
+    idempotent: result.idempotent,
+  };
+};
+
+export const processWebhook = async ({ rawBody, body, signature, eventId }) => {
   if (!Buffer.isBuffer(rawBody)) fail(400, "Raw webhook body is required");
   const webhookSecret = getRazorpayWebhookSecret();
   if (!webhookSecret) fail(503, "Webhook signature verification is not configured");
@@ -273,11 +391,40 @@ export const processWebhook = ({ rawBody, body, signature, eventId }) => {
   if (!secureHexEqual(signature, expected)) fail(400, "Invalid webhook signature");
   if (!eventId || typeof eventId !== "string" || eventId.length > 200) fail(400, "Webhook event ID is required");
 
+  const eventType = String(body?.event || "");
+  const bodySha256 = crypto.createHash("sha256").update(rawBody).digest("hex");
+  if (USE_PG_PAYMENTS) {
+    try {
+      if (!["payment.captured", "order.paid"].includes(eventType)) {
+        const result = await paymentsRepository.recordIgnoredWebhook({
+          eventId, eventType, bodySha256, at: now(),
+        });
+        return { status: "ok", ...result };
+      }
+
+      const payment = body?.payload?.payment?.entity;
+      if (!payment?.id || !payment?.order_id || payment.status !== "captured") {
+        fail(400, "Webhook payment payload is incomplete");
+      }
+      const result = await paymentsRepository.processCapturedWebhook({
+        eventId,
+        eventType,
+        bodySha256,
+        orderId: payment.order_id,
+        paymentId: payment.id,
+        amountCents: Number(payment.amount),
+        currency: normalizedCurrency(payment.currency),
+        at: now(),
+      });
+      return { status: "ok", ...result };
+    } catch (error) {
+      translateRepositoryError(error);
+    }
+  }
+
   const existingEvent = paymentWebhookEvents.find((item) => item.eventId === eventId);
   if (existingEvent) return { status: "ok", duplicate: true };
 
-  const eventType = String(body?.event || "");
-  const bodySha256 = crypto.createHash("sha256").update(rawBody).digest("hex");
   if (!["payment.captured", "order.paid"].includes(eventType)) {
     paymentWebhookEvents.push({ eventId, eventType, bodySha256, status: "Ignored", receivedAt: now(), processedAt: now() });
     return { status: "ok", ignored: true };

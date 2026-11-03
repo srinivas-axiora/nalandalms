@@ -554,3 +554,9 @@ Outputs:
     Value: !Ref BootstrapAdminSecret
   DatabaseSecretArn:
     Value: !GetAtt Database.MasterUserSecret.SecretArn
+  TaskDefinitionArn:
+    Value: !Ref TaskDefinition
+  PublicSubnetIds:
+    Value: !Join [",", [!Ref PublicSubnetA, !Ref PublicSubnetB]]
+  ApplicationSecurityGroupId:
+    Value: !Ref ApplicationSecurityGroup

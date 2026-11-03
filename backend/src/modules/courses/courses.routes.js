@@ -128,6 +128,8 @@ export function registerCourses(app) {
       targetLevel: z.string().default("Beginner"),
       difficulty: z.string().default("Beginner"),
       estimatedHours: z.number().default(4),
+      priceCents: z.number().int().min(0).default(0),
+      currency: z.string().regex(/^[A-Z]{3}$/).default("INR"),
       category: z.string().default("Technical"),
       prerequisites: z.array(z.string()).default([]),
       tags: z.array(z.string()).default([]),
@@ -138,6 +140,7 @@ export function registerCourses(app) {
     const course = {
       id: nextCourseId(parsed.data.skill),
       ...parsed.data,
+      isFree: parsed.data.priceCents === 0,
       approval: req.user.role === "Admin" ? "Approved" : "Pending",
       status: "Active",
       ownerId: req.user.id,
@@ -172,6 +175,8 @@ export function registerCourses(app) {
       targetLevel: z.string().optional(),
       difficulty: z.string().optional(),
       estimatedHours: z.coerce.number().optional(),
+      priceCents: z.coerce.number().int().min(0).optional(),
+      currency: z.string().regex(/^[A-Z]{3}$/).optional(),
       category: z.string().optional(),
       prerequisites: z.array(z.string()).optional(),
       tags: z.array(z.string()).optional(),
@@ -180,7 +185,12 @@ export function registerCourses(app) {
     });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    Object.assign(course, parsed.data, { version: course.version + 1, approval: req.user.role === "Admin" ? "Approved" : "Pending", updatedAt: now() });
+    Object.assign(course, parsed.data, {
+      ...(parsed.data.priceCents !== undefined ? { isFree: parsed.data.priceCents === 0 } : {}),
+      version: course.version + 1,
+      approval: req.user.role === "Admin" ? "Approved" : "Pending",
+      updatedAt: now(),
+    });
     audit(req.user.id, "UPDATE_COURSE", "COURSE", course.id, { version: course.version });
     res.json({ data: course });
   });

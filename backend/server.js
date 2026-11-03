@@ -57,11 +57,13 @@ import * as chaptersRepo from "./src/repositories/chapters.repository.pg.js";
 import * as assessmentsRepo from "./src/repositories/assessments.repository.pg.js";
 import * as enrollmentsRepo from "./src/repositories/enrollments.repository.pg.js";
 import * as skillsRepo from "./src/repositories/skills.repository.pg.js";
+import { query as relationalQuery } from "./src/db/pool.js";
 import { redactSensitive } from "./src/security/redaction.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG = process.env.USE_PG === "1";
 const USE_PG_SKILLS = USE_PG || process.env.USE_PG_SKILLS === "1";
+const USE_PG_PAYMENTS = process.env.USE_PG_PAYMENTS === "1";
 
 const app = express();
 app.set("trust proxy", TRUST_PROXY);
@@ -128,13 +130,25 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/ready", async (_req, res) => {
-  const [database, redis, objects] = await Promise.all([
+  const [database, redis, objects, payments] = await Promise.all([
     storage.health(),
     redisHealth(),
     objectStoreHealth(),
+    USE_PG_PAYMENTS
+      ? relationalQuery(
+          `SELECT
+             to_regclass('public.payment_orders') IS NOT NULL AS orders,
+             to_regclass('public.payment_transactions') IS NOT NULL AS transactions,
+             to_regclass('public.payment_webhook_events') IS NOT NULL AS webhooks,
+             to_regclass('public.enrollments') IS NOT NULL AS enrollments`
+        ).then(({ rows }) => ({
+          ok: Object.values(rows[0] || {}).every(Boolean),
+          mode: "normalized",
+        })).catch(() => ({ ok: false, mode: "normalized" }))
+      : Promise.resolve({ ok: true, mode: "disabled" }),
   ]);
-  const ok = startupReady && database.ok && redis.ok && objects.ok;
-  if (!ok) logger.error("READINESS_CHECK_FAILED", { database, redis, objects, startupReady });
+  const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok;
+  if (!ok) logger.error("READINESS_CHECK_FAILED", { database, redis, objects, payments, startupReady });
   res.status(ok ? 200 : 503).json({
     ok,
     service: "Nalanda API",
@@ -142,6 +156,7 @@ app.get("/api/ready", async (_req, res) => {
       database: { ok: database.ok, mode: database.mode },
       redis: { ok: redis.ok, mode: redis.mode },
       objects: { ok: objects.ok, mode: objects.mode },
+      payments: { ok: payments.ok, mode: payments.mode },
     },
   });
 });

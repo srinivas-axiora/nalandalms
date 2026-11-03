@@ -10,6 +10,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_JSON = path.resolve(__dirname, "..", "..", "..", "database", "db.json");
 
 async function loadSource() {
+  if (process.env.DATABASE_URL || process.env.PGHOST) {
+    const sentinel = await query("SELECT to_regclass('public.app_state') AS table_name");
+    if (sentinel.rows[0]?.table_name) {
+      const { rows } = await query("SELECT collection, data FROM app_state");
+      if (rows.length) {
+        return {
+          data: Object.fromEntries(rows.map((row) => [row.collection, row.data])),
+          source: "PostgreSQL app_state snapshot",
+        };
+      }
+    }
+  }
   if (fs.existsSync(DB_JSON)) {
     const data = JSON.parse(fs.readFileSync(DB_JSON, "utf8"));
     return { data, source: "database/db.json" };
@@ -37,6 +49,7 @@ export async function backfill() {
   await withTransaction(async (client) => {
     // 1. Users & Departments
     const users = data.users || [];
+    const userIds = new Set(users.map((user) => user.id));
     console.log(`[backfill] Upserting ${users.length} users...`);
     for (const u of users) {
       let deptId = null;
@@ -61,10 +74,15 @@ export async function backfill() {
            status = EXCLUDED.status`,
         [
           u.id, u.name, u.email, u.passwordHash || null, u.role || "Employee", deptId,
-          u.team || "Unassigned", u.designation || "Employee", u.managerId || null,
+          u.team || "Unassigned", u.designation || "Employee", null,
           u.status || "Active", u.sessionVersion || 0, u.createdAt || null,
         ]
       );
+    }
+    for (const u of users) {
+      if (u.managerId) {
+        await client.query("UPDATE users SET manager_id = $2 WHERE id = $1", [u.id, u.managerId]);
+      }
     }
 
     // 2. Skills & Target Skills
@@ -80,6 +98,27 @@ export async function backfill() {
         [s.id, s.name, s.category || "Technical", s.description || "", s.status || "Active", s.createdAt || null]
       );
     }
+    const targetSkills = data.targetSkills || [];
+    console.log(`[backfill] Upserting ${targetSkills.length} target skills...`);
+    for (const target of targetSkills) {
+      await client.query(
+        `INSERT INTO target_skills (
+           id, skill_id, scope, department, designation, user_id,
+           target_level, target_score, priority, created_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, now()))
+         ON CONFLICT (id) DO UPDATE SET
+           skill_id = EXCLUDED.skill_id, scope = EXCLUDED.scope,
+           department = EXCLUDED.department, designation = EXCLUDED.designation,
+           user_id = EXCLUDED.user_id, target_level = EXCLUDED.target_level,
+           target_score = EXCLUDED.target_score, priority = EXCLUDED.priority`,
+        [
+          target.id, target.skillId, target.scope, target.department || null,
+          target.designation || null, target.userId || null,
+          target.targetLevel || "Intermediate", target.targetScore ?? 80,
+          target.priority || "Medium", target.createdAt || null,
+        ]
+      );
+    }
 
     // 3. Courses
     const courses = data.courses || [];
@@ -88,21 +127,24 @@ export async function backfill() {
       await client.query(
         `INSERT INTO courses (
            id, title, description, skill, skill_ids, target_level, difficulty,
-           estimated_hours, category, prerequisites, tags, thumbnail_color,
+           estimated_hours, price_cents, currency, category, prerequisites, tags, thumbnail_color,
            status, approval, owner_id, current_version, created_at, updated_at
          ) VALUES (
            $1, $2, $3, $4, $5, $6, $7,
-           $8, $9, $10, $11, $12,
-           $13::lifecycle_status, $14::approval_status, $15, $16,
-           COALESCE($17::timestamptz, now()), now()
+           $8, $9, $10, $11, $12, $13, $14,
+           $15::lifecycle_status, $16::approval_status, $17, $18,
+           COALESCE($19::timestamptz, now()), now()
          ) ON CONFLICT (id) DO UPDATE SET
            title = EXCLUDED.title, description = EXCLUDED.description,
-           skill = EXCLUDED.skill, status = EXCLUDED.status, approval = EXCLUDED.approval`,
+           skill = EXCLUDED.skill, price_cents = EXCLUDED.price_cents,
+           currency = EXCLUDED.currency, status = EXCLUDED.status,
+           approval = EXCLUDED.approval`,
         [
           c.id, c.title, c.description, c.skill || "", c.skillIds || [],
           c.targetLevel || "Beginner", c.difficulty || "Beginner", c.estimatedHours || 4,
-          c.category || "General", c.prerequisites || [], c.tags || [],
-          c.thumbnailColor || "#22d3ee", c.status || "Active", c.approval || "Approved",
+          c.priceCents || 0, c.currency || "INR", c.category || "General",
+          c.prerequisites || [], c.tags || [], c.thumbnailColor || "#22d3ee",
+          c.status || "Active", c.approval || "Approved",
           c.ownerId || users[0]?.id || "SAnalanda", c.version || 1, c.createdAt || null,
         ]
       );
@@ -187,11 +229,72 @@ export async function backfill() {
          ) ON CONFLICT (course_id, user_id) DO UPDATE SET
            progress = EXCLUDED.progress, completed_chapters = EXCLUDED.completed_chapters`,
         [
-          e.id, e.courseId, e.userId, e.assignedBy || users[0]?.id || "SAnalanda",
+          e.id, e.courseId, e.userId,
+          userIds.has(e.assignedBy) ? e.assignedBy : e.userId,
           e.dueAt || null, e.priority || "Medium", e.mandatory ?? false,
           e.progress || 0, e.completedChapters || [], e.timeSpentMinutes || 0,
           e.timeSpentSeconds || 0, JSON.stringify(e.chapterTimeSpentSeconds || {}),
           e.startedAt || null,
+        ]
+      );
+    }
+
+    // 7. Payment ledger. This preserves existing settlement evidence before
+    // USE_PG_PAYMENTS is enabled. Foreign keys require users/courses/enrollments
+    // to be loaded first.
+    const paymentOrders = data.paymentOrders || [];
+    console.log(`[backfill] Upserting ${paymentOrders.length} payment orders...`);
+    for (const order of paymentOrders) {
+      await client.query(
+        `INSERT INTO payment_orders (
+           order_id, receipt, provider, user_id, course_id, amount_cents,
+           currency, status, provider_payment_id, created_at, expires_at,
+           paid_at, updated_at
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6,
+           $7, $8, $9, $10, $11,
+           $12, $13
+         ) ON CONFLICT (order_id) DO NOTHING`,
+        [
+          order.orderId, order.receipt, order.provider || "Razorpay",
+          order.userId, order.courseId, order.amountCents, order.currency || "INR",
+          order.status || "Created", order.paymentId || null,
+          order.createdAt, order.expiresAt, order.paidAt || null, order.updatedAt || null,
+        ]
+      );
+    }
+
+    const paymentTransactions = data.paymentTransactions || [];
+    console.log(`[backfill] Upserting ${paymentTransactions.length} payment transactions...`);
+    for (const transaction of paymentTransactions) {
+      await client.query(
+        `INSERT INTO payment_transactions (
+           id, order_id, provider_payment_id, user_id, course_id, amount_cents,
+           currency, status, source, created_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'Paid', $8, $9)
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          transaction.id, transaction.orderId, transaction.paymentId,
+          transaction.userId, transaction.courseId, transaction.amountCents,
+          transaction.currency || "INR", transaction.source || "Checkout",
+          transaction.createdAt,
+        ]
+      );
+    }
+
+    const paymentWebhookEvents = data.paymentWebhookEvents || [];
+    console.log(`[backfill] Upserting ${paymentWebhookEvents.length} payment webhook events...`);
+    for (const event of paymentWebhookEvents) {
+      await client.query(
+        `INSERT INTO payment_webhook_events (
+           event_id, event_type, body_sha256, order_id, provider_payment_id,
+           status, received_at, processed_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (event_id) DO NOTHING`,
+        [
+          event.eventId, event.eventType, event.bodySha256,
+          event.orderId || null, event.paymentId || null, event.status,
+          event.receivedAt, event.processedAt,
         ]
       );
     }

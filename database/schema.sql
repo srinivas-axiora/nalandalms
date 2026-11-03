@@ -92,29 +92,33 @@ CREATE INDEX idx_rate_limit_ip_endpoint ON rate_limit_log(ip_address, endpoint, 
 -- DELETE FROM rate_limit_log WHERE requested_at < now() - INTERVAL '5 minutes';
 
 CREATE TABLE skills (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
-  category TEXT NOT NULL DEFAULT 'Technical',
+  category TEXT NOT NULL DEFAULT 'Technical'
+    CHECK (category IN ('Technical', 'Functional', 'Leadership', 'Compliance', 'Behavioral')),
   description TEXT NOT NULL DEFAULT '',
-  status lifecycle_status NOT NULL DEFAULT 'Active',
-  parent_skill_id UUID REFERENCES skills(id),
+  status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Inactive')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE UNIQUE INDEX idx_skills_name_lower ON skills (lower(name));
+
 CREATE TABLE target_skills (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  skill_id UUID NOT NULL REFERENCES skills(id),
+  id TEXT PRIMARY KEY,
+  skill_id TEXT NOT NULL REFERENCES skills(id),
   scope TEXT NOT NULL CHECK (scope IN ('Organization', 'Department', 'Role', 'Employee')),
   department TEXT,
   designation TEXT,
   user_id TEXT REFERENCES users(id),
-  target_level TEXT NOT NULL DEFAULT 'Intermediate',
-  target_score INTEGER NOT NULL DEFAULT 80,
+  target_level TEXT NOT NULL DEFAULT 'Intermediate'
+    CHECK (target_level IN ('Beginner', 'Intermediate', 'Advanced', 'Expert')),
+  target_score INTEGER NOT NULL DEFAULT 80 CHECK (target_score >= 0 AND target_score <= 100),
   priority TEXT NOT NULL DEFAULT 'Medium' CHECK (priority IN ('Low', 'Medium', 'High')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_target_skills_scope ON target_skills(scope, department);
+CREATE INDEX idx_target_skills_skill ON target_skills(skill_id);
 
 CREATE TABLE courses (
   id TEXT PRIMARY KEY,
@@ -133,6 +137,10 @@ CREATE TABLE courses (
   current_version INTEGER NOT NULL DEFAULT 1,
   difficulty TEXT NOT NULL DEFAULT 'Beginner',
   estimated_hours NUMERIC(5,1) NOT NULL DEFAULT 1,
+  price_cents INTEGER NOT NULL DEFAULT 0
+    CONSTRAINT courses_price_cents_nonnegative CHECK (price_cents >= 0),
+  currency TEXT NOT NULL DEFAULT 'INR'
+    CONSTRAINT courses_currency_iso4217 CHECK (currency ~ '^[A-Z]{3}$'),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -459,6 +467,8 @@ CREATE TABLE payment_orders (
 
 CREATE INDEX idx_payment_orders_user_course ON payment_orders(user_id, course_id, created_at DESC);
 CREATE INDEX idx_payment_orders_status_expiry ON payment_orders(status, expires_at);
+CREATE UNIQUE INDEX idx_payment_orders_one_open
+  ON payment_orders(user_id, course_id) WHERE status = 'Created';
 
 CREATE TABLE payment_transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -28,6 +28,7 @@ $env:AWS_PROFILE = "YOUR_PROFILE"
 
 .\infra\aws\deploy-staging.ps1 `
   -Region ap-south-1 `
+  -PrepareRelationalDatabase `
   -RazorpayKeyIdSecretArn arn:aws:secretsmanager:...:secret:razorpay-key-id `
   -RazorpayKeySecretArn arn:aws:secretsmanager:...:secret:razorpay-key-secret `
   -RazorpayWebhookSecretArn arn:aws:secretsmanager:...:secret:razorpay-webhook
@@ -35,6 +36,9 @@ $env:AWS_PROFILE = "YOUR_PROFILE"
 
 CloudFront provisioning commonly takes several minutes. The script prints the
 application URL and operational resource identifiers after the stack completes.
+`-PrepareRelationalDatabase` runs the guarded baseline/migrations and then an
+idempotent snapshot backfill inside the VPC. It does not enable any PostgreSQL
+feature flag. Review and reconcile the result before a separate cutover.
 
 ## First-login and validation
 
@@ -55,7 +59,9 @@ production PII, payment records or real candidate evidence into this stack.
 
 ## Known production blockers
 
-- Whole-state JSONB persistence and in-memory runtime state require one writer.
+- A transactional PostgreSQL payment path now exists behind a disabled flag;
+  whole-state JSONB persistence and the remaining in-memory state still require
+  one writer.
 - No zero-downtime deployment or multi-AZ application service is safe yet.
 - The stack does not yet attach AWS WAF or a custom domain/certificate.
 - Malware scanning/quarantine must be added before untrusted file uploads are

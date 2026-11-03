@@ -12,6 +12,9 @@ const mapCourse = (r) => ({
   targetLevel: r.target_level,
   difficulty: r.difficulty || "Beginner",
   estimatedHours: Number(r.estimated_hours || 4),
+  priceCents: Number(r.price_cents || 0),
+  currency: r.currency || "INR",
+  isFree: Number(r.price_cents || 0) === 0,
   category: r.category || "General",
   prerequisites: r.prerequisites || [],
   tags: r.tags || [],
@@ -56,13 +59,13 @@ export async function insertCourse(course) {
   const { rows } = await query(
     `INSERT INTO courses (
        id, title, description, skill, skill_ids, target_level, difficulty,
-       estimated_hours, category, prerequisites, tags, thumbnail_color,
+       estimated_hours, price_cents, currency, category, prerequisites, tags, thumbnail_color,
        status, approval, owner_id, current_version, created_at, updated_at
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7,
-       $8, $9, $10, $11, $12,
-       $13::lifecycle_status, $14::approval_status, $15, $16,
-       COALESCE($17::timestamptz, now()), now()
+       $8, $9, $10, $11, $12, $13, $14,
+       $15::lifecycle_status, $16::approval_status, $17, $18,
+       COALESCE($19::timestamptz, now()), now()
      ) RETURNING *`,
     [
       course.id,
@@ -73,6 +76,8 @@ export async function insertCourse(course) {
       course.targetLevel || "Beginner",
       course.difficulty || "Beginner",
       course.estimatedHours || 4,
+      course.priceCents || 0,
+      course.currency || "INR",
       course.category || "General",
       course.prerequisites || [],
       course.tags || [],
@@ -105,6 +110,8 @@ export async function updateCourse(id, updates) {
   mapField("targetLevel", "target_level");
   mapField("difficulty", "difficulty");
   mapField("estimatedHours", "estimated_hours");
+  mapField("priceCents", "price_cents");
+  mapField("currency", "currency");
   mapField("category", "category");
   mapField("prerequisites", "prerequisites");
   mapField("tags", "tags");

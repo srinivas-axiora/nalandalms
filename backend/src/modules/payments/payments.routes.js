@@ -42,9 +42,9 @@ export function registerPayments(app) {
     }
   });
 
-  app.post("/api/payments/webhook", (req, res, next) => {
+  app.post("/api/payments/webhook", async (req, res, next) => {
     try {
-      return res.json(processWebhook({
+      return res.json(await processWebhook({
         rawBody: req.rawBody,
         body: req.body,
         signature: req.headers["x-razorpay-signature"],

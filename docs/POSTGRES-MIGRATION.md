@@ -1,14 +1,15 @@
-# Nalanda — PostgreSQL Data-Layer Migration (Phase 2)
+# Nalanda — PostgreSQL data-layer migration
 
-Status: **in progress — kickoff slice delivered.** Owner: Engineering.
-Date: 2026-06-23.
+Status: **in progress — skills pilot and payment transaction boundary built.**
+Owner: Engineering. Updated: 2026-11-03.
 
 > ⚠️ **This code is UNVERIFIED by the author.** It was written without a live
 > PostgreSQL to execute against (per the agreed "build it blind, I'll test"
 > approach). All JavaScript is syntax-checked; the SQL and runtime behavior MUST
 > be validated against a real database using the steps in §4 before any cutover.
-> It is **purely additive** — the running app still uses the existing in-memory /
-> JSON-blob store and is unaffected until each entity is wired in (§5).
+> It is feature-gated — most of the running app still uses the existing
+> in-memory/JSONB snapshot store. `USE_PG_SKILLS` and `USE_PG_PAYMENTS` must stay
+> off until their live-database gates pass.
 
 ---
 
@@ -26,10 +27,13 @@ Date: 2026-06-23.
 ```
 backend/src/db/pool.js                      pooled pg client + query()/withTransaction()
 backend/src/db/migrate.js                   forward-only migration runner (schema_migrations)
-backend/src/db/backfill.js                  copy existing skills/target_skills into SQL
+backend/src/db/bootstrap.js                 guarded empty-database baseline + migrations
+backend/src/db/backfill.js                  app_state/JSON snapshot relational backfill
 backend/src/db/verify-skills.mjs            one-command verification of the pilot
 backend/src/repositories/skills.repository.pg.js   SQL repository (API-shaped output)
 database/migrations/0001_skills.sql         reconciled skills + target_skills tables
+database/migrations/0005_payment_runtime_cutover.sql price/currency + open-order invariant
+backend/src/repositories/payments.repository.pg.js atomic payment/enrollment/audit ledger
 ```
 
 The **skills** bounded context is the pilot (like the certificates pilot for the
@@ -59,11 +63,12 @@ Naming: snake_case columns in SQL, camelCase in JS — repositories own the mapp
 export DATABASE_URL='postgres://user:pass@host:5432/nalanda'
 export PGSSL=require        # 'require' (verify cert) | 'no-verify' (managed self-signed) | unset (local)
 
-# 2. Apply migrations (idempotent)
-node backend/src/db/migrate.js
+# 2. Create the normalized baseline when empty, then apply migrations.
+# The command refuses to continue over a partial relational schema.
+npm run db:bootstrap
 
-# 3. Backfill existing skills/target_skills (idempotent upserts)
-node backend/src/db/backfill.js
+# 3. Backfill the current app_state snapshot (or local db.json fallback)
+npm run db:backfill
 
 # 4. One-command pilot verification (migrate + backfill + exercise repo + cleanup)
 node backend/src/db/verify-skills.mjs
@@ -108,9 +113,12 @@ For each bounded context, in roughly ascending coupling:
 - [x] skills, target_skills  *(pilot — schema + repo + backfill)*
 - [x] skills/target_skills **module cutover wired behind `USE_PG_SKILLS=1`** —
       default-off path verified unchanged; on-path uses Postgres (verify against a real DB)
+- [x] payment order/transaction/webhook repository and atomic entitlement/audit
+      settlement built behind `USE_PG_PAYMENTS=1` (live-DB gate still pending)
 - [ ] chapter_feedbacks
 - [ ] users  (+ login_security, session_versions)
-- [ ] courses
+- [ ] courses (price/currency schema and repository mapping complete; route-wide
+      source-of-truth cutover remains)
 - [ ] chapters  (+ chapter_time_totals / learning_time_events)
 - [ ] assessments (+ questions as JSONB)  ·  enrollments(assignments)
 - [ ] attempts (+ answers/flags as JSONB; reconcile status CHECK)
@@ -125,10 +133,12 @@ Each entity: add migration SQL → repository → backfill → verify → wire m
 ## 7. Risks / open items
 
 - **Unverified SQL** (this slice) — must pass §4 before trusting it.
+- **Payment cutover remains disabled** until the live PostgreSQL and concurrency
+  gates in `SECURITY-PHASE-6-PAYMENT-PERSISTENCE.md` pass.
 - **`now()`-seeded timestamps** are identical across seed rows, so list ordering
   by `created_at` is approximate; if exact order matters, add a sort key.
-- **Source for backfill** assumes `database/db.json`; if production is on the
-  Phase-1 JSONB adapter, export that collection first or adapt `backfill.js`.
+- **Backfill source** prefers the PostgreSQL `app_state` snapshot, then local
+  `database/db.json`, and only uses seed state when neither contains data.
 - **Transactions across entities** (e.g., course delete cascading to chapters/
   assessments/enrollments + archive) must move into a single `withTransaction`
   when those entities are migrated, to preserve the current all-or-nothing behavior.

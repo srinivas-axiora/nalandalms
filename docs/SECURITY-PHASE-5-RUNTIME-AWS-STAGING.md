@@ -59,8 +59,9 @@ mandatory staging gates, not assumed successes.
 
 ## Remaining production blockers
 
-- Complete normalized relational repositories and remove whole-state snapshot
-  persistence before enabling multiple tasks.
+- Phase 6 now provides a feature-gated transactional payment repository, but it
+  still requires live PostgreSQL/concurrency validation and the remaining
+  normalized repositories before enabling multiple tasks.
 - Validate container build and CloudFormation deployment in the staging account.
 - Add malware scanning/quarantine, AWS WAF, custom domain/certificate, access
   logs, alarms and incident routing.

@@ -12,7 +12,10 @@
     "test": "vitest run",
     "test:security": "vitest run --config vitest.security.config.ts",
     "typecheck": "tsc -p frontend/tsconfig.json --noEmit",
-    "routes:inventory": "node scripts/authorization-matrix.mjs --json"
+    "routes:inventory": "node scripts/authorization-matrix.mjs --json",
+    "db:bootstrap": "node backend/src/db/bootstrap.js",
+    "db:migrate": "node backend/src/db/migrate.js",
+    "db:backfill": "node backend/src/db/backfill.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1160.0",
