@@ -66,6 +66,10 @@ if (IS_PRODUCTION) {
     console.error("FATAL: PRIVACY_PSEUDONYM_SECRET must be at least 32 characters when privacy erasure is enabled.");
     process.exit(1);
   }
+  if (process.env.USE_PG_COURSES === "1") {
+    console.error("FATAL: USE_PG_COURSES is an incomplete Phase-12 cutover and cannot run in production yet.");
+    process.exit(1);
+  }
 }
 
 // File uploads are buffered in memory, so cap size aggressively and validate type.

@@ -131,6 +131,10 @@ CREATE TABLE courses (
   category TEXT NOT NULL DEFAULT 'General',
   tags TEXT[] NOT NULL DEFAULT '{}',
   thumbnail_color TEXT NOT NULL DEFAULT '#22d3ee',
+  content_types TEXT[] NOT NULL DEFAULT ARRAY['Rich Text']::text[],
+  storage_metadata JSONB NOT NULL DEFAULT '{"files":[]}'::jsonb
+    CONSTRAINT courses_storage_metadata_object
+    CHECK (jsonb_typeof(storage_metadata) = 'object'),
   status lifecycle_status NOT NULL DEFAULT 'Active',
   approval approval_status NOT NULL DEFAULT 'Draft',
   owner_id TEXT NOT NULL REFERENCES users(id),
@@ -147,6 +151,7 @@ CREATE TABLE courses (
 
 CREATE INDEX idx_courses_status_approval ON courses(status, approval);
 CREATE INDEX idx_courses_skill ON courses(skill);
+CREATE INDEX idx_courses_owner ON courses(owner_id, created_at DESC);
 
 CREATE TABLE course_versions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -209,11 +214,20 @@ CREATE TABLE enrollments (
   chapter_time_spent_total_seconds INTEGER NOT NULL DEFAULT 0,
   assessment_time_spent_seconds INTEGER NOT NULL DEFAULT 0,
   chapter_time_spent_seconds JSONB NOT NULL DEFAULT '{}',
+  chapter_heartbeat_timestamps JSONB NOT NULL DEFAULT '{}'
+    CONSTRAINT enrollments_heartbeat_timestamps_object
+    CHECK (jsonb_typeof(chapter_heartbeat_timestamps) = 'object'),
+  video_progress JSONB NOT NULL DEFAULT '{}'
+    CONSTRAINT enrollments_video_progress_object
+    CHECK (jsonb_typeof(video_progress) = 'object'),
+  last_heartbeat_at TIMESTAMPTZ,
   status TEXT NOT NULL DEFAULT 'Enrolled' CHECK (status IN (
     'Enrolled', 'InProgress', 'ChaptersComplete', 'AssessmentEligible',
     'Passed', 'Failed', 'Certified'
   )),
   certificate_id TEXT,
+  version INTEGER NOT NULL DEFAULT 0
+    CONSTRAINT enrollments_version_nonnegative CHECK (version >= 0),
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   completed_at TIMESTAMPTZ,
   CHECK (time_spent_seconds >= 0),
@@ -224,6 +238,7 @@ CREATE TABLE enrollments (
 
 CREATE INDEX idx_enrollments_user ON enrollments(user_id);
 CREATE INDEX idx_enrollments_course ON enrollments(course_id);
+CREATE INDEX idx_enrollments_assigned_by ON enrollments(assigned_by, started_at DESC);
 COMMENT ON COLUMN enrollments.time_spent_seconds IS 'Course total time in seconds. Includes chapter learning time plus assessment attempt time.';
 COMMENT ON COLUMN enrollments.chapter_time_spent_seconds IS 'Denormalized API cache keyed by chapter_id. Canonical reporting rows are stored in chapter_time_totals.';
 

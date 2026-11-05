@@ -53,14 +53,14 @@ or step-up middleware disagrees with its declaration.
 | Method | Route | Auth | State | CSRF | Step | Rate | Scope / concern |
 |---|---|---|---:|---|---:|---|---|
 | GET | `/api/catalog` | Public | N | N/A | N | G | Approved active course metadata |
-| POST | `/api/courses/:id/enroll` | Any | Y | Y | N | G | No prerequisite enforcement or DB uniqueness |
-| GET | `/api/courses` | Any | N | N/A | N | G | Role-scoped through `coursesVisibleTo` |
-| POST | `/api/courses` | A/M | Y | Y | N | G | Multipart MIME trusted; files become public |
-| PUT | `/api/courses/:id` | A/M | Y | Y | N | G | Ownership checked; no optimistic locking |
-| POST | `/api/courses/:id/duplicate` | A/M | Y | Y | N | G | Missing source-course ownership check |
-| PATCH | `/api/courses/:id/approval` | A | Y | Y | N | G | Sensitive approval lacks step-up |
+| POST | `/api/courses/:id/enroll` | Any | Y | Y | N | G | Phase-12 relational mode locks the course and uses enrollment uniqueness; prerequisite policy remains pending |
+| GET | `/api/courses` | Any | N | N/A | N | G | Role/enrollment scoped; Phase-12 relational mode uses database joins |
+| POST | `/api/courses` | A/M | Y | Y | N | G | Phase-12 relational mode accepts validated metadata only; media uses scoped object grants |
+| PUT | `/api/courses/:id` | A/M | Y | Y | N | G | Phase-12 relational mode enforces owner/admin scope and optimistic versioning |
+| POST | `/api/courses/:id/duplicate` | A/M | Y | Y | N | G | Phase-12 relational mode rejects foreign-manager duplication |
+| PATCH | `/api/courses/:id/approval` | A | Y | Y | Y | G | Step-up required; Phase-12 relational mode also requires a current version and review reason |
 | PATCH | `/api/courses/:id/status` | A | Y | Y | Y | G | Step-up present |
-| DELETE | `/api/courses/:id` | A/M | Y | Y | Y | G | Ownership checked; cascades in arrays |
+| DELETE | `/api/courses/:id` | A/M | Y | Y | Y | G | Phase-12 relational mode versions/archives and refuses deletion when retained learning, payment or credential history exists |
 | GET | `/api/courses/:courseId/chapters` | Any | N | N/A | N | G | Locked chapters still return body/URLs |
 | POST | `/api/courses/:courseId/chapters` | A/M | Y | Y | N | G | Ownership and HTML sanitization present |
 | PUT | `/api/courses/:courseId/chapters/:chapterId` | A/M | Y | Y | N | G | Ownership and sanitization present |

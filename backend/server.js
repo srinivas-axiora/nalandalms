@@ -66,6 +66,7 @@ import { attemptsRepository } from "./src/repositories/attempts.repository.pg.js
 import { replaceAttemptProjection } from "./src/attempt-projection.js";
 import { certificatesPgRepository } from "./src/repositories/certificates.repository.pg.js";
 import { candidateAssessmentsPgRepository } from "./src/repositories/candidate-assessments.repository.pg.js";
+import { courseAuthorityRepository } from "./src/repositories/courses-authority.repository.pg.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG = process.env.USE_PG === "1";
@@ -76,6 +77,7 @@ const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
 const USE_PG_CERTIFICATES = process.env.USE_PG_CERTIFICATES === "1";
 const USE_PG_CANDIDATE_ASSESSMENTS = process.env.USE_PG_CANDIDATE_ASSESSMENTS === "1";
 const USE_PG_PRIVACY = process.env.USE_PG_PRIVACY === "1";
+const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 const ENABLE_PRIVACY_ERASURE_WORKER = process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1";
 const PRIVACY_COVERAGE_ACK = process.env.PRIVACY_COVERAGE_ACK === "normalized-v1";
 
@@ -318,12 +320,19 @@ app.get("/api/ready", async (_req, res) => {
         })).catch(() => ({ ok: false, mode: "normalized", worker: "unknown" }))
       : Promise.resolve({ ok: true, mode: "disabled", worker: "disabled" }),
   ]);
+  // Course authority is intentionally an incomplete Phase-12 cutover. Enabling
+  // it before chapter/progress consumers migrate must drain the task from ALB.
+  const courseAuthority = {
+    ok: !USE_PG_COURSES,
+    mode: USE_PG_COURSES ? "experimental-course-only" : "disabled",
+  };
   const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok
-    && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok && privacyAuthority.ok;
+    && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok && privacyAuthority.ok
+    && courseAuthority.ok;
   if (!ok) logger.error("READINESS_CHECK_FAILED", {
     database, redis, objects, payments, identity, attempts: attemptRuntime,
     certificates: certificateAuthority, candidateAssessments: candidateRuntime,
-    privacy: privacyAuthority, startupReady,
+    privacy: privacyAuthority, courses: courseAuthority, startupReady,
   });
   res.status(ok ? 200 : 503).json({
     ok,
@@ -342,6 +351,7 @@ app.get("/api/ready", async (_req, res) => {
         mode: privacyAuthority.mode,
         worker: privacyAuthority.worker,
       },
+      courses: courseAuthority,
     },
   });
 });
@@ -363,9 +373,14 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   const visibleUserIds = new Set(visibleUserIdsFor(req.user));
   const allSkills = USE_PG_SKILLS ? await skillsRepo.listSkills() : skills;
   const allTargetSkills = USE_PG_SKILLS ? await skillsRepo.listTargetSkills() : targetSkills;
-  const visibleCourses = coursesVisibleTo(req.user);
+  const visibleCourses = USE_PG_COURSES
+    ? await courseAuthorityRepository.listVisible({ actor: req.user, status: "Active" })
+    : coursesVisibleTo(req.user);
   const visibleCourseIds = new Set(visibleCourses.map((course) => course.id));
-  const scopedAssignments = assignments.filter((assignment) => assignmentVisibleTo(assignment, req.user) && (admin || visibleCourseIds.has(assignment.courseId)));
+  const authoritativeAssignments = USE_PG_COURSES
+    ? await enrollmentsRepo.listEnrollments()
+    : assignments;
+  const scopedAssignments = authoritativeAssignments.filter((assignment) => assignmentVisibleTo(assignment, req.user) && (admin || visibleCourseIds.has(assignment.courseId)));
   const authoritativeAttempts = USE_PG_ATTEMPTS ? await attemptsRepository.list() : attempts;
   const authoritativeProctoring = USE_PG_ATTEMPTS
     ? await attemptsRepository.listProctorEvents(admin ? {} : { userIds: [...visibleUserIds] })
@@ -379,7 +394,10 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   const scopedCandidateAssessments = USE_PG_CANDIDATE_ASSESSMENTS
     ? await candidateAssessmentsPgRepository.listForUser(req.user)
     : (admin ? candidateAssessments : candidateAssessments.filter((item) => item.createdBy === req.user.id));
-  const scopedChapters = chapters.filter((chapter) => visibleCourseIds.has(chapter.courseId));
+  const authoritativeChapters = USE_PG_COURSES
+    ? await chaptersRepo.listChapters()
+    : chapters;
+  const scopedChapters = authoritativeChapters.filter((chapter) => visibleCourseIds.has(chapter.courseId));
   const scopedAssessments = assessmentsVisibleTo(req.user).map((assessment) => assessmentForUser(assessment, req.user));
   const scopedUsers = users.filter((user) => visibleUserIds.has(user.id)).map(publicUser);
   res.json({

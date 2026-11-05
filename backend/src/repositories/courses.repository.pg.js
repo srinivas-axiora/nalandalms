@@ -19,13 +19,16 @@ const mapCourse = (r) => ({
   prerequisites: r.prerequisites || [],
   tags: r.tags || [],
   thumbnailColor: r.thumbnail_color || "#22d3ee",
+  contentTypes: r.content_types || ["Rich Text"],
   status: r.status,
   approval: r.approval,
   ownerId: r.owner_id,
   version: r.current_version || 1,
   createdAt: iso(r.created_at),
   updatedAt: iso(r.updated_at),
-  storage: r.storage_metadata ? JSON.parse(r.storage_metadata) : { files: [] },
+  storage: typeof r.storage_metadata === "string"
+    ? JSON.parse(r.storage_metadata)
+    : (r.storage_metadata || { files: [] }),
 });
 
 export async function listCourses(filters = {}) {

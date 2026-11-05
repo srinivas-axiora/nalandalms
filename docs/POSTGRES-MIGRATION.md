@@ -1,7 +1,7 @@
 # Nalanda — PostgreSQL data-layer migration
 
-Status: **in progress — skills, payment, identity, attempt, certificate, candidate and privacy boundaries built.**
-Owner: Engineering. Updated: 2026-11-03.
+Status: **in progress — skills, payment, identity, attempt, certificate, candidate, privacy and course boundaries built.**
+Owner: Engineering. Updated: 2026-11-05.
 
 > ⚠️ **This code is UNVERIFIED by the author.** It was written without a live
 > PostgreSQL to execute against (per the agreed "build it blind, I'll test"
@@ -13,6 +13,8 @@ Owner: Engineering. Updated: 2026-11-03.
 > `USE_PG_CANDIDATE_ASSESSMENTS` must stay off until their live-database gates
 > pass. `USE_PG_PRIVACY` and its separate erasure-worker switch must also stay
 > off until the Phase 11 coverage audit passes.
+> `USE_PG_COURSES` is a Phase-12 experimental slice and intentionally makes
+> readiness fail until chapter/progress consumers are also migrated.
 
 ---
 
@@ -156,8 +158,10 @@ For each bounded context, in roughly ascending coupling:
       and completion evidence are implemented behind `USE_PG_PRIVACY=1` and
       `ENABLE_PRIVACY_ERASURE_WORKER=1` (Phase 11; live-DB, coverage and AWS
       restore/erasure gates still pending)
-- [ ] courses (price/currency schema and repository mapping complete; route-wide
-      source-of-truth cutover remains)
+- [x] transactional course catalog/lifecycle authority implemented behind
+      `USE_PG_COURSES=1` with versioning, durable audit, race-safe free
+      enrollment and history-protected deletion (Phase 12 foundation; readiness
+      intentionally fails until the remaining content consumers migrate)
 - [ ] chapters  (+ chapter_time_totals / learning_time_events)
 - [ ] assessments source-of-truth routes (+ questions as JSONB)  ·
       enrollments(assignments); candidate links now freeze a relational runtime

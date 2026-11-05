@@ -8,8 +8,12 @@ import { courses, chapters, assessments, assignments, archives, users, now, next
 import { audit, canManageCourse, coursesVisibleTo } from "../../domain.js";
 import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
 import { bufferMatchesContentType } from "../../security/file-validation.js";
+import { registerCoursesPgRoutes } from "./courses.pg.routes.js";
+
+const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 
 export function registerCourses(app) {
+  if (USE_PG_COURSES) return registerCoursesPgRoutes(app);
   // ── Public Course Catalog (No Auth Required) ──
   app.get("/api/catalog", (req, res) => {
     const { skill, category, difficulty, search } = req.query;
@@ -204,7 +208,7 @@ export function registerCourses(app) {
     res.status(201).json({ data: copy });
   });
 
-  app.patch("/api/courses/:id/approval", authenticate, requireRole("Admin"), (req, res) => {
+  app.patch("/api/courses/:id/approval", authenticate, requireRole("Admin"), requireStepUp, (req, res) => {
     const schema = z.object({ approval: z.enum(["Approved", "Rejected"]), reason: z.string().optional() });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });

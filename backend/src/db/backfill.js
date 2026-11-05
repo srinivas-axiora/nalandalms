@@ -140,24 +140,29 @@ export async function backfill() {
         `INSERT INTO courses (
            id, title, description, skill, skill_ids, target_level, difficulty,
            estimated_hours, price_cents, currency, category, prerequisites, tags, thumbnail_color,
-           status, approval, owner_id, current_version, created_at, updated_at
+           content_types, storage_metadata, status, approval, owner_id,
+           current_version, created_at, updated_at
          ) VALUES (
            $1, $2, $3, $4, $5, $6, $7,
            $8, $9, $10, $11, $12, $13, $14,
-           $15::lifecycle_status, $16::approval_status, $17, $18,
-           COALESCE($19::timestamptz, now()), now()
+           $15, $16::jsonb, $17::lifecycle_status, $18::approval_status, $19,
+           $20, COALESCE($21::timestamptz, now()), now()
          ) ON CONFLICT (id) DO UPDATE SET
            title = EXCLUDED.title, description = EXCLUDED.description,
            skill = EXCLUDED.skill, price_cents = EXCLUDED.price_cents,
            currency = EXCLUDED.currency, status = EXCLUDED.status,
-           approval = EXCLUDED.approval`,
+           approval = EXCLUDED.approval,
+           content_types = EXCLUDED.content_types,
+           storage_metadata = EXCLUDED.storage_metadata`,
         [
           c.id, c.title, c.description, c.skill || "", c.skillIds || [],
           c.targetLevel || "Beginner", c.difficulty || "Beginner", c.estimatedHours || 4,
           c.priceCents || 0, c.currency || "INR", c.category || "General",
           c.prerequisites || [], c.tags || [], c.thumbnailColor || "#22d3ee",
+          c.contentTypes || ["Rich Text"], JSON.stringify(c.storage || { files: [] }),
           c.status || "Active", c.approval || "Approved",
-          c.ownerId || users[0]?.id || "SAnalanda", c.version || 1, c.createdAt || null,
+          c.ownerId || users[0]?.id || "SAnalanda", c.version || 1,
+          c.createdAt || null,
         ]
       );
     }
@@ -233,24 +238,32 @@ export async function backfill() {
         `INSERT INTO enrollments (
            id, course_id, user_id, assigned_by, due_at, priority,
            mandatory, progress, completed_chapters, time_spent_minutes,
-           time_spent_seconds, chapter_time_spent_seconds, status,
-           certificate_id, started_at, completed_at
+           time_spent_seconds, chapter_time_spent_seconds,
+           chapter_heartbeat_timestamps, video_progress, last_heartbeat_at,
+           version, status, certificate_id, started_at, completed_at
          ) VALUES (
            $1, $2, $3, $4, $5, $6,
            $7, $8, $9, $10,
-           $11, $12, $13, $14,
-           COALESCE($15::timestamptz, now()), $16
+           $11, $12, $13, $14, $15,
+           $16, $17, $18,
+           COALESCE($19::timestamptz, now()), $20
          ) ON CONFLICT (course_id, user_id) DO UPDATE SET
            progress = EXCLUDED.progress, completed_chapters = EXCLUDED.completed_chapters,
            status = EXCLUDED.status, certificate_id = EXCLUDED.certificate_id,
-           completed_at = EXCLUDED.completed_at`,
+           completed_at = EXCLUDED.completed_at,
+           chapter_heartbeat_timestamps = EXCLUDED.chapter_heartbeat_timestamps,
+           video_progress = EXCLUDED.video_progress,
+           last_heartbeat_at = EXCLUDED.last_heartbeat_at,
+           version = GREATEST(enrollments.version, EXCLUDED.version)`,
         [
           e.id, e.courseId, e.userId,
           userIds.has(e.assignedBy) ? e.assignedBy : e.userId,
           e.dueAt || null, e.priority || "Medium", e.mandatory ?? false,
           e.progress || 0, e.completedChapters || [], e.timeSpentMinutes || 0,
           e.timeSpentSeconds || 0, JSON.stringify(e.chapterTimeSpentSeconds || {}),
-          e.status || "Enrolled", e.certificateId || null,
+          JSON.stringify(e.lastHeartbeatTimestamps || {}),
+          JSON.stringify(e.videoProgress || {}), e.lastHeartbeatAt || null,
+          e.version || 0, e.status || "Enrolled", e.certificateId || null,
           e.startedAt || null, e.completedAt || null,
         ]
       );
