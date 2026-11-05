@@ -21,7 +21,7 @@ describe("experimental course authority readiness interlock", () => {
     expect(response.body).toMatchObject({
       ok: false,
       checks: {
-        courses: { ok: false, mode: "experimental-course-only" },
+        courses: { ok: false, mode: "experimental-learning-partial" },
       },
     });
   });

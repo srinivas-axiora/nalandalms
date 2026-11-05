@@ -179,6 +179,8 @@ CREATE TABLE chapters (
   file_name TEXT,
   duration_minutes INTEGER NOT NULL DEFAULT 10,
   minimum_time_minutes INTEGER NOT NULL DEFAULT 1 CHECK (minimum_time_minutes >= 0),
+  version INTEGER NOT NULL DEFAULT 1
+    CONSTRAINT chapters_version_positive CHECK (version >= 1),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -440,12 +442,21 @@ CREATE TABLE learning_time_events (
   assessment_id TEXT REFERENCES assessments(id),
   event_type TEXT NOT NULL CHECK (event_type IN ('CHAPTER_TIME', 'ASSESSMENT_TIME')),
   seconds_spent INTEGER NOT NULL CHECK (seconds_spent > 0),
+  idempotency_key TEXT
+    CONSTRAINT learning_time_events_idempotency_key_length
+    CHECK (idempotency_key IS NULL OR length(idempotency_key) BETWEEN 16 AND 128),
+  claimed_seconds INTEGER
+    CONSTRAINT learning_time_events_claimed_seconds_positive
+    CHECK (claimed_seconds IS NULL OR claimed_seconds > 0),
   recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_learning_time_user_course ON learning_time_events(user_id, course_id, recorded_at DESC);
 CREATE INDEX idx_learning_time_chapter ON learning_time_events(chapter_id, recorded_at DESC);
 CREATE INDEX idx_learning_time_assessment ON learning_time_events(assessment_id, recorded_at DESC);
+CREATE UNIQUE INDEX uq_learning_time_event_idempotency
+  ON learning_time_events(user_id, course_id, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE assessment_answers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

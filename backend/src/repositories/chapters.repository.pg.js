@@ -15,6 +15,7 @@ const mapChapter = (r) => ({
   fileName: r.file_name || undefined,
   durationMinutes: r.duration_minutes,
   minimumTimeMinutes: r.minimum_time_minutes ?? 1,
+  version: Number(r.version || 1),
   createdAt: iso(r.created_at),
   updatedAt: iso(r.updated_at),
 });

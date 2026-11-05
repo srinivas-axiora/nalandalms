@@ -1,6 +1,6 @@
 # Nalanda — PostgreSQL data-layer migration
 
-Status: **in progress — skills, payment, identity, attempt, certificate, candidate, privacy and course boundaries built.**
+Status: **in progress — skills, payment, identity, attempt, certificate, candidate, privacy and relational learning boundaries built.**
 Owner: Engineering. Updated: 2026-11-05.
 
 > ⚠️ **This code is UNVERIFIED by the author.** It was written without a live
@@ -13,8 +13,9 @@ Owner: Engineering. Updated: 2026-11-05.
 > `USE_PG_CANDIDATE_ASSESSMENTS` must stay off until their live-database gates
 > pass. `USE_PG_PRIVACY` and its separate erasure-worker switch must also stay
 > off until the Phase 11 coverage audit passes.
-> `USE_PG_COURSES` is a Phase-12 experimental slice and intentionally makes
-> readiness fail until chapter/progress consumers are also migrated.
+> `USE_PG_COURSES` now covers the Phase-12/13 course, chapter and progress
+> authority, but intentionally makes readiness fail until assessment eligibility
+> and every secondary content consumer are also migrated.
 
 ---
 
@@ -53,6 +54,12 @@ backend/src/db/verify-candidate-assessments.mjs live candidate/deadline/proctor 
 database/migrations/0010_privacy_erasure_workflow.sql durable privacy state machine/object outbox
 backend/src/repositories/privacy.repository.pg.js privacy request/export/erasure authority
 backend/src/db/verify-privacy.mjs                 live privacy lifecycle verifier
+database/migrations/0011_learning_content_authority.sql course/enrollment runtime fields
+backend/src/repositories/courses-authority.repository.pg.js transactional course authority
+backend/src/db/verify-courses.mjs                 live course lifecycle verifier
+database/migrations/0012_chapter_progress_authority.sql chapter versions + time idempotency
+backend/src/repositories/learning-authority.repository.pg.js chapter/progress authority
+backend/src/db/verify-learning.mjs                live lock/time/idempotency verifier
 ```
 
 The **skills** bounded context is the pilot (like the certificates pilot for the
@@ -99,6 +106,8 @@ npm run db:verify-attempts
 npm run db:verify-certificates
 npm run db:verify-candidate-assessments
 npm run db:verify-privacy
+npm run db:verify-courses
+npm run db:verify-learning
 ```
 
 If `verify-skills.mjs` prints all `ok`, the pilot pattern is sound and we proceed
@@ -162,7 +171,10 @@ For each bounded context, in roughly ascending coupling:
       `USE_PG_COURSES=1` with versioning, durable audit, race-safe free
       enrollment and history-protected deletion (Phase 12 foundation; readiness
       intentionally fails until the remaining content consumers migrate)
-- [ ] chapters  (+ chapter_time_totals / learning_time_events)
+- [x] transactional chapter authoring, locked-content projection, idempotent
+      server-clock progress, canonical chapter totals and learning-time events
+      implemented behind `USE_PG_COURSES=1` (Phase 13; live-DB and cross-task
+      race gates still pending)
 - [ ] assessments source-of-truth routes (+ questions as JSONB)  ·
       enrollments(assignments); candidate links now freeze a relational runtime
       snapshot but creation still reads the process-local assessment projection

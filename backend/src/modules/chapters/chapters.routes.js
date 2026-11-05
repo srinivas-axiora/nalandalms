@@ -6,8 +6,15 @@ import { courses, chapters, assignments, videoProgress, now, MAX_CHAPTER_TIME_IN
 import { canManageCourse, coursesVisibleTo, addChapterTime, chapterTimeFor, assessmentTimeFor, audit } from "../../domain.js";
 import { authenticate, requireRole } from "../../middleware.js";
 import { canAccessChapter, recordChapterHeartbeat } from "../enrollments/progress.service.js";
+import { registerChaptersPgRoutes } from "./chapters.pg.routes.js";
+
+const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 
 export function registerChapters(app) {
+  if (USE_PG_COURSES) {
+    registerChaptersPgRoutes(app);
+    return;
+  }
   app.get("/api/courses/:courseId/chapters", authenticate, (req, res) => {
     const course = courses.find((item) => item.id === req.params.courseId);
     if (!course) return res.status(404).json({ error: "Course not found" });

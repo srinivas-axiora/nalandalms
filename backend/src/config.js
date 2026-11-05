@@ -67,7 +67,7 @@ if (IS_PRODUCTION) {
     process.exit(1);
   }
   if (process.env.USE_PG_COURSES === "1") {
-    console.error("FATAL: USE_PG_COURSES is an incomplete Phase-12 cutover and cannot run in production yet.");
+    console.error("FATAL: USE_PG_COURSES is an incomplete relational learning cutover and cannot run in production yet.");
     process.exit(1);
   }
 }

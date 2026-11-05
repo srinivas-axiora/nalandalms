@@ -320,11 +320,12 @@ app.get("/api/ready", async (_req, res) => {
         })).catch(() => ({ ok: false, mode: "normalized", worker: "unknown" }))
       : Promise.resolve({ ok: true, mode: "disabled", worker: "disabled" }),
   ]);
-  // Course authority is intentionally an incomplete Phase-12 cutover. Enabling
-  // it before chapter/progress consumers migrate must drain the task from ALB.
+  // The relational learning workflow is still a partial cutover. Course,
+  // chapter and progress authority exist, but assessment eligibility and
+  // secondary consumers are not fully migrated; enabled tasks must drain.
   const courseAuthority = {
     ok: !USE_PG_COURSES,
-    mode: USE_PG_COURSES ? "experimental-course-only" : "disabled",
+    mode: USE_PG_COURSES ? "experimental-learning-partial" : "disabled",
   };
   const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok
     && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok && privacyAuthority.ok

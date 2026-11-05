@@ -174,17 +174,18 @@ export async function backfill() {
       await client.query(
         `INSERT INTO chapters (
            id, course_id, sequence, title, description, content_type,
-           body, url, file_name, duration_minutes, minimum_time_minutes, created_at, updated_at
+           body, url, file_name, duration_minutes, minimum_time_minutes, version, created_at, updated_at
          ) VALUES (
            $1, $2, $3, $4, $5, $6,
-           $7, $8, $9, $10, $11, COALESCE($12::timestamptz, now()), now()
+           $7, $8, $9, $10, $11, $12, COALESCE($13::timestamptz, now()), now()
          ) ON CONFLICT (id) DO UPDATE SET
-           title = EXCLUDED.title, body = EXCLUDED.body, content_type = EXCLUDED.content_type`,
+           title = EXCLUDED.title, body = EXCLUDED.body, content_type = EXCLUDED.content_type,
+           version = GREATEST(chapters.version, EXCLUDED.version)`,
         [
           ch.id, ch.courseId, ch.sequence || 1, ch.title, ch.description || "",
           ch.contentType || "Rich Text", ch.body || "", ch.url || null,
           ch.fileName || null, ch.durationMinutes || 10, ch.minimumTimeMinutes ?? 1,
-          ch.createdAt || null,
+          ch.version || 1, ch.createdAt || null,
         ]
       );
     }

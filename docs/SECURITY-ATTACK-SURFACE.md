@@ -61,13 +61,13 @@ or step-up middleware disagrees with its declaration.
 | PATCH | `/api/courses/:id/approval` | A | Y | Y | Y | G | Step-up required; Phase-12 relational mode also requires a current version and review reason |
 | PATCH | `/api/courses/:id/status` | A | Y | Y | Y | G | Step-up present |
 | DELETE | `/api/courses/:id` | A/M | Y | Y | Y | G | Phase-12 relational mode versions/archives and refuses deletion when retained learning, payment or credential history exists |
-| GET | `/api/courses/:courseId/chapters` | Any | N | N/A | N | G | Locked chapters still return body/URLs |
-| POST | `/api/courses/:courseId/chapters` | A/M | Y | Y | N | G | Ownership and HTML sanitization present |
-| PUT | `/api/courses/:courseId/chapters/:chapterId` | A/M | Y | Y | N | G | Ownership and sanitization present |
-| POST | `/api/courses/:courseId/chapters/:chapterId/progress` | Any | Y | Y | N | G | No enrollment, chapter existence or bounds check |
-| POST | `/api/courses/:courseId/chapters/:chapterId/time` | Any | Y | Y | N | G | Access and increment cap present |
-| GET | `/api/courses/:courseId/chapters/:chapterId/progress` | Any | N | N/A | N | G | No explicit enrollment check |
-| POST | `/api/courses/:courseId/chapters/:chapterId/heartbeat` | Any | Y | Y | N | G | Service access checks; replay/concurrency risk |
+| GET | `/api/courses/:courseId/chapters` | Any | N | N/A | N | G | Phase-13 relational mode requires enrollment/ownership and emits a minimal DTO for locked chapters |
+| POST | `/api/courses/:courseId/chapters` | A/M | Y | Y | N | G | Phase-13 relational mode enforces owner/admin scope, course version and transactional audit/version coupling |
+| PUT | `/api/courses/:courseId/chapters/:chapterId` | A/M | Y | Y | N | G | Phase-13 relational mode requires course and chapter versions; HTML is sanitized |
+| POST | `/api/courses/:courseId/chapters/:chapterId/progress` | Any | Y | Y | N | G | Phase-13 relational mode validates enrollment/unlock and stores monotonic maximum position transactionally |
+| POST | `/api/courses/:courseId/chapters/:chapterId/time` | Any | Y | Y | N | G | Phase-13 relational mode requires a durable idempotency key and server-clock-clamped increment |
+| GET | `/api/courses/:courseId/chapters/:chapterId/progress` | Any | N | N/A | N | G | Phase-13 relational mode enforces enrollment and sequential unlock policy |
+| POST | `/api/courses/:courseId/chapters/:chapterId/heartbeat` | Any | Y | Y | N | G | Phase-13 relational mode locks enrollment, deduplicates retries and commits event/total/progress atomically |
 | POST | `/api/assignments` | A/M | Y | Y | N | G | Manager/direct-report scoping present |
 | POST | `/api/cohorts` | A/M/I | Y | Y | N | G | Course ownership check present |
 | GET | `/api/cohorts` | Any | N | N/A | N | G | Scoped listing |
@@ -197,5 +197,6 @@ The runtime-data ignore is anchored to `/uploads/`, so source modules under an
    served publicly outside the API limiter.
 5. Several destructive or trust-changing actions lack step-up: certificate
    issue, proctor termination, approval, archive restore and account creation.
-6. Safe-looking locked chapters still disclose their content in the response.
+6. Locked chapter DTO redaction is present in both modes; Phase-13 additionally
+   derives enrollment and prerequisite scope from locked relational rows.
 
