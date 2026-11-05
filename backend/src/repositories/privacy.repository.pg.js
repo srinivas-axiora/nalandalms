@@ -336,6 +336,7 @@ export function createPrivacyPgRepository(
     await mutate("capturesDeleted", "DELETE FROM proctor_captures WHERE user_id = $1");
     await mutate("feedbackDeleted", "DELETE FROM chapter_feedbacks WHERE user_id = $1");
     await mutate("skillRatingsDeleted", "DELETE FROM skill_ratings WHERE user_id = $1");
+    await mutate("aiFeedbackDeleted", "DELETE FROM ai_generation_feedback WHERE created_by = $1");
     await mutate("learningEventsDeleted", "DELETE FROM learning_time_events WHERE user_id = $1");
     await mutate("reportsDeleted", "DELETE FROM report_exports WHERE requested_by = $1");
     await mutate("attemptsScrubbed",
@@ -433,6 +434,12 @@ export function createPrivacyPgRepository(
          ORDER BY created_at`,
         [userId]
       ),
+      db.query(
+        `SELECT id, skill_name, course_level, feedback_type, rating, comment,
+                status, created_at, expires_at
+         FROM ai_generation_feedback WHERE created_by = $1 ORDER BY created_at`,
+        [userId]
+      ),
     ]);
     return {
       exportMetadata: {
@@ -444,7 +451,11 @@ export function createPrivacyPgRepository(
       profile: profile.rows[0],
       learning: { enrollments: queries[0].rows, examAttempts: queries[1].rows },
       credentials: queries[2].rows,
-      interactions: { feedbacks: queries[3].rows, skillRatings: queries[4].rows },
+      interactions: {
+        feedbacks: queries[3].rows,
+        skillRatings: queries[4].rows,
+        aiGenerationFeedback: queries[8]?.rows || [],
+      },
       transactions: queries[5].rows,
       candidateAssessments: queries[6].rows,
       auditHistory: queries[7].rows,

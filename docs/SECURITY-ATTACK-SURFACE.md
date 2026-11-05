@@ -179,8 +179,8 @@ The runtime-data ignore is anchored to `/uploads/`, so source modules under an
 | POST | `/api/privacy/requests/:requestId/review` | A | Y | Y | Y | G | Administrator step-up; explicit approve or legal hold reason |
 | GET | `/api/settings` | A | N | N/A | N | G | Admin-only |
 | PATCH | `/api/settings` | A | Y | Y | Y | G | Step-up present |
-| GET | `/api/ai/generation-feedback` | A/M | N | N/A | N | G | Cross-manager feedback memory visible |
-| POST | `/api/ai/generation-feedback` | A/M | Y | Y | N | G | No AI budget; persistent prompt influence |
+| GET | `/api/ai/generation-feedback` | A/M | N | N/A | N | G | Phase-21 relational mode gives Managers creator-only scope and Admins organization review scope; expired feedback is excluded |
+| POST | `/api/ai/generation-feedback` | A/M | Y | Y | N | G | Phase-21 relational mode validates bounded fields and commits feedback plus audit atomically with 180-day retention |
 | POST | `/api/ai/chat` | Any | Y | Y | N | G+AI | User/context injected into prompt; 4k message cap |
 | POST | `/api/ai/generate-course-stream` | A/M | Y | Y | N | G+AI | Phase-20 strict 50-50,000 character input, 1-20 chapters and explicit provider opt-in; NDJSON errors can occur after HTTP 200 |
 | POST | `/api/ai/generate-course` | A/M | Y | Y | N | G+AI | Phase-20 single draft-only handler; strict shared input schema and no direct content-authority mutation |

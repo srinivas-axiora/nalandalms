@@ -41,6 +41,7 @@ async function loadSource() {
       cohorts: core.cohorts || [],
       attempts: core.attempts || [],
       proctoringLogs: core.proctoringLogs || [],
+      acharyaFeedbackMemory: core.acharyaFeedbackMemory || [],
       issuedCertificates: core.issuedCertificates || [],
       candidateAssessments: core.candidateAssessments || [],
     },
@@ -765,6 +766,38 @@ export async function backfill() {
         [requestId, user.id, reason, hashCandidateToken(reason), requestedAt.toISOString(), graceEndsAt]
       );
     }
+
+    // 12. AI generation feedback. Only records with a valid UUID and an
+    // existing creator are admitted; expired legacy prompt influence is not
+    // carried into the relational authority.
+    const aiFeedback = data.acharyaFeedbackMemory || [];
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    let admittedFeedback = 0;
+    for (const item of aiFeedback) {
+      if (!uuidPattern.test(String(item.id || "")) || !userIds.has(item.createdBy)) continue;
+      const comment = String(item.comment || "").trim().slice(0, 1200);
+      if (comment.length < 10) continue;
+      const createdAt = Number.isFinite(Date.parse(item.createdAt || "")) ? new Date(item.createdAt) : new Date();
+      const expiresAt = new Date(createdAt.getTime() + 180 * 24 * 60 * 60 * 1000);
+      if (expiresAt <= new Date()) continue;
+      await client.query(
+        `INSERT INTO ai_generation_feedback (
+           id, skill_name, course_level, feedback_type, rating, comment,
+           created_by, created_at, expires_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          item.id, String(item.skillName || "General").slice(0, 200),
+          ["Beginner", "Intermediate", "Advanced", "Expert"].includes(item.courseLevel) ? item.courseLevel : "Beginner",
+          ["Course", "Chapter", "Assessment", "Overall"].includes(item.feedbackType) ? item.feedbackType : "Overall",
+          Math.round(Math.min(5, Math.max(1, Number(item.rating || 3)))),
+          comment,
+          item.createdBy, createdAt.toISOString(), expiresAt.toISOString(),
+        ]
+      );
+      admittedFeedback += 1;
+    }
+    console.log(`[backfill] Admitted ${admittedFeedback}/${aiFeedback.length} active AI feedback records.`);
   });
 
   console.log("[backfill] Relational backfill complete!");

@@ -10,6 +10,9 @@ import { now, acharyaFeedbackMemory } from "../../core.js";
 import { audit, saveAcharyaFeedbackMemory, getRelevantAcharyaFeedback, buildFeedbackGuidance } from "../../domain.js";
 import { authenticate, requireRole, aiRateLimit } from "../../middleware.js";
 import { handleLocalChat } from "./localAgent.js";
+import { aiFeedbackRepository } from "../../repositories/ai-feedback.repository.pg.js";
+
+const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 
 const acharyaGenerationSchema = z.object({
   text: z.string().trim().min(50).max(50_000),
@@ -30,20 +33,25 @@ const parseGenerationRequest = (req, res) => {
 };
 
 export function registerAI(app) {
-app.get("/api/ai/generation-feedback", authenticate, requireRole("Admin", "Manager"), (req, res) => {
-  res.json({ data: acharyaFeedbackMemory.slice(0, 25) });
+app.get("/api/ai/generation-feedback", authenticate, requireRole("Admin", "Manager"), async (req, res) => {
+  if (USE_PG_COURSES) return res.json({ data: await aiFeedbackRepository.list(req.user) });
+  return res.json({ data: acharyaFeedbackMemory.slice(0, 25) });
 });
 
-app.post("/api/ai/generation-feedback", authenticate, requireRole("Admin", "Manager"), (req, res) => {
+app.post("/api/ai/generation-feedback", authenticate, requireRole("Admin", "Manager"), async (req, res) => {
   const schema = z.object({
-    skillName: z.string().min(1).default("General"),
-    courseLevel: z.string().min(1).default("Beginner"),
+    skillName: z.string().trim().min(1).max(200).default("General"),
+    courseLevel: z.enum(["Beginner", "Intermediate", "Advanced", "Expert"]).default("Beginner"),
     feedbackType: z.enum(["Course", "Chapter", "Assessment", "Overall"]).default("Overall"),
-    rating: z.number().min(1).max(5).default(3),
-    comment: z.string().min(10).max(1200),
-  });
+    rating: z.number().int().min(1).max(5).default(3),
+    comment: z.string().trim().min(10).max(1200),
+  }).strict();
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (USE_PG_COURSES) {
+    const item = await aiFeedbackRepository.create({ actor: req.user, feedback: parsed.data });
+    return res.status(201).json({ data: item });
+  }
   const item = {
     id: uuid(),
     ...parsed.data,
@@ -56,6 +64,10 @@ app.post("/api/ai/generation-feedback", authenticate, requireRole("Admin", "Mana
   audit(req.user.id, "ACHARYA_FEEDBACK", "ACHARYA", item.id, { feedbackType: item.feedbackType, rating: item.rating });
   return res.status(201).json({ data: item });
 });
+
+const relevantFeedbackFor = ({ actor, text, skillName, courseLevel }) => USE_PG_COURSES
+  ? aiFeedbackRepository.findRelevant({ actor, skillName, courseLevel })
+  : Promise.resolve(getRelevantAcharyaFeedback({ text, skillName, courseLevel }));
 
 
 // ── AI Copilot Endpoint ──────────────────────────────────────────────────────
@@ -385,7 +397,7 @@ app.post("/api/ai/generate-course-stream", authenticate, requireRole("Admin", "M
   });
 
   const fallback = buildMockAcharyaDraft({ text, skillId, skillName, courseLevel, chapterCount, generationDurationMs: 0 });
-  const relevantFeedback = getRelevantAcharyaFeedback({ text, skillName, courseLevel });
+  const relevantFeedback = await relevantFeedbackFor({ actor: req.user, text, skillName, courseLevel });
   const feedbackGuidance = buildFeedbackGuidance(relevantFeedback);
   const apiKey = getGeminiApiKey();
   // Provider generation is opt-in here. The default path is deterministic and fast,
@@ -601,7 +613,7 @@ app.post("/api/ai/generate-course", authenticate, requireRole("Admin", "Manager"
   if (!input) return;
     const startedAt = Date.now();
     const { text, skillId, skillName, courseLevel, chapterCount, useProviderGeneration } = input;
-    const relevantFeedback = getRelevantAcharyaFeedback({ text, skillName, courseLevel });
+    const relevantFeedback = await relevantFeedbackFor({ actor: req.user, text, skillName, courseLevel });
     const feedbackGuidance = buildFeedbackGuidance(relevantFeedback);
     const prompt = `You are Acharya, Nalanda's course generation specialist for employee skill training and development. Return strict JSON only.
 

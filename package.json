@@ -27,7 +27,8 @@
     "db:verify-assignments": "node backend/src/db/verify-assignments.mjs",
     "db:verify-cohorts": "node backend/src/db/verify-cohorts.mjs",
     "db:verify-analytics": "node backend/src/db/verify-analytics.mjs",
-    "db:verify-reports": "node backend/src/db/verify-reports.mjs"
+    "db:verify-reports": "node backend/src/db/verify-reports.mjs",
+    "db:verify-ai-feedback": "node backend/src/db/verify-ai-feedback.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1160.0",
