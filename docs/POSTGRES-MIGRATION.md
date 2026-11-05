@@ -13,9 +13,9 @@ Owner: Engineering. Updated: 2026-11-05.
 > `USE_PG_CANDIDATE_ASSESSMENTS` must stay off until their live-database gates
 > pass. `USE_PG_PRIVACY` and its separate erasure-worker switch must also stay
 > off until the Phase 11 coverage audit passes.
-> `USE_PG_COURSES` now covers the Phase-12/18 course, chapter, progress,
+> `USE_PG_COURSES` now covers the Phase-12/19 course, chapter, progress,
 > assessment, question, assignment, cohort, upload-grant and protected-content
-> authority, but
+> authority plus analytics and report-data preparation, but
 > intentionally makes readiness fail until every secondary content consumer is
 > also migrated.
 
@@ -199,6 +199,10 @@ For each bounded context, in roughly ascending coupling:
 - [x] global, team, personal and learning-time analytics use database-derived
       metrics with SQL-enforced administrator/manager/subject scope behind
       `USE_PG_COURSES=1` (Phase 18; live reconciliation verifier pending)
+- [x] report-data preparation uses typed filters, SQL-enforced scope, canonical
+      relational time totals and an atomic durable report/audit pair behind
+      `USE_PG_COURSES=1` (Phase 19; binary artifact worker and live verifier
+      remain pending)
 - [ ] remaining enrollment consumers; relational candidate-link creation uses
       the assessment authority when both cutover flags are enabled
 - [x] attempts (+ answers/flags as JSONB; reconcile status CHECK)

@@ -5,8 +5,12 @@ import { v4 as uuid } from "uuid";
 import { now, reportExports } from "../../core.js";
 import { audit, buildReportRows } from "../../domain.js";
 import { authenticate, requireRole } from "../../middleware.js";
+import { registerReportsPgRoutes } from "./reports.pg.routes.js";
+
+const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 
 export function registerReports(app) {
+  if (USE_PG_COURSES) return registerReportsPgRoutes(app);
   app.post("/api/reports/export", authenticate, requireRole("Admin", "Manager"), (req, res) => {
     const schema = z.object({ format: z.enum(["PDF", "Excel"]), reportType: z.enum(["User", "Team", "Course"]), filters: z.record(z.string(), z.any()).default({}) });
     const parsed = schema.safeParse(req.body);
