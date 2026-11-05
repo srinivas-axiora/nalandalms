@@ -5,11 +5,29 @@ import { z } from "zod";
 import { v4 as uuid } from "uuid";
 import { GoogleGenAI } from "@google/genai";
 import { getGeminiApiKey, GEMINI_MODEL } from "../../config.js";
-import { parseGeminiJson, geminiErrorMessage, withTimeout, sanitizeHtmlServer } from "../../lib.js";
-import { now, courses, chapters, assessments, acharyaFeedbackMemory, nextCourseId } from "../../core.js";
+import { parseGeminiJson, geminiErrorMessage, withTimeout } from "../../lib.js";
+import { now, acharyaFeedbackMemory } from "../../core.js";
 import { audit, saveAcharyaFeedbackMemory, getRelevantAcharyaFeedback, buildFeedbackGuidance } from "../../domain.js";
 import { authenticate, requireRole, aiRateLimit } from "../../middleware.js";
 import { handleLocalChat } from "./localAgent.js";
+
+const acharyaGenerationSchema = z.object({
+  text: z.string().trim().min(50).max(50_000),
+  skillId: z.string().trim().max(200).default(""),
+  skillName: z.string().trim().min(1).max(200).default("General"),
+  courseLevel: z.enum(["Beginner", "Intermediate", "Advanced", "Expert"]).default("Beginner"),
+  chapterCount: z.coerce.number().int().min(1).max(20).default(3),
+  useProviderGeneration: z.boolean().default(false),
+}).strict();
+
+const parseGenerationRequest = (req, res) => {
+  const parsed = acharyaGenerationSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return null;
+  }
+  return parsed.data;
+};
 
 export function registerAI(app) {
 app.get("/api/ai/generation-feedback", authenticate, requireRole("Admin", "Manager"), (req, res) => {
@@ -355,9 +373,9 @@ const writeNdjson = (res, event) => {
 
 app.post("/api/ai/generate-course-stream", authenticate, requireRole("Admin", "Manager"), aiRateLimit, async (req, res) => {
   const startedAt = Date.now();
-  const { text, skillId = "", skillName = "General", courseLevel = "Beginner" } = req.body;
-  const chapterCount = Math.max(1, Math.min(20, Number(req.body.chapterCount || 3)));
-  if (!text || text.trim().length < 50) return res.status(400).json({ error: "Please provide sufficient educational text (min 50 characters) to generate a course." });
+  const input = parseGenerationRequest(req, res);
+  if (!input) return;
+  const { text, skillId, skillName, courseLevel, chapterCount, useProviderGeneration } = input;
 
   res.writeHead(200, {
     "Content-Type": "application/x-ndjson; charset=utf-8",
@@ -372,7 +390,7 @@ app.post("/api/ai/generate-course-stream", authenticate, requireRole("Admin", "M
   const apiKey = getGeminiApiKey();
   // Provider generation is opt-in here. The default path is deterministic and fast,
   // while still following the same staged pipeline and validation rules.
-  const ai = apiKey && req.body?.useProviderGeneration === true ? new GoogleGenAI({ apiKey }) : null;
+  const ai = apiKey && useProviderGeneration ? new GoogleGenAI({ apiKey }) : null;
   let usedFallback = !ai;
   let repairedSections = 0;
 
@@ -578,12 +596,11 @@ ${JSON.stringify(chapters.map((chapter, i) => ({ index: i, title: chapter.title,
   }
 });
 
-app.post("/api/ai/generate-course", authenticate, requireRole("Admin", "Manager"), aiRateLimit, async (req, res, next) => {
-  if (req.body?.skillId || req.body?.chapterCount || req.body?.courseLevel) {
+app.post("/api/ai/generate-course", authenticate, requireRole("Admin", "Manager"), aiRateLimit, async (req, res) => {
+  const input = parseGenerationRequest(req, res);
+  if (!input) return;
     const startedAt = Date.now();
-    const { text, skillId = "", skillName = "General", courseLevel = "Beginner" } = req.body;
-    const chapterCount = Math.max(1, Math.min(20, Number(req.body.chapterCount || 3)));
-    if (!text || text.trim().length < 50) return res.status(400).json({ error: "Please provide sufficient educational text (min 50 characters) to generate a course." });
+    const { text, skillId, skillName, courseLevel, chapterCount, useProviderGeneration } = input;
     const relevantFeedback = getRelevantAcharyaFeedback({ text, skillName, courseLevel });
     const feedbackGuidance = buildFeedbackGuidance(relevantFeedback);
     const prompt = `You are Acharya, Nalanda's course generation specialist for employee skill training and development. Return strict JSON only.
@@ -613,7 +630,7 @@ Use skill "${skillName}" and course level "${courseLevel}". Source text: ${text}
     try {
       let draft = null;
       const apiKey = getGeminiApiKey();
-      if (apiKey) {
+      if (apiKey && useProviderGeneration) {
         const ai = new GoogleGenAI({ apiKey });
         try {
           const response = await ai.models.generateContent({
@@ -646,239 +663,6 @@ Use skill "${skillName}" and course level "${courseLevel}". Source text: ${text}
       console.error("[Acharya Draft Error]", err);
       return res.status(err?.status === 429 ? 429 : 500).json({ error: geminiErrorMessage(err) });
     }
-  }
-  return next();
 });
 
-app.post("/api/ai/generate-course", authenticate, requireRole("Admin", "Manager"), aiRateLimit, async (req, res) => {
-  const { text } = req.body;
-  if (!text || text.trim().length < 50) {
-    return res.status(400).json({ error: "Please provide sufficient educational text (min 50 characters) to generate a course." });
-  }
-
-  const prompt = `You are the Nalanda Text-to-Course Preparation Agent, an autonomous specialist responsible for converting raw educational content into fully structured, pedagogically optimized, multimedia-ready course chapters.
-
-OBJECTIVE:
-Transform the provided unstructured text into a complete, interactive, LMS-ready course structure in strict JSON format.
-
-CHAPTER GENERATION GUIDELINES:
-- Each chapter must be detailed enough for a 25-60 minute self-paced training session, not a short note.
-- Each chapter body must be clean HTML, not Markdown, with these sections in order:
-  <h2>Learning Outcomes</h2>
-  <h2>Concept Overview</h2>
-  <h2>Step-by-Step Method</h2>
-  <h2>Workplace Example</h2>
-  <h2>Practice Activity</h2>
-  <h2>Common Mistakes</h2>
-  <h2>Quick Knowledge Check</h2>
-  <h2>Summary</h2>
-- Use paragraphs, ordered lists, unordered lists, and scenario-based examples.
-- Expand brief source notes into complete training content using safe, practical assumptions.
-- Keep the course focused on skill training and development.
-- Do not wrap HTML in code fences. Do not escape HTML tags.
-
-REQUIREMENTS:
-- Understand & segment text into logical learning units (create multiple chapters when content is substantial).
-- Identify topic hierarchy from context, not formatting.
-- Rewrite content in a clear, student-friendly voice.
-- Generate chapter-level & topic-level learning objectives.
-- Summarize and simplify complex parts.
-- Detect missing concepts & fill gaps.
-- Auto-recommend images with text-to-image prompts inside the chapter body (e.g., [Suggested Image: ...]).
-- Generate pre-assessment & post-assessment questions.
-- Auto-generate a glossary section in each chapter.
-- Keep language neutral, non-biased, and educational.
-- Each question must have a unique "id" field like "Q1", "Q2", etc.
-
-OUTPUT FORMAT (Strict JSON):
-{
-  "course": {
-    "title": "Catchy, professional title",
-    "description": "Comprehensive course description (2-3 sentences)",
-    "skill": "Main subject area (e.g., Leadership, Security, Data Science)",
-    "tags": ["tag1", "tag2", "tag3"],
-    "difficulty": "Beginner | Intermediate | Advanced"
-  },
-  "chapters": [
-    {
-      "title": "Chapter title",
-      "description": "Short chapter description",
-      "body": "Full clean HTML content with all required chapter sections. Use paragraphs, <ol>, <ul>, workplace examples, practice activities, common mistakes, and a summary.",
-      "durationMinutes": 35
-    }
-  ],
-  "assessments": [
-    {
-      "title": "Pre-Assessment or Post-Assessment title",
-      "type": "MCQ",
-      "durationMinutes": 10,
-      "passScore": 80,
-      "questions": [
-        {
-          "id": "Q1",
-          "type": "MCQ",
-          "prompt": "Question text",
-          "options": ["A", "B", "C", "D"],
-          "answer": 0,
-          "points": 10
-        }
-      ]
-    }
-  ]
-}
-
-RAW TEXT TO PROCESS:
-${text}
-`;
-
-  try {
-    const apiKey = getGeminiApiKey();
-    let parsedResult = null;
-
-    if (apiKey) {
-      const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          temperature: 0.2
-        }
-      });
-      parsedResult = JSON.parse(response.text);
-    } else {
-      console.warn("[Text-to-Course] GEMINI_API_KEY not found. Using robust mock generator fallback.");
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      // Build a richer multi-chapter mock based on content length
-      const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 10);
-      const chunkSize = Math.max(3, Math.ceil(sentences.length / 3));
-      const chapterTexts = [];
-      for (let i = 0; i < sentences.length; i += chunkSize) {
-        chapterTexts.push(sentences.slice(i, i + chunkSize).join(". ").trim());
-      }
-      if (chapterTexts.length === 0) chapterTexts.push(text.slice(0, 800));
-
-      const topicWords = extractTopicWords(text, "General");
-      const courseTitle = topicWords.length >= 2
-        ? "Mastering " + topicWords.slice(0, 3).join(", ")
-        : "Introduction to " + (text.split(" ").slice(0, 5).join(" ") || "the Topic");
-
-      parsedResult = {
-        course: {
-          title: courseTitle,
-          description: "An auto-generated course based on the provided text. This course breaks down complex topics into easily digestible learning modules with assessments and glossaries.",
-          skill: "General",
-          tags: ["Auto-Generated", "AI", ...topicWords.slice(0, 2)],
-          difficulty: text.length > 3000 ? "Intermediate" : "Beginner"
-        },
-        chapters: chapterTexts.map((ct, i) => {
-          const topic = topicWords[i % Math.max(1, topicWords.length)] || "Core Concepts";
-          return {
-            title: i === 0 ? "Foundations & Core Concepts" : i === chapterTexts.length - 1 ? "Advanced Topics & Synthesis" : "Deep Dive: Key Principles " + (i + 1),
-            description: "Chapter " + (i + 1) + " builds practical understanding through concepts, examples, practice, and checks for application.",
-            body: buildTrainingChapterBody({ topic, skillName: parsedResult?.course?.skill || "General", courseLevel: text.length > 3000 ? "Intermediate" : "Beginner", chunk: ct }),
-            durationMinutes: Math.max(25, Math.min(60, Math.ceil(ct.length / 70)))
-          };
-        }),
-        assessments: [
-          {
-            title: "Pre-Assessment: Baseline Knowledge",
-            type: "MCQ",
-            durationMinutes: 10,
-            passScore: 60,
-            questions: [
-              { id: "Q1", type: "MCQ", prompt: "Which best describes the primary subject of this course?", options: ["An unrelated topic", "The core subject covered in the text", "A historical overview only", "None of the above"], answer: 1, points: 25 },
-              { id: "Q2", type: "MCQ", prompt: "What is a key objective of the first chapter?", options: ["Memorize dates", "Understand foundational concepts", "Skip to advanced topics", "Review unrelated material"], answer: 1, points: 25 },
-            ]
-          },
-          {
-            title: "Post-Assessment: Comprehensive Review",
-            type: "MCQ",
-            durationMinutes: 15,
-            passScore: 70,
-            questions: [
-              { id: "Q1", type: "MCQ", prompt: "What is the primary focus of the first chapter?", options: ["Advanced implementation", "Core concepts and fundamentals", "Historical overview", "Conclusion"], answer: 1, points: 25 },
-              { id: "Q2", type: "MCQ", prompt: "Which learning approach is emphasized throughout the course?", options: ["Rote memorization", "Practical application", "Passive reading", "Speed reading"], answer: 1, points: 25 },
-              { id: "Q3", type: "MCQ", prompt: "What should you do after completing all chapters?", options: ["Nothing", "Review key concepts and attempt the assessment", "Delete the course", "Skip the summary"], answer: 1, points: 25 },
-              { id: "Q4", type: "Descriptive", prompt: "In your own words, summarize the most important concept you learned from this course and describe how you would apply it.", points: 25 },
-            ]
-          }
-        ]
-      };
-    }
-
-    // Ensure every question has an id
-    (parsedResult.assessments || []).forEach(a => {
-      (a.questions || []).forEach((q, qi) => {
-        if (!q.id) q.id = "Q" + (qi + 1);
-      });
-    });
-
-    const newCourse = {
-      id: nextCourseId(parsedResult.course?.skill || "GN"),
-      title: parsedResult.course?.title || "Untitled Course",
-      description: parsedResult.course?.description || "No description provided",
-      skill: parsedResult.course?.skill || "General",
-      tags: parsedResult.course?.tags || [],
-      contentTypes: ["Rich Text"],
-      approval: req.user.role === "Admin" ? "Approved" : "Pending",
-      status: "Active",
-      ownerId: req.user.id,
-      version: 1,
-      createdAt: now(),
-      updatedAt: now()
-    };
-
-    const newChapters = (parsedResult.chapters || []).map((ch, idx) => ({
-      id: `CH-${Math.floor(1000 + Math.random() * 9000)}`,
-      courseId: newCourse.id,
-      sequence: idx + 1,
-      title: ch.title || "Untitled Chapter",
-      description: ch.description || "",
-      contentType: "Rich Text",
-      body: sanitizeHtmlServer(ch.body || ""),
-      durationMinutes: ch.durationMinutes || 10,
-      minimumTimeMinutes: Math.floor((ch.durationMinutes || 10) * 0.7),
-      createdAt: now(),
-      updatedAt: now()
-    }));
-
-    // Map each assessment to its corresponding chapter when possible
-    const newAssessments = (parsedResult.assessments || []).map((a, ai) => ({
-      id: `ASM-${Math.floor(1000 + Math.random() * 9000)}`,
-      title: a.title || "Knowledge Check",
-      courseId: newCourse.id,
-      chapterId: newChapters.length > 0 ? newChapters[Math.min(ai, newChapters.length - 1)].id : null,
-      type: a.type || "MCQ",
-      strictMode: true,
-      questions: (a.questions || []).map((q, qi) => ({ ...q, id: q.id || ("Q" + (qi + 1)) })),
-      durationMinutes: a.durationMinutes || 15,
-      passScore: a.passScore || 80,
-      ownerId: req.user.id,
-      approval: "Approved",
-      status: "Active",
-      createdAt: now(),
-      updatedAt: now()
-    }));
-
-    courses.unshift(newCourse);
-    chapters.push(...newChapters);
-    assessments.unshift(...newAssessments);
-
-    audit(req.user.id, "AI_GENERATE_COURSE", "COURSE", newCourse.id, { title: newCourse.title, chapters: newChapters.length, assessments: newAssessments.length });
-
-    return res.status(201).json({
-      data: newCourse,
-      chapters: newChapters,
-      assessments: newAssessments,
-      chaptersCount: newChapters.length,
-      assessmentsCount: newAssessments.length
-    });
-
-  } catch (err) {
-    console.error("[Text-to-Course Error]", err);
-    return res.status(err?.status === 429 ? 429 : 500).json({ error: geminiErrorMessage(err) });
-  }
-});
 }

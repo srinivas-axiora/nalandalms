@@ -13,7 +13,7 @@ Owner: Engineering. Updated: 2026-11-05.
 > `USE_PG_CANDIDATE_ASSESSMENTS` must stay off until their live-database gates
 > pass. `USE_PG_PRIVACY` and its separate erasure-worker switch must also stay
 > off until the Phase 11 coverage audit passes.
-> `USE_PG_COURSES` now covers the Phase-12/19 course, chapter, progress,
+> `USE_PG_COURSES` now covers the Phase-12/20 course, chapter, progress,
 > assessment, question, assignment, cohort, upload-grant and protected-content
 > authority plus analytics and report-data preparation, but
 > intentionally makes readiness fail until every secondary content consumer is
@@ -203,6 +203,9 @@ For each bounded context, in roughly ascending coupling:
       relational time totals and an atomic durable report/audit pair behind
       `USE_PG_COURSES=1` (Phase 19; binary artifact worker and live verifier
       remain pending)
+- [x] AI generation is draft-only, input-bounded and explicit-provider-opt-in;
+      duplicate snapshot course/chapter/assessment writes are removed (Phase
+      20; feedback memory and live provider evaluation remain pending)
 - [ ] remaining enrollment consumers; relational candidate-link creation uses
       the assessment authority when both cutover flags are enabled
 - [x] attempts (+ answers/flags as JSONB; reconcile status CHECK)

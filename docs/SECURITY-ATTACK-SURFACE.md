@@ -182,8 +182,8 @@ The runtime-data ignore is anchored to `/uploads/`, so source modules under an
 | GET | `/api/ai/generation-feedback` | A/M | N | N/A | N | G | Cross-manager feedback memory visible |
 | POST | `/api/ai/generation-feedback` | A/M | Y | Y | N | G | No AI budget; persistent prompt influence |
 | POST | `/api/ai/chat` | Any | Y | Y | N | G+AI | User/context injected into prompt; 4k message cap |
-| POST | `/api/ai/generate-course-stream` | A/M | Y | Y | N | G+AI | No input token cap/concurrency lock; 200 before errors |
-| POST | `/api/ai/generate-course` | A/M | Y | Y | N | G+AI twice | Duplicate handlers and inconsistent timeout/schema behavior |
+| POST | `/api/ai/generate-course-stream` | A/M | Y | Y | N | G+AI | Phase-20 strict 50-50,000 character input, 1-20 chapters and explicit provider opt-in; NDJSON errors can occur after HTTP 200 |
+| POST | `/api/ai/generate-course` | A/M | Y | Y | N | G+AI | Phase-20 single draft-only handler; strict shared input schema and no direct content-authority mutation |
 
 ## Highest-priority route mismatches
 
