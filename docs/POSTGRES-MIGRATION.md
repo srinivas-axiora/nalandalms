@@ -13,9 +13,9 @@ Owner: Engineering. Updated: 2026-11-05.
 > `USE_PG_CANDIDATE_ASSESSMENTS` must stay off until their live-database gates
 > pass. `USE_PG_PRIVACY` and its separate erasure-worker switch must also stay
 > off until the Phase 11 coverage audit passes.
-> `USE_PG_COURSES` now covers the Phase-12/13 course, chapter and progress
-> authority, but intentionally makes readiness fail until assessment eligibility
-> and every secondary content consumer are also migrated.
+> `USE_PG_COURSES` now covers the Phase-12/14 course, chapter, progress,
+> assessment and question authority, but intentionally makes readiness fail
+> until every secondary content consumer is also migrated.
 
 ---
 
@@ -60,6 +60,9 @@ backend/src/db/verify-courses.mjs                 live course lifecycle verifier
 database/migrations/0012_chapter_progress_authority.sql chapter versions + time idempotency
 backend/src/repositories/learning-authority.repository.pg.js chapter/progress authority
 backend/src/db/verify-learning.mjs                live lock/time/idempotency verifier
+database/migrations/0013_assessment_authority.sql assessment versions + active-attempt invariant
+backend/src/repositories/assessment-authority.repository.pg.js transactional assessment authority
+backend/src/db/verify-assessments.mjs             live authoring/eligibility/attempt verifier
 ```
 
 The **skills** bounded context is the pilot (like the certificates pilot for the
@@ -108,6 +111,7 @@ npm run db:verify-candidate-assessments
 npm run db:verify-privacy
 npm run db:verify-courses
 npm run db:verify-learning
+npm run db:verify-assessments
 ```
 
 If `verify-skills.mjs` prints all `ok`, the pilot pattern is sound and we proceed
@@ -175,9 +179,12 @@ For each bounded context, in roughly ascending coupling:
       server-clock progress, canonical chapter totals and learning-time events
       implemented behind `USE_PG_COURSES=1` (Phase 13; live-DB and cross-task
       race gates still pending)
-- [ ] assessments source-of-truth routes (+ questions as JSONB)  ·
-      enrollments(assignments); candidate links now freeze a relational runtime
-      snapshot but creation still reads the process-local assessment projection
+- [x] transactional assessment/question authoring, immutable versions,
+      database-derived eligibility, atomic attempt start and immutable
+      assessment-version/duration/pass-score attempt snapshots implemented
+      behind `USE_PG_COURSES=1` (Phase 14; live-DB and cross-task gates pending)
+- [ ] remaining enrollment consumers; relational candidate-link creation uses
+      the assessment authority when both cutover flags are enabled
 - [x] attempts (+ answers/flags as JSONB; reconcile status CHECK)
 - [x] proctoring_logs  ·  certificates
 - [ ] archives  ·  audit_logs / security_events (certificate/attempt audit rows

@@ -272,6 +272,8 @@ CREATE TABLE assessments (
   approval approval_status NOT NULL DEFAULT 'Draft',
   status lifecycle_status NOT NULL DEFAULT 'Active',
   owner_id TEXT NOT NULL REFERENCES users(id),
+  version INTEGER NOT NULL DEFAULT 1
+    CONSTRAINT assessments_version_positive CHECK (version >= 1),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -289,8 +291,25 @@ CREATE TABLE questions (
   options JSONB,
   correct_answer JSONB,
   points NUMERIC(6,2) NOT NULL DEFAULT 10,
-  sort_order INTEGER NOT NULL DEFAULT 0
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  metadata JSONB NOT NULL DEFAULT '{}'
+    CONSTRAINT questions_metadata_object CHECK (jsonb_typeof(metadata) = 'object'),
+  CONSTRAINT questions_points_positive CHECK (points > 0)
 );
+
+CREATE TABLE assessment_versions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL CHECK (version >= 1),
+  snapshot JSONB NOT NULL CHECK (jsonb_typeof(snapshot) = 'object'),
+  change_note TEXT NOT NULL,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (assessment_id, version)
+);
+
+CREATE INDEX idx_assessment_versions_assessment
+  ON assessment_versions(assessment_id, version DESC);
 
 CREATE TABLE assessment_attempts (
   id TEXT PRIMARY KEY,
@@ -298,6 +317,11 @@ CREATE TABLE assessment_attempts (
   chapter_id TEXT REFERENCES chapters(id),
   course_id TEXT REFERENCES courses(id),
   user_id TEXT NOT NULL REFERENCES users(id),
+  assessment_version INTEGER NOT NULL DEFAULT 1 CHECK (assessment_version >= 1),
+  duration_minutes_snapshot INTEGER NOT NULL DEFAULT 15
+    CHECK (duration_minutes_snapshot BETWEEN 1 AND 360),
+  pass_score_snapshot NUMERIC(5,2) NOT NULL DEFAULT 70
+    CHECK (pass_score_snapshot BETWEEN 1 AND 100),
   status TEXT NOT NULL DEFAULT 'InProgress' CHECK (status IN (
     'InProgress', 'Submitted', 'AutoSubmitted', 'PendingManualReview',
     'Evaluated', 'Passed', 'Failed', 'Paused', 'Terminated'
@@ -333,6 +357,9 @@ CREATE TABLE assessment_attempts (
 
 CREATE INDEX idx_attempts_user ON assessment_attempts(user_id, started_at DESC);
 CREATE INDEX idx_attempts_assessment ON assessment_attempts(assessment_id);
+CREATE UNIQUE INDEX uq_active_assessment_attempt
+  ON assessment_attempts(assessment_id, user_id)
+  WHERE status IN ('InProgress', 'Paused');
 
 -- ── Public Candidate Assessment Runtime ──
 -- Bearer link/session tokens are persisted only as SHA-256 hashes.

@@ -13,6 +13,7 @@ import {
   CandidateAssessmentRepositoryError,
   candidateAssessmentsPgRepository as repository,
 } from "../../repositories/candidate-assessments.repository.pg.js";
+import { assessmentAuthorityRepository } from "../../repositories/assessment-authority.repository.pg.js";
 import {
   blindCandidateQuestions,
   candidateAnalytics,
@@ -33,6 +34,7 @@ const eventSeverity = Object.freeze({
   COPY_PASTE_ATTEMPT: "high",
   WINDOW_BLUR: "medium",
 });
+const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 
 const createSchema = z.object({
   assessmentId: z.string().min(1),
@@ -98,15 +100,22 @@ export function registerCandidateAssessmentsPg(app) {
     async (req, res) => {
       const parsed = createSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-      const assessment = assessments.find((item) => item.id === parsed.data.assessmentId);
+      const assessment = USE_PG_COURSES
+        ? await assessmentAuthorityRepository.findRuntimeById(parsed.data.assessmentId)
+        : assessments.find((item) => item.id === parsed.data.assessmentId);
       if (!assessment) return res.status(404).json({ error: "Assessment not found" });
-      if (!canCreateCandidateAssessment(req.user, assessment)) {
+      const permitted = USE_PG_COURSES
+        ? await assessmentAuthorityRepository.canManageAssessment({ id: assessment.id, actor: req.user })
+        : canCreateCandidateAssessment(req.user, assessment);
+      if (!permitted) {
         return res.status(403).json({ error: "Forbidden" });
       }
       const sourceQuestions = assessment.questions || [];
       if (!sourceQuestions.length) return res.status(409).json({ error: "Assessment questions are not configured" });
-      const course = courses.find((item) => item.id === assessment.courseId);
-      if (!course) return res.status(409).json({ error: "Assessment course is not available" });
+      const course = USE_PG_COURSES
+        ? { id: assessment.courseId, title: assessment.courseTitle }
+        : courses.find((item) => item.id === assessment.courseId);
+      if (!course?.title) return res.status(409).json({ error: "Assessment course is not available" });
       if (parsed.data.expiresAt && Date.parse(parsed.data.expiresAt) <= Date.now()) {
         return res.status(400).json({ error: "expiresAt must be in the future" });
       }

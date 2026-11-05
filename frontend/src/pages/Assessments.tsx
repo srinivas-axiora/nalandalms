@@ -285,12 +285,15 @@ export default function Assessments({ data, currentUser, setData }: { data: AppD
     e.preventDefault();
     const chapter = data.chapters.find((item) => item.id === form.chapterId);
     if (!chapter) return;
+    const course = data.courses.find((item) => item.id === chapter.courseId);
+    if (!course) return;
     const questionLimit = Number(form.questionLimit) || 10;
     apiFetch("/assessments", {
       method: "POST",
       body: JSON.stringify({
         title: form.title,
         courseId: chapter.courseId,
+        courseVersion: course.version,
         chapterId: form.chapterId,
         type: form.type,
         durationMinutes: Number(form.durationMinutes),
@@ -301,7 +304,13 @@ export default function Assessments({ data, currentUser, setData }: { data: AppD
     })
       .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
       .then((resData) => {
-        setData(addAudit({ ...data, assessments: [resData.data, ...data.assessments] }, "Created assessment", resData.data.id));
+        setData(addAudit({
+          ...data,
+          courses: data.courses.map((item) => item.id === course.id
+            ? { ...item, version: resData.courseVersion || item.version }
+            : item),
+          assessments: [resData.data, ...data.assessments],
+        }, "Created assessment", resData.data.id));
         setCreateOpen(false);
         setBulkQuestions([]);
         setUploadMode(false);
@@ -314,11 +323,18 @@ export default function Assessments({ data, currentUser, setData }: { data: AppD
     if (!editing) return;
     const chapter = data.chapters.find((item) => item.id === editMeta.chapterId);
     if (!chapter) return;
+    if (chapter.courseId !== editing.courseId) {
+      toast("Moving an assessment between courses is not supported; create a new assessment instead.");
+      return;
+    }
+    const course = data.courses.find((item) => item.id === editing.courseId);
+    if (!course) return;
     apiFetch(`/assessments/${editing.id}`, {
       method: "PUT",
       body: JSON.stringify({
         title: editMeta.title,
-        courseId: chapter.courseId,
+        courseVersion: course.version,
+        assessmentVersion: editing.version || 1,
         chapterId: editMeta.chapterId,
         difficulty: editMeta.difficulty,
         durationMinutes: Number(editMeta.durationMinutes),
@@ -331,7 +347,13 @@ export default function Assessments({ data, currentUser, setData }: { data: AppD
       .then((resData) => {
         const updated = resData.data;
         const assessments = data.assessments.map((item) => item.id === editing.id ? updated : item);
-        setData(addAudit({ ...data, assessments }, "Updated assessment", editing.id));
+        setData(addAudit({
+          ...data,
+          courses: data.courses.map((item) => item.id === course.id
+            ? { ...item, version: resData.courseVersion || item.version }
+            : item),
+          assessments,
+        }, "Updated assessment", editing.id));
         setEditing(updated);
         toast("Assessment saved successfully");
       })
@@ -380,40 +402,77 @@ export default function Assessments({ data, currentUser, setData }: { data: AppD
   };
 
   const approve = (id: string) => {
+    const assessment = data.assessments.find((item) => item.id === id);
+    const course = data.courses.find((item) => item.id === assessment?.courseId);
+    if (!assessment || !course) return;
     apiFetch(`/assessments/${id}/approval`, {
       method: "PATCH",
-      body: JSON.stringify({ approval: "Approved" })
+      body: JSON.stringify({
+        approval: "Approved",
+        feedback: "Approved by administrator in the assessment console",
+        courseVersion: course.version,
+        assessmentVersion: assessment.version || 1,
+      })
     })
       .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
       .then((resData) => {
-        setData(addAudit({ ...data, assessments: data.assessments.map((a) => a.id === id ? resData.data : a) }, "Approved assessment", id));
+        setData(addAudit({
+          ...data,
+          courses: data.courses.map((item) => item.id === course.id
+            ? { ...item, version: resData.courseVersion || item.version }
+            : item),
+          assessments: data.assessments.map((a) => a.id === id ? resData.data : a),
+        }, "Approved assessment", id));
         toast("Assessment approved successfully");
       })
       .catch(() => toast("Failed to approve assessment"));
   };
   const reject = (id: string) => {
+    const assessment = data.assessments.find((item) => item.id === id);
+    const course = data.courses.find((item) => item.id === assessment?.courseId);
+    if (!assessment || !course) return;
     apiFetch(`/assessments/${id}/approval`, {
       method: "PATCH",
-      body: JSON.stringify({ approval: "Rejected" })
+      body: JSON.stringify({
+        approval: "Rejected",
+        feedback: "Rejected by administrator in the assessment console",
+        courseVersion: course.version,
+        assessmentVersion: assessment.version || 1,
+      })
     })
       .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
       .then((resData) => {
-        setData(addAudit({ ...data, assessments: data.assessments.map((a) => a.id === id ? resData.data : a) }, "Rejected assessment", id));
+        setData(addAudit({
+          ...data,
+          courses: data.courses.map((item) => item.id === course.id
+            ? { ...item, version: resData.courseVersion || item.version }
+            : item),
+          assessments: data.assessments.map((a) => a.id === id ? resData.data : a),
+        }, "Rejected assessment", id));
         toast("Assessment rejected");
       })
       .catch(() => toast("Failed to reject assessment"));
   };
 
   const toggleAssessmentStatus = (assessment: Assessment) => {
+    const course = data.courses.find((item) => item.id === assessment.courseId);
+    if (!course) return;
     const newStatus = (assessment.status || "Active") === "Active" ? "Inactive" : "Active";
     apiFetch(`/assessments/${assessment.id}/status`, {
       method: "PATCH",
-      body: JSON.stringify({ status: newStatus })
+      body: JSON.stringify({
+        status: newStatus,
+        courseVersion: course.version,
+        assessmentVersion: assessment.version || 1,
+      })
     })
       .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
       .then((resData) => {
         setData(addAudit({
           ...data,
+          courses: data.courses.map((item) => item.id === course.id
+            ? { ...item, version: resData.courseVersion || item.version }
+            : item),
           assessments: data.assessments.map((a) => a.id === assessment.id ? resData.data : a),
         }, newStatus === "Inactive" ? "Deactivated assessment" : "Activated assessment", assessment.id));
         toast(newStatus === "Inactive" ? "Assessment deactivated successfully" : "Assessment activated successfully");
@@ -423,12 +482,18 @@ export default function Assessments({ data, currentUser, setData }: { data: AppD
 
   const handleDeleteAssessment = (comment: string) => {
     if (!deleteTarget) return;
+    const course = data.courses.find((item) => item.id === deleteTarget.courseId);
+    if (!course) return;
     apiFetch(`/assessments/${deleteTarget.id}`, {
       method: "DELETE",
-      body: JSON.stringify({ deletionComment: comment })
+      body: JSON.stringify({
+        deletionComment: comment,
+        courseVersion: course.version,
+        assessmentVersion: deleteTarget.version || 1,
+      })
     })
       .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
-      .then(() => {
+      .then((resData) => {
         const archived: ArchivedRecord = {
           id: uid("ARC"),
           entityType: "Assessment",
@@ -441,6 +506,9 @@ export default function Assessments({ data, currentUser, setData }: { data: AppD
         };
         setData(addAudit({
           ...data,
+          courses: data.courses.map((item) => item.id === course.id
+            ? { ...item, version: resData.data?.courseVersion || item.version }
+            : item),
           assessments: data.assessments.filter((a) => a.id !== deleteTarget.id),
           archive: [archived, ...(data.archive || [])],
         }, "Permanently deleted assessment", deleteTarget.id));

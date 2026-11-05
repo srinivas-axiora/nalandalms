@@ -100,6 +100,7 @@ export type ChapterFeedback = {
 
 export type Assessment = {
   id: string;
+  version?: number;
   title: string;
   chapterId: string;
   courseId: string;

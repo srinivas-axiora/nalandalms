@@ -55,7 +55,6 @@ import { registerAI } from "./src/modules/ai/ai.routes.js";
 import * as usersRepo from "./src/repositories/users.repository.pg.js";
 import * as coursesRepo from "./src/repositories/courses.repository.pg.js";
 import * as chaptersRepo from "./src/repositories/chapters.repository.pg.js";
-import * as assessmentsRepo from "./src/repositories/assessments.repository.pg.js";
 import * as enrollmentsRepo from "./src/repositories/enrollments.repository.pg.js";
 import * as skillsRepo from "./src/repositories/skills.repository.pg.js";
 import { query as relationalQuery } from "./src/db/pool.js";
@@ -67,6 +66,7 @@ import { replaceAttemptProjection } from "./src/attempt-projection.js";
 import { certificatesPgRepository } from "./src/repositories/certificates.repository.pg.js";
 import { candidateAssessmentsPgRepository } from "./src/repositories/candidate-assessments.repository.pg.js";
 import { courseAuthorityRepository } from "./src/repositories/courses-authority.repository.pg.js";
+import { assessmentAuthorityRepository } from "./src/repositories/assessment-authority.repository.pg.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG = process.env.USE_PG === "1";
@@ -321,11 +321,11 @@ app.get("/api/ready", async (_req, res) => {
       : Promise.resolve({ ok: true, mode: "disabled", worker: "disabled" }),
   ]);
   // The relational learning workflow is still a partial cutover. Course,
-  // chapter and progress authority exist, but assessment eligibility and
-  // secondary consumers are not fully migrated; enabled tasks must drain.
+  // chapter, progress and assessment authority exist, but secondary consumers
+  // are not fully migrated; enabled tasks must drain from the load balancer.
   const courseAuthority = {
     ok: !USE_PG_COURSES,
-    mode: USE_PG_COURSES ? "experimental-learning-partial" : "disabled",
+    mode: USE_PG_COURSES ? "experimental-learning-secondary-consumers" : "disabled",
   };
   const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok
     && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok && privacyAuthority.ok
@@ -382,8 +382,8 @@ app.get("/api/app-data", authenticate, async (req, res) => {
     ? await enrollmentsRepo.listEnrollments()
     : assignments;
   const scopedAssignments = authoritativeAssignments.filter((assignment) => assignmentVisibleTo(assignment, req.user) && (admin || visibleCourseIds.has(assignment.courseId)));
-  const authoritativeAttempts = USE_PG_ATTEMPTS ? await attemptsRepository.list() : attempts;
-  const authoritativeProctoring = USE_PG_ATTEMPTS
+  const authoritativeAttempts = (USE_PG_ATTEMPTS || USE_PG_COURSES) ? await attemptsRepository.list() : attempts;
+  const authoritativeProctoring = (USE_PG_ATTEMPTS || USE_PG_COURSES)
     ? await attemptsRepository.listProctorEvents(admin ? {} : { userIds: [...visibleUserIds] })
     : proctoringLogs;
   const scopedAttempts = authoritativeAttempts.filter((attempt) => admin || visibleUserIds.has(attempt.userId));
@@ -399,7 +399,9 @@ app.get("/api/app-data", authenticate, async (req, res) => {
     ? await chaptersRepo.listChapters()
     : chapters;
   const scopedChapters = authoritativeChapters.filter((chapter) => visibleCourseIds.has(chapter.courseId));
-  const scopedAssessments = assessmentsVisibleTo(req.user).map((assessment) => assessmentForUser(assessment, req.user));
+  const scopedAssessments = USE_PG_COURSES
+    ? await assessmentAuthorityRepository.listVisible({ actor: req.user, status: "Active" })
+    : assessmentsVisibleTo(req.user).map((assessment) => assessmentForUser(assessment, req.user));
   const scopedUsers = users.filter((user) => visibleUserIds.has(user.id)).map(publicUser);
   res.json({
     users: scopedUsers,

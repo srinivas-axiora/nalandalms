@@ -124,6 +124,7 @@ export function buildBlindExamAttempt({
   }
 
   const durationMinutes = Number(assessment.durationMinutes) || 15;
+  const passScore = Number(assessment.passScore) || 70;
   const startedAt = now();
   const expiresAt = new Date(Date.now() + (durationMinutes * 60 + ASSESSMENT_TIME_GRACE_SECONDS) * 1000).toISOString();
 
@@ -132,6 +133,9 @@ export function buildBlindExamAttempt({
     assessmentId: assessment.id,
     courseId: assessment.courseId,
     chapterId: assessment.chapterId || null,
+    assessmentVersion: Number(assessment.version) || 1,
+    durationMinutesSnapshot: durationMinutes,
+    passScoreSnapshot: passScore,
     userId,
     startedAt,
     expiresAt,

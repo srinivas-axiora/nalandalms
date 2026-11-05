@@ -198,19 +198,21 @@ export async function backfill() {
         `INSERT INTO assessments (
            id, course_id, chapter_id, title, type, strict_mode,
            duration_minutes, pass_score, question_limit, difficulty,
-           approval, status, owner_id, created_at, updated_at
+           approval, status, owner_id, version, created_at, updated_at
          ) VALUES (
            $1, $2, $3, $4, $5::assessment_type, $6,
            $7, $8, $9, $10,
-           $11::approval_status, $12::lifecycle_status, $13,
-           COALESCE($14::timestamptz, now()), now()
+           $11::approval_status, $12::lifecycle_status, $13, $14,
+           COALESCE($15::timestamptz, now()), now()
          ) ON CONFLICT (id) DO UPDATE SET
-           title = EXCLUDED.title, status = EXCLUDED.status, approval = EXCLUDED.approval`,
+           title = EXCLUDED.title, status = EXCLUDED.status, approval = EXCLUDED.approval,
+           version = GREATEST(assessments.version, EXCLUDED.version)`,
         [
           a.id, a.courseId, a.chapterId || null, a.title, a.type || "MCQ",
           a.strictMode ?? true, a.durationMinutes || 15, a.passScore || 70,
           a.questionLimit || null, a.difficulty || "Beginner", a.approval || "Approved",
-          a.status || "Active", a.ownerId || users[0]?.id || "SAnalanda", a.createdAt || null,
+          a.status || "Active", a.ownerId || users[0]?.id || "SAnalanda",
+          a.version || 1, a.createdAt || null,
         ]
       );
 
@@ -218,17 +220,47 @@ export async function backfill() {
         await client.query("DELETE FROM questions WHERE assessment_id = $1", [a.id]);
         for (let i = 0; i < a.questions.length; i++) {
           const q = a.questions[i];
+          const {
+            id: questionId,
+            type: questionType,
+            prompt: questionPrompt,
+            options: questionOptions,
+            answer: questionAnswer,
+            correctAnswer,
+            points: questionPoints,
+            sortOrder,
+            ...questionMetadata
+          } = q;
           await client.query(
             `INSERT INTO questions (
-               assessment_id, question_type, prompt, options, correct_answer, points, sort_order
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+               assessment_id, question_type, prompt, options, correct_answer,
+               points, sort_order, metadata
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
             [
-              a.id, q.type || "MCQ", q.prompt, JSON.stringify(q.options || []),
-              JSON.stringify(q.answer ?? q.correctAnswer ?? 0), q.points || 10, i,
+              a.id, questionType || "MCQ", questionPrompt,
+              JSON.stringify(questionOptions || []),
+              JSON.stringify(questionAnswer ?? correctAnswer ?? null),
+              questionPoints || 10, sortOrder ?? i, JSON.stringify(questionMetadata),
             ]
           );
         }
       }
+      await client.query(
+        `INSERT INTO assessment_versions (
+           assessment_id, version, snapshot, change_note, created_by
+         )
+         SELECT a.id, a.version,
+           to_jsonb(a) || jsonb_build_object(
+             'questions', COALESCE((
+               SELECT jsonb_agg(to_jsonb(q) ORDER BY q.sort_order, q.id)
+               FROM questions q WHERE q.assessment_id = a.id
+             ), '[]'::jsonb)
+           ),
+           'Backfilled assessment version', a.owner_id
+         FROM assessments a WHERE a.id = $1
+         ON CONFLICT (assessment_id, version) DO NOTHING`,
+        [a.id]
+      );
     }
 
     // 6. Enrollments
@@ -276,6 +308,9 @@ export async function backfill() {
     const attemptIds = new Set(attempts.map((attempt) => attempt.id));
     console.log(`[backfill] Upserting ${attempts.length} assessment attempts...`);
     for (const attempt of attempts) {
+      const attemptAssessment = (data.assessments || []).find(
+        (assessment) => assessment.id === attempt.assessmentId
+      );
       await client.query(
         `INSERT INTO assessment_attempts (
            id, assessment_id, chapter_id, course_id, user_id, status, score,
@@ -284,7 +319,8 @@ export async function backfill() {
            tab_switch_warnings, auto_submitted_reason, expires_at, is_paused,
            paused_at, resumed_at, terminated_reason, terminated_by, terminated_at,
            assigned_proctor_id, time_spent_seconds, started_at, submitted_at,
-           evaluated_by, version
+           evaluated_by, assessment_version, duration_minutes_snapshot,
+           pass_score_snapshot, version
          ) VALUES (
            $1, $2, $3, $4, $5, $6, $7,
            $8, $9, $10::jsonb, $11, $12::jsonb,
@@ -292,7 +328,7 @@ export async function backfill() {
            $19, $20, $21, $22,
            $23, $24, $25, $26, $27,
            $28, $29, COALESCE($30::timestamptz, now()), $31,
-           $32, $33
+           $32, $33, $34, $35, $36
          ) ON CONFLICT (id) DO UPDATE SET
            status = EXCLUDED.status, score = EXCLUDED.score,
            feedback = EXCLUDED.feedback, answers = EXCLUDED.answers,
@@ -320,6 +356,9 @@ export async function backfill() {
           attempt.timeSpentSeconds || 0, attempt.startedAt || null,
           attempt.submittedAt || null,
           userIds.has(attempt.evaluatedBy) ? attempt.evaluatedBy : null,
+          attempt.assessmentVersion || attemptAssessment?.version || 1,
+          attempt.durationMinutesSnapshot || attemptAssessment?.durationMinutes || 15,
+          attempt.passScoreSnapshot || attemptAssessment?.passScore || 70,
           attempt.version || 0,
         ]
       );

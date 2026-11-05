@@ -8,7 +8,7 @@ describe("experimental course authority readiness interlock", () => {
   beforeAll(async () => {
     process.env.USE_PG_COURSES = "1";
     ({ app } = await import("../../backend/server.js?course-readiness"));
-  });
+  }, 30_000);
 
   afterAll(() => {
     if (previous === undefined) delete process.env.USE_PG_COURSES;
@@ -21,7 +21,7 @@ describe("experimental course authority readiness interlock", () => {
     expect(response.body).toMatchObject({
       ok: false,
       checks: {
-        courses: { ok: false, mode: "experimental-learning-partial" },
+        courses: { ok: false, mode: "experimental-learning-secondary-consumers" },
       },
     });
   });

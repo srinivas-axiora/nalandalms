@@ -8,6 +8,9 @@ export const mapAttempt = (row) => row && ({
   chapterId: row.chapter_id || null,
   courseId: row.course_id || null,
   userId: row.user_id,
+  assessmentVersion: Number(row.assessment_version || 1),
+  durationMinutesSnapshot: Number(row.duration_minutes_snapshot || 15),
+  passScoreSnapshot: Number(row.pass_score_snapshot || 70),
   status: row.status,
   score: row.score === null ? null : Number(row.score),
   maxScore: row.max_score === null ? null : Number(row.max_score),
@@ -77,7 +80,8 @@ const updateEnrollment = (client, attempt, enrollment) => {
        time_spent_seconds = time_spent_seconds + $4,
        time_spent_minutes = CEIL((time_spent_seconds + $4) / 60.0)::integer,
        assessment_time_spent_seconds = assessment_time_spent_seconds + $4,
-       completed_at = COALESCE(completed_at, $5)
+       completed_at = COALESCE(completed_at, $5),
+       version = version + 1
      WHERE user_id = $1 AND course_id = $2`,
     [attempt.userId, attempt.courseId, enrollment.status || null,
       enrollment.addTimeSeconds || 0, enrollment.completedAt || null]
@@ -135,7 +139,8 @@ export function createAttemptsRepository(db = { query, withTransaction }) {
            tab_switch_warnings, auto_submitted_reason, expires_at, is_paused,
            paused_at, resumed_at, terminated_reason, terminated_by, terminated_at,
            assigned_proctor_id, time_spent_seconds, started_at, submitted_at,
-           evaluated_by, version
+           evaluated_by, assessment_version, duration_minutes_snapshot,
+           pass_score_snapshot, version
          ) VALUES (
            $1, $2, $3, $4, $5, $6, $7,
            $8, $9, $10::jsonb, $11, $12::jsonb,
@@ -143,7 +148,7 @@ export function createAttemptsRepository(db = { query, withTransaction }) {
            $19, $20, $21, $22,
            $23, $24, $25, $26, $27,
            $28, $29, $30, $31,
-           $32, 0
+           $32, $33, $34, $35, 0
          ) RETURNING *`,
         [
           attempt.id, attempt.assessmentId, attempt.chapterId || null,
@@ -160,6 +165,8 @@ export function createAttemptsRepository(db = { query, withTransaction }) {
           attempt.terminatedAt || null, attempt.assignedProctorId || null,
           attempt.timeSpentSeconds || 0, attempt.startedAt,
           attempt.submittedAt || null, attempt.evaluatedBy || null,
+          attempt.assessmentVersion || 1, attempt.durationMinutesSnapshot || 15,
+          attempt.passScoreSnapshot || 70,
         ]
       );
       await audit(client, actorId, action, attempt.id, {

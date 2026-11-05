@@ -9,6 +9,9 @@ const attemptRow = (overrides = {}) => ({
   chapter_id: "CH-001",
   course_id: "CRS-001",
   user_id: "USR-001",
+  assessment_version: 3,
+  duration_minutes_snapshot: 45,
+  pass_score_snapshot: "80",
   status: "InProgress",
   score: null,
   max_score: "100",
@@ -46,6 +49,9 @@ const domainAttempt = (overrides = {}) => ({
   chapterId: "CH-001",
   courseId: "CRS-001",
   userId: "USR-001",
+  assessmentVersion: 3,
+  durationMinutesSnapshot: 45,
+  passScoreSnapshot: 80,
   status: "InProgress",
   score: null,
   maxScore: 100,
@@ -85,7 +91,14 @@ describe("PostgreSQL assessment-attempt repository", () => {
     const result = await repository.insert(domainAttempt());
 
     expect(db.withTransaction).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ id: "ATT-001", version: 0, selectedQuestionIds: ["Q-001"] });
+    expect(result).toMatchObject({
+      id: "ATT-001",
+      version: 0,
+      assessmentVersion: 3,
+      durationMinutesSnapshot: 45,
+      passScoreSnapshot: 80,
+      selectedQuestionIds: ["Q-001"],
+    });
     const statements = client.query.mock.calls.map(([sql]) => sql);
     expect(statements.some((sql) => sql.includes("INSERT INTO assessment_attempts"))).toBe(true);
     expect(statements.some((sql) => sql.includes("INSERT INTO audit_logs"))).toBe(true);

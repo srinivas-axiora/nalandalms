@@ -171,6 +171,13 @@ describe("Sprint 7: Blind Exam Delivery Engine", () => {
       // Ensure no internal question map with answer keys is returned in start response
       expect(attempt.questionMap).toBeUndefined();
       expect(attempt.answers).toBeUndefined();
+
+      const serverAttempt = attempts.find((item) => item.id === attempt.id);
+      expect(serverAttempt).toMatchObject({
+        assessmentVersion: 1,
+        durationMinutesSnapshot: 10,
+        passScoreSnapshot: 70,
+      });
     });
 
     it("Fetching blind questions delivers stripped questions with active countdown timer", async () => {

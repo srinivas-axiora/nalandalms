@@ -79,20 +79,20 @@ or step-up middleware disagrees with its declaration.
 
 | Method | Route | Auth | State | CSRF | Step | Rate | Scope / concern |
 |---|---|---|---:|---|---:|---|---|
-| GET | `/api/assessments` | Any | N | N/A | N | G | Normal learner view strips answers |
-| POST | `/api/assessments` | A/M | Y | Y | N | G | Course ownership check present |
-| PUT | `/api/assessments/:id` | A/M | Y | Y | N | G | Target-course ownership checked |
-| PATCH | `/api/assessments/:id/status` | A/M | Y | Y | Y | G | Manager ownership check missing |
-| DELETE | `/api/assessments/:id` | A/M | Y | Y | Y | G | Course ownership checked |
-| PATCH | `/api/assessments/:id/approval` | A | Y | Y | N | G | Sensitive approval lacks step-up |
-| POST | `/api/assessments/:id/attempts/start` | A/M/I/E/L | Y | Y | N | G | Enrollment/progression check for non-admin |
-| GET | `/api/assessments/attempts/:attemptId/questions` | Any | N | N/A | N | G | Central attempt view policy; answer keys remain server-only |
+| GET | `/api/assessments` | Any | N | N/A | N | G | Phase-14 relational mode uses enrollment/course scope and strips answer, rubric and explanation material for non-owners |
+| POST | `/api/assessments` | A/M | Y | Y | N | G | Phase-14 relational mode couples ownership, course version, questions, immutable assessment version and audit transactionally |
+| PUT | `/api/assessments/:id` | A/M | Y | Y | N | G | Phase-14 relational mode requires course/assessment versions and owner/admin authority |
+| PATCH | `/api/assessments/:id/status` | A/M | Y | Y | Y | G | Phase-14 relational mode enforces owner/admin scope and optimistic versions |
+| DELETE | `/api/assessments/:id` | A/M | Y | Y | Y | G | Phase-14 relational mode archives and refuses deletion when attempts or candidate links exist |
+| PATCH | `/api/assessments/:id/approval` | A | Y | Y | Y | G | Phase-14 relational mode requires administrator step-up, versions and review feedback |
+| POST | `/api/assessments/:id/attempts/start` | A/M/I/E/L | Y | Y | N | G | Phase-14 relational mode locks published assessment/course/enrollment, derives chapter completion and creates the blind attempt in one transaction |
+| GET | `/api/assessments/attempts/:attemptId/questions` | Any | N | N/A | N | G | Central attempt view policy; answer keys remain server-only and relational attempts retain immutable duration/pass-score/version settings |
 | POST | `/api/assessments/attempts/:attemptId/answer` | Any | Y | Y | N | G | Owner-only; database-clock and optimistic-version guard in relational mode |
-| POST | `/api/assessments/attempts/:attemptId/submit` | Any | Y | Y | N | G | Owner-only; deadline and duplicate submit enforced server-side |
-| GET | `/api/assessments/attempts/pending-review` | A/M/I | N | N/A | N | G | Manager sees all; Instructor listing partly scoped |
+| POST | `/api/assessments/attempts/:attemptId/submit` | Any | Y | Y | N | G | Owner-only; deadline and duplicate submit enforced server-side; grading uses the attempt-bound pass score rather than mutable authoring state |
+| GET | `/api/assessments/attempts/pending-review` | A/M/I | N | N/A | N | G | Phase-14 relational mode scopes reviewers through assessment/course authority |
 | POST | `/api/assessments/attempts/:attemptId/grade` | A/M/I | Y | Y | Y | G | Central owner/assigned-proctor policy plus step-up |
 | GET | `/api/assessments/question-library` | A | N | N/A | N | G | Answer-bearing authoring view is administrator-only |
-| POST | `/api/candidate-assessments` | A/M/I | Y | Y | N | G | Source ownership checked; relational mode freezes an immutable question snapshot |
+| POST | `/api/candidate-assessments` | A/M/I | Y | Y | N | G | Source ownership checked; when both flags are enabled the source assessment is relational and the candidate runtime freezes an immutable question snapshot |
 | GET | `/api/candidate-assessments` | Any | N | N/A | N | G | Creator/admin filter; relational mode never recovers bearer tokens |
 | GET | `/api/candidate-assessments/analytics/:id` | Any | N | N/A | N | G | Creator/admin scoped; contains candidate PII and evaluated answers |
 | GET | `/api/candidate-assessments/:id` | Any | N | N/A | N | G | Creator/admin check present |

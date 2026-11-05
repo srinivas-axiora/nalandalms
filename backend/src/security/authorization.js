@@ -2,8 +2,11 @@ import { assessments, attempts, courses, candidateAssessments, assignments } fro
 import { isAdminRole } from "../roles.js";
 import { attemptsRepository } from "../repositories/attempts.repository.pg.js";
 import { upsertAttemptProjection } from "../attempt-projection.js";
+import { assessmentAuthorityRepository } from "../repositories/assessment-authority.repository.pg.js";
 
 const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
+const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
+const USE_RELATIONAL_ATTEMPTS = USE_PG_ATTEMPTS || USE_PG_COURSES;
 
 const assignedProctorId = (attempt) => (
   attempt?.assignedProctorId || attempt?.proctorId || attempt?.proctorUserId || null
@@ -89,12 +92,19 @@ export const requireAttemptPermission = (permission) => {
   return async (req, res, next) => {
     const attemptId = req.params.attemptId || req.body?.attemptId;
     try {
-      const persisted = USE_PG_ATTEMPTS
+      const persisted = USE_RELATIONAL_ATTEMPTS
         ? await attemptsRepository.findById(attemptId)
         : attempts.find((item) => item.id === attemptId);
       if (!persisted) return res.status(404).json({ error: "Exam attempt not found" });
-      if (!policy(req.user, persisted)) return res.status(403).json({ error: "Forbidden" });
-      if (USE_PG_ATTEMPTS) upsertAttemptProjection(persisted);
+      let authorized = policy(req.user, persisted);
+      if (!authorized && USE_PG_COURSES && ["view", "control", "grade"].includes(permission)) {
+        authorized = await assessmentAuthorityRepository.canManageAssessment({
+          id: persisted.assessmentId,
+          actor: req.user,
+        });
+      }
+      if (!authorized) return res.status(403).json({ error: "Forbidden" });
+      if (USE_RELATIONAL_ATTEMPTS) upsertAttemptProjection(persisted);
       // Keep the request-scoped object detached from the compatibility mirror.
       // Mutations are projected only after a successful database commit.
       req.authorizedAttempt = persisted;
