@@ -13,9 +13,10 @@ Owner: Engineering. Updated: 2026-11-05.
 > `USE_PG_CANDIDATE_ASSESSMENTS` must stay off until their live-database gates
 > pass. `USE_PG_PRIVACY` and its separate erasure-worker switch must also stay
 > off until the Phase 11 coverage audit passes.
-> `USE_PG_COURSES` now covers the Phase-12/14 course, chapter, progress,
-> assessment and question authority, but intentionally makes readiness fail
-> until every secondary content consumer is also migrated.
+> `USE_PG_COURSES` now covers the Phase-12/15 course, chapter, progress,
+> assessment, question, upload-grant and protected-content authority, but
+> intentionally makes readiness fail until every secondary content consumer is
+> also migrated.
 
 ---
 
@@ -183,6 +184,9 @@ For each bounded context, in roughly ascending coupling:
       database-derived eligibility, atomic attempt start and immutable
       assessment-version/duration/pass-score attempt snapshots implemented
       behind `USE_PG_COURSES=1` (Phase 14; live-DB and cross-task gates pending)
+- [x] course-scoped upload grants and protected chapter download grants now use
+      relational ownership, publication, enrollment and prerequisite authority
+      behind `USE_PG_COURSES=1` (Phase 15; live S3/RDS proof pending)
 - [ ] remaining enrollment consumers; relational candidate-link creation uses
       the assessment authority when both cutover flags are enabled
 - [x] attempts (+ answers/flags as JSONB; reconcile status CHECK)

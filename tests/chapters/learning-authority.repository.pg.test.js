@@ -61,6 +61,67 @@ const fakeDb = (handler) => {
 };
 
 describe("PostgreSQL chapter and progress authority", () => {
+  it("authorizes uploads only for the course owner or an administrator", async () => {
+    const { db } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT * FROM courses")) return { rows: [course()] };
+      return { rows: [] };
+    });
+    const repository = createLearningAuthorityRepository(db);
+
+    await expect(repository.authorizeCourseUpload({
+      courseId: "CRS-1",
+      actor: { id: "FOREIGN-MANAGER", role: "Manager" },
+    })).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    await expect(repository.authorizeCourseUpload({
+      courseId: "CRS-1",
+      actor: { id: "OWNER-1", role: "Manager" },
+    })).resolves.toEqual({ courseId: "CRS-1", courseVersion: 2 });
+  });
+
+  it("denies a download when prerequisite chapters are incomplete", async () => {
+    const rows = [chapter(), chapter({ id: "CH-2", sequence: 2, file_name: "chapter_pdf/CRS-1/advanced.pdf" })];
+    const { db } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT * FROM courses")) return { rows: [course()] };
+      if (sql.includes("SELECT * FROM chapters")) return { rows };
+      if (sql.includes("SELECT * FROM enrollments")) return { rows: [enrollment()] };
+      return { rows: [] };
+    });
+    const repository = createLearningAuthorityRepository(db);
+
+    await expect(repository.authorizeContentDownload({
+      courseId: "CRS-1",
+      chapterId: "CH-2",
+      actor: { id: "LEARNER-1", role: "Learner" },
+    })).rejects.toMatchObject({ code: "CHAPTER_LOCKED", details: { requiredChapterId: "CH-1" } });
+  });
+
+  it("returns protected content metadata to an enrolled learner after prerequisites", async () => {
+    const rows = [chapter(), chapter({
+      id: "CH-2",
+      sequence: 2,
+      content_type: "PDF",
+      url: "chapter_pdf/CRS-1/advanced.pdf",
+      file_name: "advanced.pdf",
+    })];
+    const { db } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT * FROM courses")) return { rows: [course()] };
+      if (sql.includes("SELECT * FROM chapters")) return { rows };
+      if (sql.includes("SELECT * FROM enrollments")) return { rows: [enrollment({ completed_chapters: ["CH-1"] })] };
+      return { rows: [] };
+    });
+    const repository = createLearningAuthorityRepository(db);
+
+    await expect(repository.authorizeContentDownload({
+      courseId: "CRS-1",
+      chapterId: "CH-2",
+      actor: { id: "LEARNER-1", role: "Learner" },
+    })).resolves.toMatchObject({
+      courseId: "CRS-1",
+      chapter: { id: "CH-2", url: "chapter_pdf/CRS-1/advanced.pdf", fileName: "advanced.pdf" },
+    });
+  });
+
   it("redacts locked chapter content while preserving minimal metadata", async () => {
     const rows = [chapter(), chapter({ id: "CH-2", sequence: 2, title: "Advanced", body: "answer", url: "https://secret" })];
     const { db } = fakeDb(async (sql) => {
@@ -123,6 +184,28 @@ describe("PostgreSQL chapter and progress authority", () => {
       updates: { title: "Stale" },
     })).rejects.toMatchObject({ code: "VERSION_CONFLICT", details: { currentVersion: 4 } });
     expect(client.query.mock.calls.some(([sql]) => sql.startsWith("UPDATE chapters"))).toBe(false);
+  });
+
+  it("rejects a PDF object key issued for another course", async () => {
+    const { db, client } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT * FROM courses")) return { rows: [course()] };
+      if (sql.includes("max(sequence)")) return { rows: [{ next_sequence: 3 }] };
+      return { rows: [] };
+    });
+    const repository = createLearningAuthorityRepository(db);
+
+    await expect(repository.createChapter({
+      courseId: "CRS-1",
+      actor: { id: "OWNER-1", role: "Manager" },
+      expectedCourseVersion: 2,
+      chapter: {
+        id: "CH-CROSS-COURSE",
+        title: "Foreign object",
+        contentType: "PDF",
+        url: "chapter_pdf/CRS-2/stolen.pdf",
+      },
+    })).rejects.toMatchObject({ code: "INVALID_CONTENT_LOCATION" });
+    expect(client.query.mock.calls.some(([sql]) => sql.includes("INSERT INTO chapters"))).toBe(false);
   });
 
   it("prevents a manager from authoring chapters in another owner's course", async () => {

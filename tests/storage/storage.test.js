@@ -47,6 +47,7 @@ describe("Nalanda LMS — Cloud Storage, Media & Redis Rate Limiting", () => {
         .set("Cookie", cookie)
         .set("x-csrf-token", token)
         .send({
+          courseId: "CRS-001",
           filename: "intro.mp4",
           contentType: "video/mp4",
         });
@@ -60,6 +61,7 @@ describe("Nalanda LMS — Cloud Storage, Media & Redis Rate Limiting", () => {
         .set("Cookie", `${cookie}; ${authCookieFor(testUsers.employee)}`)
         .set("x-csrf-token", token)
         .send({
+          courseId: "CRS-001",
           filename: "intro.mp4",
           contentType: "video/mp4",
         });
@@ -73,6 +75,7 @@ describe("Nalanda LMS — Cloud Storage, Media & Redis Rate Limiting", () => {
         .set("Cookie", `${cookie}; ${authCookieFor(testUsers.admin)}`)
         .set("x-csrf-token", token)
         .send({
+          courseId: "CRS-001",
           filename: "malicious.exe",
           contentType: "application/x-msdownload",
         });
@@ -86,6 +89,7 @@ describe("Nalanda LMS — Cloud Storage, Media & Redis Rate Limiting", () => {
         .set("Cookie", `${cookie}; ${authCookieFor(testUsers.admin)}`)
         .set("x-csrf-token", token)
         .send({
+          courseId: "CRS-001",
           filename: "syllabus.pdf",
           contentType: "application/pdf",
           category: "chapter_pdf",
@@ -93,7 +97,7 @@ describe("Nalanda LMS — Cloud Storage, Media & Redis Rate Limiting", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.uploadUrl).toBeDefined();
-      expect(res.body.key).toMatch(/chapter_pdf\//);
+      expect(res.body.key).toMatch(/^chapter_pdf\/CRS-001\//);
       expect(res.body.downloadUrl).toBeDefined();
     });
   });

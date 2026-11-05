@@ -5,7 +5,7 @@ import type { AppData, User, Course, Chapter, ChapterFeedback, Enrollment, Skill
 import { isAdminRole } from "../types";
 import { now, uid } from "../types";
 import { toast } from "../toast";
-import { apiFetch } from "../api";
+import { apiFetch, uploadCourseFile } from "../api";
 import AICopilot from "../components/AICopilot";
 
 const demoPdfDataUrl = "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxMTggPj4Kc3RyZWFtCkJUCi9GMSAyNCBUZgo3MiA3MjAgVGQKKE5hbGFuZGEgQ2hhcHRlciBQREYpIFRqCjAgLTQwIFRkCi9GMSAxNCBUZgooVXBsb2FkIGEgcGRmIGZyb20gdGhlIGFkbWluIGNvdXJzZSBlZGl0b3IgdG8gcmVwbGFjZSB0aGlzIGRlbW8gZG9jdW1lbnQuKSBUagpFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNzQgMDAwMDAgbiAKMDAwMDAwMDQ0MiAwMDAwMCBuIAp0cmFpbGVyCjw8IC9Sb290IDEgMCBSIC9TaXplIDYgPj4Kc3RhcnR4cmVmCjUxMgolJUVPRg==";
@@ -287,6 +287,7 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
   const [pdfZoom, setPdfZoom] = useState(1);
   const [pdfOpenedAt, setPdfOpenedAt] = useState<number | null>(null);
   const [pdfElapsedSeconds, setPdfElapsedSeconds] = useState(0);
+  const [authorizedPdfUrl, setAuthorizedPdfUrl] = useState("");
   const [, setTimerTick] = useState(0);
   const [chapterSeconds, setChapterSeconds] = useState<Record<string, number>>(() => ({ ...(enrollment?.chapterTimeSpentSeconds || {}) }));
   const [fbForm, setFbForm] = useState({ rating: 0, clarity: 0, relevance: 0, comments: "" });
@@ -300,7 +301,7 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
   const hasFeedback = feedbacks.some((f) => f.chapterId === ch.id && f.userId === currentUser.id);
   const chAssessment = assessments.find((a: any) => a.chapterId === ch.id && a.approval === "Approved");
   const hasAttempt = attempts.some((a: any) => a.chapterId === ch.id && a.userId === currentUser.id && (a.status === "Passed" || a.status === "Submitted"));
-  const pdfSource = ch.url || demoPdfDataUrl;
+  const pdfSource = authorizedPdfUrl || (ch.url?.startsWith("data:application/pdf") ? ch.url : demoPdfDataUrl);
   const pdfViewerSource = `${pdfSource}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
   const requiredSeconds = Math.max(0, Math.round((ch.minimumTimeMinutes ?? ch.durationMinutes ?? 0) * 60));
   const visibleElapsed = activeChapterIdRef.current === ch.id && activeStartedAtRef.current && !document.hidden ? Math.floor((Date.now() - activeStartedAtRef.current) / 1000) : 0;
@@ -410,7 +411,19 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
     setShowFeedback(false);
     setFbForm({ rating: 0, clarity: 0, relevance: 0, comments: "" });
   };
-  const openPdfViewer = () => {
+  const openPdfViewer = async () => {
+    try {
+      const response = await apiFetch(`/content/${course.id}/${ch.id}/url`);
+      if (!response.ok) throw new Error();
+      const result = await response.json();
+      setAuthorizedPdfUrl(result.url);
+    } catch {
+      if (!ch.url?.startsWith("data:application/pdf")) {
+        toast("This document is unavailable or you no longer have access");
+        return;
+      }
+      setAuthorizedPdfUrl(ch.url);
+    }
     setPdfElapsedSeconds(0);
     setPdfOpenedAt(Date.now());
     setPdfZoom(1);
@@ -420,6 +433,7 @@ function ChapterPlayer({ course, chapters, enrollment, assessments, attempts, fe
     setShowPdf(false);
     setPdfOpenedAt(null);
     setPdfElapsedSeconds(0);
+    setAuthorizedPdfUrl("");
   };
   const formatTimer = (seconds: number) => `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 
@@ -764,10 +778,13 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
   const saveChapter = () => {
     if (!editCourse || !chapterForm.title.trim()) return;
     const isEditing = Boolean(chapterForm.id);
+    const existingChapter = isEditing ? data.chapters.find((chapter) => chapter.id === chapterForm.id) : undefined;
     const url = isEditing ? `/courses/${editCourse.id}/chapters/${chapterForm.id}` : `/courses/${editCourse.id}/chapters`;
     apiFetch(url, {
       method: isEditing ? "PUT" : "POST",
       body: JSON.stringify({
+        courseVersion: editCourse.version,
+        ...(isEditing ? { chapterVersion: existingChapter?.version } : {}),
         title: chapterForm.title,
         description: chapterForm.description,
         contentType: chapterForm.contentType,
@@ -781,10 +798,13 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
       .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
       .then((resData) => {
         const chapter = resData.data;
+        const courseVersion = Number(resData.courseVersion || editCourse.version);
         const chapters = isEditing
           ? data.chapters.map((item) => item.id === chapter.id ? chapter : item)
           : [...data.chapters, chapter];
-        setData(addAudit({ ...data, chapters }, isEditing ? "Updated chapter" : "Created chapter", chapter.id));
+        const courses = data.courses.map((course) => course.id === editCourse.id ? { ...course, version: courseVersion } : course);
+        setEditCourse((current) => current ? { ...current, version: courseVersion } : current);
+        setData(addAudit({ ...data, chapters, courses }, isEditing ? "Updated chapter" : "Created chapter", chapter.id));
         resetChapterForm();
         toast(isEditing ? "Chapter updated successfully" : "Chapter created successfully");
       })
@@ -805,13 +825,15 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
     });
   };
 
-  const handlePdfUpload = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
-      setChapterForm((current) => ({ ...current, fileName: file.name, url: result }));
-    };
-    reader.readAsDataURL(file);
+  const handlePdfUpload = async (file: File) => {
+    if (!editCourse) return;
+    try {
+      const result = await uploadCourseFile(editCourse.id, file, "chapter_pdf");
+      setChapterForm((current) => ({ ...current, fileName: file.name, url: result.key }));
+      toast("PDF uploaded securely");
+    } catch {
+      toast("PDF upload failed");
+    }
   };
 
   const assign = (courseId: string, userId: string) => {

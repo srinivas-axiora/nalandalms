@@ -79,6 +79,7 @@ export type Chapter = {
   fileName?: string;
   durationMinutes: number;
   minimumTimeMinutes?: number;
+  version?: number;
   isCompleted?: boolean;
   isLocked?: boolean;
   lockReason?: string | null;

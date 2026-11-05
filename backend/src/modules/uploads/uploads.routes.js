@@ -6,6 +6,10 @@ import { v4 as uuid } from "uuid";
 import { authenticate, requireRole } from "../../middleware.js";
 import { courses, chapters, assignments, isAdmin } from "../../core.js";
 import { audit } from "../../domain.js";
+import {
+  LearningAuthorityError,
+  learningAuthorityRepository,
+} from "../../repositories/learning-authority.repository.pg.js";
 import { requireAttemptPermission } from "../../security/authorization.js";
 import {
   MAX_COURSE_UPLOAD_BYTES,
@@ -30,9 +34,22 @@ const safeFilename = (value) => {
   return `${base}${extension}`;
 };
 
-export function registerUploads(app) {
+const resourceId = z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9._:-]+$/);
+
+const learningErrorStatus = (error) => {
+  if (!(error instanceof LearningAuthorityError)) return null;
+  if (["COURSE_NOT_FOUND", "CHAPTER_NOT_FOUND"].includes(error.code)) return 404;
+  if (["FORBIDDEN", "ENROLLMENT_REQUIRED", "CHAPTER_LOCKED"].includes(error.code)) return 403;
+  return 500;
+};
+
+export function registerUploads(app, options = {}) {
+  const usePgCourses = options.usePgCourses ?? process.env.USE_PG_COURSES === "1";
+  const authority = options.learningAuthorityRepository || learningAuthorityRepository;
+
   app.post("/api/uploads/presign", authenticate, requireRole("Admin", "Manager"), async (req, res, next) => {
     const schema = z.object({
+      courseId: resourceId,
       filename: z.string().min(1).max(200),
       contentType: z.string().min(1).max(100),
       category: z.enum(["course_media", "chapter_pdf"]).default("course_media"),
@@ -46,8 +63,24 @@ export function registerUploads(app) {
       return res.status(415).json({ error: "File extension does not match the declared content type" });
     }
 
+    try {
+      if (usePgCourses) {
+        await authority.authorizeCourseUpload({ courseId: parsed.data.courseId, actor: req.user });
+      } else {
+        const course = courses.find((item) => item.id === parsed.data.courseId);
+        if (!course) return res.status(404).json({ error: "Course not found" });
+        if (!isAdmin(req.user.role) && course.ownerId !== req.user.id) {
+          return res.status(403).json({ error: "You cannot upload content for this course" });
+        }
+      }
+    } catch (error) {
+      const status = learningErrorStatus(error);
+      if (status) return res.status(status).json({ error: error.message, code: error.code });
+      return next(error);
+    }
+
     const filename = safeFilename(parsed.data.filename);
-    const key = `${parsed.data.category}/${Date.now()}-${uuid()}-${filename}`;
+    const key = `${parsed.data.category}/${parsed.data.courseId}/${Date.now()}-${uuid()}-${filename}`;
     try {
       const presigned = await getPresignedUploadUrl(
         key,
@@ -126,17 +159,42 @@ export function registerUploads(app) {
 
   app.get("/api/content/:courseId/:chapterId/url", authenticate, async (req, res, next) => {
     const { courseId, chapterId } = req.params;
-    const course = courses.find((item) => item.id === courseId && item.status === "Active" && item.approval === "Approved");
-    if (!course) return res.status(404).json({ error: "Course not found" });
-    const hasAccess = isAdmin(req.user.role)
-      || course.ownerId === req.user.id
-      || assignments.some((item) => item.courseId === courseId && item.userId === req.user.id);
-    if (!hasAccess) return res.status(403).json({ error: "Enrollment required to access this content" });
-
-    const chapter = chapters.find((item) => item.id === chapterId && item.courseId === courseId);
-    if (!chapter) return res.status(404).json({ error: "Chapter not found" });
-    const objectKey = chapter.fileName || chapter.url;
+    let chapter;
+    try {
+      if (usePgCourses) {
+        ({ chapter } = await authority.authorizeContentDownload({ courseId, chapterId, actor: req.user }));
+      } else {
+        const course = courses.find((item) => item.id === courseId);
+        const privileged = course && (isAdmin(req.user.role) || course.ownerId === req.user.id);
+        if (!course || (!privileged && (course.status !== "Active" || course.approval !== "Approved"))) {
+          return res.status(404).json({ error: "Course not found" });
+        }
+        const enrollment = assignments.find((item) => item.courseId === courseId && item.userId === req.user.id);
+        if (!privileged && !enrollment) return res.status(403).json({ error: "Enrollment required to access this content" });
+        const ordered = chapters
+          .filter((item) => item.courseId === courseId)
+          .sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
+        chapter = ordered.find((item) => item.id === chapterId);
+        if (!chapter) return res.status(404).json({ error: "Chapter not found" });
+        if (!privileged) {
+          const chapterIndex = ordered.findIndex((item) => item.id === chapterId);
+          const completed = enrollment.completedChapters || [];
+          const locked = ordered.slice(0, chapterIndex).find((item) => !completed.includes(item.id));
+          if (locked) return res.status(403).json({ error: "Prerequisite chapter incomplete", code: "CHAPTER_LOCKED" });
+        }
+      }
+    } catch (error) {
+      const status = learningErrorStatus(error);
+      if (status) return res.status(status).json({ error: error.message, code: error.code, ...(Object.keys(error.details || {}).length ? { details: error.details } : {}) });
+      return next(error);
+    }
+    const objectKey = chapter.url || chapter.fileName;
     if (!objectKey) return res.status(404).json({ error: "No media file associated with this chapter" });
+    const allowedPrefixes = [`course_media/${courseId}/`, `chapter_pdf/${courseId}/`];
+    const keySegmentsAreSafe = String(objectKey).split("/").every((segment) => segment && segment !== "." && segment !== "..");
+    if (!keySegmentsAreSafe || !allowedPrefixes.some((prefix) => String(objectKey).startsWith(prefix))) {
+      return res.status(404).json({ error: "No managed media file associated with this chapter" });
+    }
 
     const contentType = chapter.contentType === "PDF" ? "application/pdf" : "application/octet-stream";
     try {

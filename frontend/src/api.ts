@@ -65,3 +65,27 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}, retr
 
   return res;
 }
+
+export async function uploadCourseFile(courseId: string, file: File, category: "course_media" | "chapter_pdf") {
+  const contentType = file.type || (category === "chapter_pdf" ? "application/pdf" : "application/octet-stream");
+  const grantResponse = await apiFetch("/uploads/presign", {
+    method: "POST",
+    body: JSON.stringify({
+      courseId,
+      filename: file.name,
+      contentType,
+      category,
+    }),
+  });
+  if (!grantResponse.ok) throw new Error("Upload authorization failed");
+  const grant = await grantResponse.json();
+  const uploadEndpoint = String(grant.uploadUrl || "").replace(/^\/api/, "");
+  if (!uploadEndpoint.startsWith("/uploads/direct?token=")) throw new Error("Invalid upload grant");
+  const uploadResponse = await apiFetch(uploadEndpoint, {
+    method: "PUT",
+    headers: { "Content-Type": contentType },
+    body: file,
+  });
+  if (!uploadResponse.ok) throw new Error("Upload failed");
+  return { key: String(grant.key), downloadUrl: String(grant.downloadUrl || "") };
+}

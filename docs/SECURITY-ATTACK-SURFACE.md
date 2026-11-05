@@ -141,10 +141,10 @@ or step-up middleware disagrees with its declaration.
 | POST | `/api/payments/create-order` | Any | Y | Y | N | G | Server-priced order ledger binds user/course/amount/currency and expires |
 | POST | `/api/payments/verify` | Any | Y | Y | N | G | Mandatory HMAC, order ownership/binding and payment-level idempotency |
 | POST | `/api/payments/webhook` | Public | Y | Exempt | N | G | Mandatory raw-body HMAC and provider event-ID replay protection |
-| POST | `/api/uploads/presign` | A/M | Y | Y | N | G | Short-lived scoped grant; extension/MIME allowlist and randomized rooted key |
+| POST | `/api/uploads/presign` | A/M | Y | Y | N | G | Explicit course scope; owner/admin authority; short-lived grant; extension/MIME allowlist and course-rooted randomized key |
 | PUT | `/api/uploads/direct` | A/M | Y | Y | N | G | Subject-bound one-use grant, 15MB cap and magic-byte validation |
 | GET | `/api/uploads/download` | Any | N | N/A | N | G | Subject-bound grant; attachment, no-store, nosniff and sandbox headers |
-| GET | `/api/content/:courseId/:chapterId/url` | Any | N | N/A | N | G | Enrollment/owner/admin authorization present |
+| GET | `/api/content/:courseId/:chapterId/url` | Any | N | N/A | N | G | Relational owner/admin or published enrollment authority; prerequisite gate; object key must remain inside the requested course prefix |
 | POST | `/api/proctoring/captures` | Any | Y | Y | N | G | Attempt-scoped; strict JPEG decoding and 5MB cap |
 | GET | `/uploads/*` | Public | N | N/A | N | None | Explicit 404; local object directory is not published |
 | POST | `/api/reports/export` | A/M | Y | Y | N | G | In-memory synchronous rows; manager scope via helper |

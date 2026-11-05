@@ -6,7 +6,7 @@ import type { AppData, User, Chapter } from "../types";
 import { isAdminRole } from "../types";
 import { now, uid } from "../types";
 import { toast } from "../toast";
-import { apiFetch } from "../api";
+import { apiFetch, uploadCourseFile } from "../api";
 
 export default function Chapters({ data, currentUser, setData }: { data: AppData; currentUser: User; setData: (d: AppData) => void }) {
   const [createOpen, setCreateOpen] = useState(false);
@@ -16,14 +16,28 @@ export default function Chapters({ data, currentUser, setData }: { data: AppData
 
   const visibleCourses = data.courses.filter((c) => isAdminRole(currentUser.role) || c.ownerId === currentUser.id);
 
+  const uploadPdf = async (file: File) => {
+    if (!form.courseId) return;
+    try {
+      const result = await uploadCourseFile(form.courseId, file, "chapter_pdf");
+      setForm((current) => ({ ...current, fileName: file.name, url: result.key }));
+      toast("PDF uploaded securely");
+    } catch {
+      toast("PDF upload failed");
+    }
+  };
+
   const save = (e: FormEvent) => {
     e.preventDefault();
     const courseChapters = data.chapters.filter((c) => c.courseId === form.courseId);
+    const course = data.courses.find((item) => item.id === form.courseId);
+    if (!course) return;
     if (courseChapters.length >= 99) return;
 
     apiFetch(`/courses/${form.courseId}/chapters`, {
       method: "POST",
       body: JSON.stringify({
+        courseVersion: course.version,
         title: form.title,
         description: form.description,
         contentType: form.contentType,
@@ -37,7 +51,9 @@ export default function Chapters({ data, currentUser, setData }: { data: AppData
       .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
       .then((resData) => {
         const ch = resData.data;
-        setData(addAudit({ ...data, chapters: [...data.chapters, ch] }, "Created chapter", ch.id));
+        const courseVersion = Number(resData.courseVersion || course.version);
+        const courses = data.courses.map((item) => item.id === course.id ? { ...item, version: courseVersion } : item);
+        setData(addAudit({ ...data, courses, chapters: [...data.chapters, ch] }, "Created chapter", ch.id));
         setCreateOpen(false);
         setForm({ courseId: "", title: "", description: "", contentType: "Rich Text", body: "", url: "", fileName: "", durationMinutes: "20", minimumTimeMinutes: "15" });
         toast("Chapter created successfully");
@@ -98,7 +114,12 @@ export default function Chapters({ data, currentUser, setData }: { data: AppData
               <Input label="Duration (min)" value={form.durationMinutes} onChange={(v) => setForm({ ...form, durationMinutes: v })} type="number" />
               <Input label="Minimum required time (min)" value={form.minimumTimeMinutes} onChange={(v) => setForm({ ...form, minimumTimeMinutes: v })} type="number" />
               {form.contentType.includes("Video") && <Input label="Video URL" value={form.url} onChange={(v) => setForm({ ...form, url: v })} />}
-              {form.contentType === "PDF" && <Input label="File name" value={form.fileName} onChange={(v) => setForm({ ...form, fileName: v })} />}
+              {form.contentType === "PDF" && (
+                <label className="space-y-2 text-sm text-slate-400"><span>Upload PDF</span>
+                  <input type="file" accept=".pdf,application/pdf" onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadPdf(file); }} className="w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-white" />
+                  {form.fileName && <span className="block text-xs text-cyan-200">Selected: {form.fileName}</span>}
+                </label>
+              )}
               <label className="space-y-2 text-sm text-slate-400 md:col-span-2"><span>Description</span>
                 <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="min-h-16 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-white" />
               </label>

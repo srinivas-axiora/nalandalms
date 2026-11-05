@@ -8,6 +8,14 @@ import {
 } from "../../repositories/learning-authority.repository.pg.js";
 
 const idempotencySchema = z.string().trim().min(16).max(128).regex(/^[A-Za-z0-9._:-]+$/);
+const managedObjectKey = z.string().trim().max(700).refine((value) => {
+  if (!/^(?:course_media|chapter_pdf)\/[A-Za-z0-9._:-]+\/[A-Za-z0-9._/-]+$/.test(value)) return false;
+  return value.split("/").every((segment) => segment && segment !== "." && segment !== "..");
+}, "Invalid managed object key");
+const contentLocation = z.union([
+  z.string().url().max(2_048),
+  managedObjectKey,
+]);
 
 const chapterFields = {
   sequence: z.coerce.number().int().positive().optional(),
@@ -15,7 +23,7 @@ const chapterFields = {
   description: z.string().max(10_000).default(""),
   contentType: z.enum(["Rich Text", "PDF", "Video Link"]).default("Rich Text"),
   body: z.string().max(500_000).default(""),
-  url: z.string().url().max(2_048).nullable().optional(),
+  url: contentLocation.nullable().optional(),
   fileName: z.string().trim().min(1).max(512).nullable().optional(),
   durationMinutes: z.coerce.number().int().min(0).max(100_000).default(10),
   minimumTimeMinutes: z.coerce.number().int().min(0).max(100_000).optional(),
@@ -56,6 +64,7 @@ const statusFor = (error) => {
   if (["COURSE_NOT_FOUND", "CHAPTER_NOT_FOUND"].includes(error.code)) return 404;
   if (["FORBIDDEN", "ENROLLMENT_REQUIRED", "CHAPTER_LOCKED"].includes(error.code)) return 403;
   if (["VERSION_CONFLICT", "CHAPTER_CONFLICT", "IDEMPOTENCY_CONFLICT"].includes(error.code)) return 409;
+  if (error.code === "INVALID_CONTENT_LOCATION") return 400;
   if (error.code === "HEARTBEAT_TOO_SOON") return 429;
   if (error.code === "NO_CHANGES") return 400;
   return 500;

@@ -64,6 +64,23 @@ const audit = (client, actorId, action, entityType, entityId, metadata = {}) => 
 );
 
 const canManage = (actor, course) => isAdmin(actor?.role) || course.owner_id === actor?.id;
+const isCourseObjectKey = (value, courseId) => {
+  if (!value) return true;
+  const candidate = String(value);
+  const segmentsAreSafe = candidate.split("/").every((segment) => segment && segment !== "." && segment !== "..");
+  return segmentsAreSafe && [`course_media/${courseId}/`, `chapter_pdf/${courseId}/`]
+    .some((prefix) => candidate.startsWith(prefix));
+};
+
+const assertContentLocation = ({ courseId, contentType, url }) => {
+  const managedKey = String(url || "");
+  if (/^(?:course_media|chapter_pdf)\//.test(managedKey) && !isCourseObjectKey(managedKey, courseId)) {
+    fail("INVALID_CONTENT_LOCATION", "Managed content must use an object key issued for this course");
+  }
+  if (contentType === "PDF" && url && !isCourseObjectKey(url, courseId)) {
+    fail("INVALID_CONTENT_LOCATION", "PDF content must use an object key issued for this course");
+  }
+};
 
 const assertCourseVersion = (course, expectedVersion) => {
   if (Number(course.current_version) !== Number(expectedVersion)) {
@@ -175,6 +192,37 @@ export function createLearningAuthorityRepository(db = { query, withTransaction 
     };
   });
 
+  const authorizeCourseUpload = ({ courseId, actor }) => db.withTransaction(async (client) => {
+    const course = await loadCourse(client, courseId, " FOR SHARE");
+    if (!course) fail("COURSE_NOT_FOUND", "Course not found");
+    if (!canManage(actor, course)) fail("FORBIDDEN", "You cannot upload content for this course");
+    return {
+      courseId: course.id,
+      courseVersion: Number(course.current_version),
+    };
+  });
+
+  const authorizeContentDownload = ({ courseId, chapterId, actor }) => db.withTransaction(async (client) => {
+    const course = await loadCourse(client, courseId, " FOR SHARE");
+    if (!course) fail("COURSE_NOT_FOUND", "Course not found");
+    const privileged = canManage(actor, course);
+    if (!privileged && (course.status !== "Active" || course.approval !== "Approved")) {
+      fail("COURSE_NOT_FOUND", "Published course not found");
+    }
+    const chapters = await loadChapters(client, courseId);
+    const chapter = chapters.find((item) => item.id === chapterId);
+    if (!chapter) fail("CHAPTER_NOT_FOUND", "Chapter not found");
+    if (!privileged) {
+      const enrollment = await loadEnrollment(client, courseId, actor.id);
+      const access = accessFor({ chapters, chapterId, enrollment });
+      if (!access.allowed) fail(access.code, access.message, access);
+    }
+    return {
+      courseId: course.id,
+      chapter: mapLearningChapterRow(chapter),
+    };
+  });
+
   const recordCourseVersion = async (client, course, actor, changeNote) => {
     const { rows } = await client.query(
       `UPDATE courses SET current_version = current_version + 1,
@@ -201,6 +249,7 @@ export function createLearningAuthorityRepository(db = { query, withTransaction 
         "SELECT COALESCE(max(sequence), 0) + 1 AS next_sequence FROM chapters WHERE course_id = $1",
         [courseId]
       )).rows[0].next_sequence);
+      assertContentLocation({ courseId, contentType: chapter.contentType, url: chapter.url });
       let inserted;
       try {
         inserted = await client.query(
@@ -242,6 +291,11 @@ export function createLearningAuthorityRepository(db = { query, withTransaction 
       const existing = found.rows[0];
       if (!existing) fail("CHAPTER_NOT_FOUND", "Chapter not found");
       assertChapterVersion(existing, expectedChapterVersion);
+      assertContentLocation({
+        courseId,
+        contentType: updates.contentType ?? existing.content_type,
+        url: updates.url === undefined ? existing.url : updates.url,
+      });
       const fields = [];
       const params = [chapterId, courseId];
       const allowed = {
@@ -447,7 +501,16 @@ export function createLearningAuthorityRepository(db = { query, withTransaction 
     };
   });
 
-  return { listForActor, createChapter, updateChapter, recordHeartbeat, recordVideoProgress, getProgress };
+  return {
+    listForActor,
+    authorizeCourseUpload,
+    authorizeContentDownload,
+    createChapter,
+    updateChapter,
+    recordHeartbeat,
+    recordVideoProgress,
+    getProgress,
+  };
 }
 
 export const learningAuthorityRepository = createLearningAuthorityRepository();

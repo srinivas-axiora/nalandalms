@@ -79,6 +79,7 @@ const courseB = {
   id: "SEC-COURSE-B",
   title: "Security Course B",
   description: "Security regression fixture course B",
+  ownerId: "EMP-1002",
   priceCents: 900000,
 };
 const assessment = {
@@ -165,6 +166,9 @@ beforeAll(async () => {
       sequence: 2,
       title: "Locked chapter",
       body: "CONFIDENTIAL LOCKED CONTENT",
+      contentType: "PDF",
+      url: "chapter_pdf/SEC-COURSE-A/locked.pdf",
+      fileName: "locked.pdf",
       minimumTimeMinutes: 10,
     },
   );
@@ -315,7 +319,7 @@ describe("Nalanda release-blocking security regressions", () => {
       .post("/api/uploads/presign")
       .set("Cookie", `${csrf.cookie}; ${cookieFor(admin)}`)
       .set("x-csrf-token", csrf.token)
-      .send({ filename: "spoofed.pdf", contentType: "application/pdf", category: "chapter_pdf" });
+      .send({ courseId: "CRS-001", filename: "spoofed.pdf", contentType: "application/pdf", category: "chapter_pdf" });
     const response = await request(app)
       .put(grant.body.uploadUrl)
       .set("Cookie", `${csrf.cookie}; ${cookieFor(admin)}`)
@@ -333,7 +337,7 @@ describe("Nalanda release-blocking security regressions", () => {
       .post("/api/uploads/presign")
       .set("Cookie", `${csrf.cookie}; ${cookieFor(admin)}`)
       .set("x-csrf-token", csrf.token)
-      .send({ filename: "safe.pdf", contentType: "application/pdf", category: "chapter_pdf" });
+      .send({ courseId: "CRS-001", filename: "safe.pdf", contentType: "application/pdf", category: "chapter_pdf" });
     const uploaded = await request(app)
       .put(grant.body.uploadUrl)
       .set("Cookie", `${csrf.cookie}; ${cookieFor(admin)}`)
@@ -351,6 +355,34 @@ describe("Nalanda release-blocking security regressions", () => {
     expect(authorized.status).toBe(200);
     expect(authorized.headers["content-disposition"]).toMatch(/^attachment;/);
     expect(authorized.headers["x-content-type-options"]).toBe("nosniff");
+  });
+
+  it("SEC-P15-001 a Manager cannot request an upload grant for another owner's course", async () => {
+    const manager = core.users.find((item) => item.id === "EMP-1003");
+    const csrf = await csrfPair();
+    const response = await request(app)
+      .post("/api/uploads/presign")
+      .set("Cookie", `${csrf.cookie}; ${cookieFor(manager)}`)
+      .set("x-csrf-token", csrf.token)
+      .send({
+        courseId: courseB.id,
+        filename: "foreign.pdf",
+        contentType: "application/pdf",
+        category: "chapter_pdf",
+      });
+
+    expect(response.status).toBe(403);
+    expect(response.body).not.toHaveProperty("uploadUrl");
+  });
+
+  it("SEC-P15-002 an enrolled learner cannot obtain a grant for a locked chapter", async () => {
+    const response = await request(app)
+      .get(`/api/content/${courseA.id}/SEC-CHAPTER-2/url`)
+      .set("Cookie", cookieFor(learnerA));
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({ code: "CHAPTER_LOCKED" });
+    expect(response.body).not.toHaveProperty("url");
   });
 
   it("SEC-P3-004 proctor captures cannot be uploaded to another candidate's attempt", async () => {
