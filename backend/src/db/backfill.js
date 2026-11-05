@@ -42,6 +42,9 @@ async function loadSource() {
       attempts: core.attempts || [],
       proctoringLogs: core.proctoringLogs || [],
       acharyaFeedbackMemory: core.acharyaFeedbackMemory || [],
+      skillRatings: core.skillRatings || [],
+      chapterFeedbacks: core.chapterFeedbacks || [],
+      settings: core.settings || {},
       issuedCertificates: core.issuedCertificates || [],
       candidateAssessments: core.candidateAssessments || [],
     },
@@ -767,7 +770,80 @@ export async function backfill() {
       );
     }
 
-    // 12. AI generation feedback. Only records with a valid UUID and an
+    // 12. Operational settings and learning feedback.
+    if (data.settings && typeof data.settings === "object" && !Array.isArray(data.settings)) {
+      const defaults = {
+        fullscreenRequired: true, cameraRequired: true, microphoneRequired: true,
+        tabSwitchAutoSubmit: true, noiseThreshold: 70, maxAssessmentFlags: 2,
+      };
+      const boundedInteger = (candidate, fallback, min, max) => {
+        const value = Number(candidate);
+        return Number.isInteger(value) && value >= min && value <= max ? value : fallback;
+      };
+      const value = {
+        fullscreenRequired: typeof data.settings.fullscreenRequired === "boolean" ? data.settings.fullscreenRequired : defaults.fullscreenRequired,
+        cameraRequired: typeof data.settings.cameraRequired === "boolean" ? data.settings.cameraRequired : defaults.cameraRequired,
+        microphoneRequired: typeof data.settings.microphoneRequired === "boolean" ? data.settings.microphoneRequired : defaults.microphoneRequired,
+        tabSwitchAutoSubmit: typeof data.settings.tabSwitchAutoSubmit === "boolean" ? data.settings.tabSwitchAutoSubmit : defaults.tabSwitchAutoSubmit,
+        noiseThreshold: boundedInteger(data.settings.noiseThreshold, defaults.noiseThreshold, 1, 100),
+        maxAssessmentFlags: boundedInteger(data.settings.maxAssessmentFlags, defaults.maxAssessmentFlags, 0, 100),
+      };
+      await client.query(
+        `INSERT INTO system_settings (key, value, updated_by)
+         VALUES ('proctoring', $1::jsonb, NULL)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [JSON.stringify(value)],
+      );
+    }
+
+    const skillRatings = data.skillRatings || [];
+    for (const rating of skillRatings) {
+      if (!rating.id || !userIds.has(rating.userId)) continue;
+      const score = Number(rating.score);
+      const assessmentsBased = Number(rating.assessmentsBased);
+      await client.query(
+        `INSERT INTO skill_ratings (
+           id, user_id, skill, score, assessments_based, trend, last_updated
+         ) VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::timestamptz, now()))
+         ON CONFLICT (user_id, skill) DO UPDATE SET
+           score = EXCLUDED.score, assessments_based = EXCLUDED.assessments_based,
+           trend = EXCLUDED.trend, last_updated = EXCLUDED.last_updated`,
+        [rating.id, rating.userId, String(rating.skill || "Unknown").trim().slice(0, 200) || "Unknown",
+          Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0,
+          Number.isInteger(assessmentsBased) ? Math.max(0, assessmentsBased) : 0,
+          ["up", "down", "stable"].includes(rating.trend) ? rating.trend : "stable",
+          rating.lastUpdated || null],
+      );
+    }
+
+    const courseIds = new Set(courses.map((course) => course.id));
+    const chapterCourseById = new Map(chapters.map((chapter) => [chapter.id, chapter.courseId]));
+    const legacyFeedback = data.chapterFeedbacks || [];
+    for (const feedback of legacyFeedback) {
+      if (!feedback.id || !userIds.has(feedback.userId)
+        || !courseIds.has(feedback.courseId)
+        || chapterCourseById.get(feedback.chapterId) !== feedback.courseId) continue;
+      const normalizeRating = (candidate) => {
+        const value = Number(candidate);
+        return Number.isInteger(value) ? Math.max(1, Math.min(5, value)) : 1;
+      };
+      await client.query(
+        `INSERT INTO chapter_feedbacks (
+           id, chapter_id, course_id, user_id, rating, clarity, relevance,
+           comments, submitted_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::timestamptz, now()))
+         ON CONFLICT (chapter_id, user_id) DO UPDATE SET
+           rating = EXCLUDED.rating, clarity = EXCLUDED.clarity,
+           relevance = EXCLUDED.relevance, comments = EXCLUDED.comments,
+           submitted_at = EXCLUDED.submitted_at`,
+        [feedback.id, feedback.chapterId, feedback.courseId, feedback.userId,
+          normalizeRating(feedback.rating), normalizeRating(feedback.clarity),
+          normalizeRating(feedback.relevance),
+          String(feedback.comments || "").slice(0, 2000), feedback.submittedAt || null],
+      );
+    }
+
+    // 13. AI generation feedback. Only records with a valid UUID and an
     // existing creator are admitted; expired legacy prompt influence is not
     // carried into the relational authority.
     const aiFeedback = data.acharyaFeedbackMemory || [];

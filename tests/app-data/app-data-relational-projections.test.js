@@ -9,19 +9,24 @@ import { assessmentAuthorityRepository } from "../../backend/src/repositories/as
 import { reportsRepository } from "../../backend/src/repositories/reports.repository.pg.js";
 import { aiFeedbackRepository } from "../../backend/src/repositories/ai-feedback.repository.pg.js";
 import { analyticsRepository } from "../../backend/src/repositories/analytics.repository.pg.js";
+import * as skillsRepository from "../../backend/src/repositories/skills.repository.pg.js";
 
 describe("relational app-data secondary projections", () => {
   const previous = process.env.USE_PG_COURSES;
+  const previousSkills = process.env.USE_PG_SKILLS;
   let app;
 
   beforeAll(async () => {
     process.env.USE_PG_COURSES = "1";
+    process.env.USE_PG_SKILLS = "1";
     ({ app } = await import("../../backend/server.js?phase23-app-data"));
   }, 30_000);
   afterEach(() => vi.restoreAllMocks());
   afterAll(() => {
     if (previous === undefined) delete process.env.USE_PG_COURSES;
     else process.env.USE_PG_COURSES = previous;
+    if (previousSkills === undefined) delete process.env.USE_PG_SKILLS;
+    else process.env.USE_PG_SKILLS = previousSkills;
   });
 
   it("uses scoped relational reports and AI feedback instead of snapshot arrays", async () => {
@@ -38,6 +43,14 @@ describe("relational app-data secondary projections", () => {
       { id: "FB-PG", createdBy: testUsers.manager.id, comment: "Scoped feedback" },
     ]);
     vi.spyOn(analyticsRepository, "listTimeEvents").mockResolvedValue([]);
+    vi.spyOn(skillsRepository, "listSkills").mockResolvedValue([]);
+    vi.spyOn(skillsRepository, "listTargetSkills").mockResolvedValue([]);
+    vi.spyOn(skillsRepository, "listSkillRatings").mockResolvedValue([
+      { id: "RATE-PG", userId: testUsers.manager.id, skill: "Security", score: 80 },
+    ]);
+    vi.spyOn(skillsRepository, "listChapterFeedback").mockResolvedValue([
+      { id: "CF-PG", userId: testUsers.manager.id, chapterId: "CH-1" },
+    ]);
 
     const response = await request(app).get("/api/app-data")
       .set("Cookie", authCookieFor(testUsers.manager));
@@ -49,6 +62,8 @@ describe("relational app-data secondary projections", () => {
     expect(response.body.acharyaFeedbackMemory).toEqual([
       expect.objectContaining({ id: "FB-PG", createdBy: testUsers.manager.id }),
     ]);
+    expect(response.body.skillRatings).toEqual([expect.objectContaining({ id: "RATE-PG" })]);
+    expect(response.body.chapterFeedbacks).toEqual([expect.objectContaining({ id: "CF-PG" })]);
     expect(reportList).toHaveBeenCalledWith({ actor: expect.objectContaining({ id: testUsers.manager.id }) });
     expect(feedbackList).toHaveBeenCalledWith(expect.objectContaining({ id: testUsers.manager.id }), 25);
   });

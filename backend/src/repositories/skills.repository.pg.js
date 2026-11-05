@@ -5,7 +5,7 @@
 //
 // ⚠️ UNVERIFIED-BY-AUTHOR: SQL not executed against a live DB here. Validate with
 // the steps in docs/POSTGRES-MIGRATION.md before wiring into the app.
-import { query } from "../db/pool.js";
+import { query, withTransaction } from "../db/pool.js";
 
 const iso = (v) => (v instanceof Date ? v.toISOString() : v);
 
@@ -95,4 +95,85 @@ export async function insertTargetSkill(target) {
     ]
   );
   return mapTarget(rows[0]);
+}
+
+const adminRole = (role) => role === "Admin" || role === "Super Admin";
+
+export class SkillFeedbackRepositoryError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = "SkillFeedbackRepositoryError";
+    this.code = code;
+  }
+}
+
+const mapRating = (row) => ({
+  id: row.id, userId: row.user_id, skill: row.skill,
+  score: Number(row.score), assessmentsBased: Number(row.assessments_based || 0),
+  trend: row.trend, lastUpdated: iso(row.last_updated),
+});
+
+const mapFeedback = (row) => ({
+  id: row.id, chapterId: row.chapter_id, courseId: row.course_id,
+  userId: row.user_id, rating: Number(row.rating), clarity: Number(row.clarity),
+  relevance: Number(row.relevance), comments: row.comments,
+  submittedAt: iso(row.submitted_at),
+});
+
+export async function listSkillRatings(actor) {
+  const { rows } = await query(
+    `SELECT rating.* FROM skill_ratings rating
+     JOIN users app_user ON app_user.id = rating.user_id
+     WHERE $1::boolean OR ($2::boolean AND app_user.manager_id = $3) OR app_user.id = $3
+     ORDER BY rating.last_updated DESC, rating.id`,
+    [adminRole(actor.role), actor.role === "Manager", actor.id],
+  );
+  return rows.map(mapRating);
+}
+
+export async function listChapterFeedback(actor) {
+  const { rows } = await query(
+    `SELECT feedback.* FROM chapter_feedbacks feedback
+     JOIN users app_user ON app_user.id = feedback.user_id
+     WHERE $1::boolean OR ($2::boolean AND app_user.manager_id = $3) OR app_user.id = $3
+     ORDER BY feedback.submitted_at DESC, feedback.id`,
+    [adminRole(actor.role), actor.role === "Manager", actor.id],
+  );
+  return rows.map(mapFeedback);
+}
+
+export async function upsertChapterFeedback({ actor, feedback }) {
+  return withTransaction(async (client) => {
+    const authority = await client.query(
+      `SELECT chapter.id FROM chapters chapter
+       JOIN courses course ON course.id = chapter.course_id
+       JOIN enrollments enrollment
+         ON enrollment.course_id = course.id AND enrollment.user_id = $3
+       WHERE chapter.id = $1 AND course.id = $2
+         AND course.status = 'Active' AND course.approval = 'Approved'
+       LIMIT 1`,
+      [feedback.chapterId, feedback.courseId, actor.id],
+    );
+    if (!authority.rows[0]) {
+      throw new SkillFeedbackRepositoryError("FEEDBACK_SCOPE_DENIED", "Active enrollment and matching chapter are required");
+    }
+    const { rows } = await client.query(
+      `INSERT INTO chapter_feedbacks (
+         id, chapter_id, course_id, user_id, rating, clarity, relevance, comments
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (chapter_id, user_id) DO UPDATE SET
+         rating = EXCLUDED.rating, clarity = EXCLUDED.clarity,
+         relevance = EXCLUDED.relevance, comments = EXCLUDED.comments,
+         submitted_at = now()
+       RETURNING *`,
+      [feedback.id, feedback.chapterId, feedback.courseId, actor.id,
+        feedback.rating, feedback.clarity, feedback.relevance, feedback.comments],
+    );
+    await client.query(
+      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, 'CHAPTER_FEEDBACK', 'FEEDBACK', $2, $3::jsonb)`,
+      [actor.id, rows[0].id, JSON.stringify({ chapterId: feedback.chapterId, courseId: feedback.courseId })],
+    );
+    return mapFeedback(rows[0]);
+  });
 }

@@ -15,6 +15,9 @@ import {
   communications,
   persist
 } from "../../core.js";
+import * as skillsRepository from "../../repositories/skills.repository.pg.js";
+
+const USE_PG_SKILLS = process.env.USE_PG_SKILLS === "1" || process.env.USE_PG === "1";
 
 // Global general questions for fallback quiz
 const GENERAL_QUIZ_QUESTIONS = [
@@ -295,8 +298,15 @@ I am your local code-driven training assistant. Here are the categories of tasks
   }
 
   if (msg === "recommend" || msg.includes("recommend courses") || msg.includes("suggest courses") || msg.includes("course recommend")) {
+    const [recommendationSkills, recommendationTargets, recommendationRatings] = USE_PG_SKILLS
+      ? await Promise.all([
+          skillsRepository.listSkills(),
+          skillsRepository.listTargetSkills(),
+          skillsRepository.listSkillRatings(user),
+        ])
+      : [skills, targetSkills, skillRatings];
     // Look up target skills for user department, team or designation
-    const targets = targetSkills.filter(t => 
+    const targets = recommendationTargets.filter(t =>
       t.scope === "Organization" ||
       (t.scope === "Department" && t.department === user.department) ||
       (t.scope === "Department" && t.department === `Team:${user.team}`) ||
@@ -314,8 +324,8 @@ I am your local code-driven training assistant. Here are the categories of tasks
 
     const gapRecommendations = [];
     for (const target of targets) {
-      const skillName = skills.find(s => s.id === target.skillId)?.name || target.skillId;
-      const userRating = skillRatings.find(r => r.userId === user.id && r.skill === skillName);
+      const skillName = recommendationSkills.find(s => s.id === target.skillId)?.name || target.skillId;
+      const userRating = recommendationRatings.find(r => r.userId === user.id && r.skill === skillName);
       const score = userRating?.score || 0;
 
       if (score < target.targetScore) {

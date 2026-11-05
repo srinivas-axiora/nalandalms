@@ -3,9 +3,10 @@
 // Phase-2 cutover (gated): when USE_PG_SKILLS=1, skills + target-skills use the
 // PostgreSQL repository; otherwise the original in-memory behavior runs verbatim.
 // The OFF path (default) is unchanged and verified; the ON path is the migration
-// target (verify against a real DB per docs/POSTGRES-MIGRATION.md). chapter-
-// feedbacks is not migrated yet and always uses the in-memory store.
+// target and chapter-feedback authority (verify against a real DB per
+// docs/POSTGRES-MIGRATION.md).
 import { z } from "zod";
+import { v4 as uuid } from "uuid";
 import { now, skills, targetSkills, chapterFeedbacks } from "../../core.js";
 import { audit } from "../../domain.js";
 import { authenticate, requireRole } from "../../middleware.js";
@@ -152,24 +153,35 @@ export function registerSkills(app) {
     res.status(201).json({ data: target });
   });
 
-  app.post("/api/chapter-feedbacks", authenticate, (req, res) => {
+  app.post("/api/chapter-feedbacks", authenticate, async (req, res) => {
     const schema = z.object({
-      chapterId: z.string(),
-      courseId: z.string(),
+      chapterId: z.string().trim().min(1).max(200),
+      courseId: z.string().trim().min(1).max(200),
       rating: z.number().min(1).max(5),
       clarity: z.number().min(1).max(5),
       relevance: z.number().min(1).max(5),
-      comments: z.string()
-    });
+      comments: z.string().trim().max(2000)
+    }).strict();
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     const fb = {
-      id: `CF-${Math.floor(1000 + Math.random() * 9000)}`,
+      id: `CF-${uuid()}`,
       ...parsed.data,
       userId: req.user.id,
       submittedAt: now()
     };
+    if (USE_PG_SKILLS) {
+      try {
+        const saved = await skillsRepo.upsertChapterFeedback({ actor: req.user, feedback: fb });
+        return res.status(201).json({ data: saved });
+      } catch (error) {
+        if (error instanceof skillsRepo.SkillFeedbackRepositoryError) {
+          return res.status(403).json({ error: error.message, code: error.code });
+        }
+        throw error;
+      }
+    }
     chapterFeedbacks.push(fb);
     audit(req.user.id, "CHAPTER_FEEDBACK", "FEEDBACK", fb.id);
     res.status(201).json({ data: fb });

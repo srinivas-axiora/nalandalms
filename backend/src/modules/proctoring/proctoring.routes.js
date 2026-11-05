@@ -11,8 +11,10 @@ import { postSignal, getSignals } from "./signaling.js";
 import { authorizeCompanionToken, createPairingToken, verifyAndPairCompanion, updateCompanionHeartbeat } from "./pairing.js";
 import { attemptsRepository, AttemptRepositoryError } from "../../repositories/attempts.repository.pg.js";
 import { upsertAttemptProjection } from "../../attempt-projection.js";
+import { settingsRepository } from "../../repositories/settings.repository.pg.js";
 
 const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
+const USE_PG_SETTINGS = process.env.USE_PG_SETTINGS === "1";
 const attemptErrorStatus = (error) => {
   if (!(error instanceof AttemptRepositoryError)) return error.status || 400;
   if (error.code === "ATTEMPT_NOT_FOUND") return 404;
@@ -72,6 +74,11 @@ export function registerProctoring(app) {
     if (!targetAttemptId) return res.status(400).json({ error: "attemptId is required" });
 
     const attempt = req.authorizedAttempt;
+    // Resolve policy before mutating the attempt projection so an authority
+    // outage cannot leave an uncommitted flag/trust-score side effect behind.
+    const proctoringSettings = USE_PG_SETTINGS
+      ? await settingsRepository.getProctoring()
+      : settings;
 
     // Initialize trust score if not present
     if (attempt.trustScore === undefined) {
@@ -99,7 +106,7 @@ export function registerProctoring(app) {
     attempt.flags.push(event);
 
     // Auto-submit on tab switch if strict policy is enabled
-    if (settings.tabSwitchAutoSubmit && parsed.data.eventType === "TAB_SWITCH" && !attempt.submittedAt) {
+    if (proctoringSettings.tabSwitchAutoSubmit && parsed.data.eventType === "TAB_SWITCH" && !attempt.submittedAt) {
       const assessment = assessments.find((item) => item.id === attempt.assessmentId);
       const submittedAt = now();
       const timeSpentSeconds = Math.max(

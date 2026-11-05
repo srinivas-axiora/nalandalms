@@ -71,6 +71,7 @@ import { assessmentAuthorityRepository } from "./src/repositories/assessment-aut
 import { reportsRepository } from "./src/repositories/reports.repository.pg.js";
 import { aiFeedbackRepository } from "./src/repositories/ai-feedback.repository.pg.js";
 import { analyticsRepository } from "./src/repositories/analytics.repository.pg.js";
+import { settingsRepository } from "./src/repositories/settings.repository.pg.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG = process.env.USE_PG === "1";
@@ -82,6 +83,7 @@ const USE_PG_CERTIFICATES = process.env.USE_PG_CERTIFICATES === "1";
 const USE_PG_CANDIDATE_ASSESSMENTS = process.env.USE_PG_CANDIDATE_ASSESSMENTS === "1";
 const USE_PG_PRIVACY = process.env.USE_PG_PRIVACY === "1";
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
+const USE_PG_SETTINGS = process.env.USE_PG_SETTINGS === "1";
 const ENABLE_PRIVACY_ERASURE_WORKER = process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1";
 const ENABLE_REPORT_EXPORT_WORKER = process.env.ENABLE_REPORT_EXPORT_WORKER === "1";
 const PRIVACY_COVERAGE_ACK = process.env.PRIVACY_COVERAGE_ACK === "normalized-v1";
@@ -153,7 +155,7 @@ app.get("/api/health", (_req, res) => {
 app.get("/api/ready", async (_req, res) => {
   const [
     database, redis, objects, payments, identity, attemptRuntime,
-    certificateAuthority, candidateRuntime, privacyAuthority, reportAuthority,
+    certificateAuthority, candidateRuntime, privacyAuthority, reportAuthority, settingsAuthority,
   ] = await Promise.all([
     storage.health(),
     redisHealth(),
@@ -340,6 +342,18 @@ app.get("/api/ready", async (_req, res) => {
           worker: ENABLE_REPORT_EXPORT_WORKER ? "enabled" : "disabled",
         })).catch(() => ({ ok: false, mode: "normalized", worker: "unknown" }))
       : Promise.resolve({ ok: true, mode: "disabled", worker: "disabled" }),
+    USE_PG_SETTINGS
+      ? Promise.resolve().then(() => relationalQuery(
+          `SELECT
+             to_regclass('public.system_settings') IS NOT NULL AS settings_table,
+             EXISTS (
+               SELECT 1 FROM system_settings
+               WHERE key = 'proctoring' AND jsonb_typeof(value) = 'object'
+             ) AS proctoring_settings`
+        )).then(({ rows }) => ({
+          ok: Object.values(rows[0] || {}).every(Boolean), mode: "normalized",
+        })).catch(() => ({ ok: false, mode: "normalized" }))
+      : Promise.resolve({ ok: true, mode: "disabled" }),
   ]);
   // The relational learning workflow is still a partial cutover. Course,
   // chapter, progress and assessment authority exist, but secondary consumers
@@ -350,11 +364,12 @@ app.get("/api/ready", async (_req, res) => {
   };
   const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok
     && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok && privacyAuthority.ok
-    && reportAuthority.ok && courseAuthority.ok;
+    && reportAuthority.ok && settingsAuthority.ok && courseAuthority.ok;
   if (!ok) logger.error("READINESS_CHECK_FAILED", {
     database, redis, objects, payments, identity, attempts: attemptRuntime,
     certificates: certificateAuthority, candidateAssessments: candidateRuntime,
-    privacy: privacyAuthority, reports: reportAuthority, courses: courseAuthority, startupReady,
+    privacy: privacyAuthority, reports: reportAuthority, settings: settingsAuthority,
+    courses: courseAuthority, startupReady,
   });
   res.status(ok ? 200 : 503).json({
     ok,
@@ -378,6 +393,7 @@ app.get("/api/ready", async (_req, res) => {
         mode: reportAuthority.mode,
         worker: reportAuthority.worker,
       },
+      settings: { ok: settingsAuthority.ok, mode: settingsAuthority.mode },
       courses: courseAuthority,
     },
   });
@@ -431,6 +447,15 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   const scopedLearningTimeEvents = USE_PG_COURSES
     ? await analyticsRepository.listTimeEvents({ actor: req.user, limit: 500 })
     : learningTimeEvents.filter((event) => admin || visibleUserIds.has(event.userId));
+  const scopedSkillRatings = USE_PG_SKILLS
+    ? await skillsRepo.listSkillRatings(req.user)
+    : skillRatings.filter((rating) => admin || visibleUserIds.has(rating.userId));
+  const scopedChapterFeedbacks = USE_PG_SKILLS
+    ? await skillsRepo.listChapterFeedback(req.user)
+    : chapterFeedbacks.filter((feedback) => admin || feedback.userId === req.user.id || (req.user.role === "Manager" && visibleUserIds.has(feedback.userId)));
+  const authoritativeSettings = admin
+    ? (USE_PG_SETTINGS ? await settingsRepository.getProctoring() : settings)
+    : {};
   const scopedCertificates = USE_PG_CERTIFICATES
     ? await certificatesPgRepository.listForUser(req.user)
     : issuedCertificates.filter((cert) => admin || visibleUserIds.has(cert.employeeId));
@@ -458,13 +483,13 @@ app.get("/api/app-data", authenticate, async (req, res) => {
     learningTimeEvents: scopedLearningTimeEvents,
     acharyaFeedbackMemory: scopedAiFeedback,
     reportExports: scopedReports,
-    settings: admin ? settings : {},
+    settings: authoritativeSettings,
     issuedCertificates: scopedCertificates,
     archives: superAdmin ? redactSensitive(archives) : [],
     skills: allSkills,
     targetSkills: allTargetSkills.filter((target) => targetSkillVisibleTo(target, req.user)),
-    skillRatings: skillRatings.filter((rating) => admin || visibleUserIds.has(rating.userId)),
-    chapterFeedbacks: chapterFeedbacks.filter((feedback) => admin || feedback.userId === req.user.id || (req.user.role === "Manager" && visibleUserIds.has(feedback.userId))),
+    skillRatings: scopedSkillRatings,
+    chapterFeedbacks: scopedChapterFeedbacks,
     candidateAssessments: scopedCandidateAssessments
   });
 });

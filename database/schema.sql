@@ -179,8 +179,9 @@ CREATE TABLE chapters (
   file_name TEXT,
   duration_minutes INTEGER NOT NULL DEFAULT 10,
   minimum_time_minutes INTEGER NOT NULL DEFAULT 1 CHECK (minimum_time_minutes >= 0),
-  version INTEGER NOT NULL DEFAULT 1
-    CONSTRAINT chapters_version_positive CHECK (version >= 1),
+  version INTEGER NOT NULL DEFAULT 1,
+  CONSTRAINT chapters_id_course_unique UNIQUE (id, course_id),
+  CONSTRAINT chapters_version_positive CHECK (version >= 1),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -563,8 +564,14 @@ CREATE TABLE chapter_feedbacks (
   relevance INTEGER NOT NULL CHECK (relevance BETWEEN 1 AND 5),
   comments TEXT NOT NULL DEFAULT '',
   submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE(chapter_id, user_id)
+  UNIQUE(chapter_id, user_id),
+  CONSTRAINT chapter_feedbacks_chapter_course_fk
+    FOREIGN KEY (chapter_id, course_id) REFERENCES chapters(id, course_id),
+  CONSTRAINT chapter_feedbacks_comments_length CHECK (length(comments) <= 2000)
 );
+
+CREATE INDEX idx_chapter_feedback_user ON chapter_feedbacks(user_id, submitted_at DESC);
+CREATE INDEX idx_chapter_feedback_course ON chapter_feedbacks(course_id, submitted_at DESC);
 
 -- ── Skill Ratings ──
 CREATE TABLE skill_ratings (
@@ -575,7 +582,12 @@ CREATE TABLE skill_ratings (
   assessments_based INTEGER NOT NULL DEFAULT 0,
   trend TEXT NOT NULL DEFAULT 'stable' CHECK (trend IN ('up', 'down', 'stable')),
   last_updated TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE(user_id, skill)
+  UNIQUE(user_id, skill),
+  CONSTRAINT skill_ratings_value_bounds CHECK (
+    length(btrim(skill)) BETWEEN 1 AND 200
+    AND score BETWEEN 0 AND 100
+    AND assessments_based >= 0
+  )
 );
 
 CREATE INDEX idx_skill_ratings_user ON skill_ratings(user_id);
@@ -605,7 +617,25 @@ CREATE TABLE system_settings (
   key TEXT PRIMARY KEY,
   value JSONB NOT NULL,
   updated_by TEXT REFERENCES users(id),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT system_settings_proctoring_shape CHECK (
+    key <> 'proctoring' OR (
+      jsonb_typeof(value) = 'object'
+      AND jsonb_typeof(value->'fullscreenRequired') = 'boolean'
+      AND jsonb_typeof(value->'cameraRequired') = 'boolean'
+      AND jsonb_typeof(value->'microphoneRequired') = 'boolean'
+      AND jsonb_typeof(value->'tabSwitchAutoSubmit') = 'boolean'
+      AND jsonb_typeof(value->'noiseThreshold') = 'number'
+      AND jsonb_typeof(value->'maxAssessmentFlags') = 'number'
+      AND (value->>'noiseThreshold')::integer BETWEEN 1 AND 100
+      AND (value->>'maxAssessmentFlags')::integer BETWEEN 0 AND 100
+    )
+  )
+);
+
+INSERT INTO system_settings (key, value) VALUES (
+  'proctoring',
+  '{"fullscreenRequired":true,"cameraRequired":true,"microphoneRequired":true,"tabSwitchAutoSubmit":true,"noiseThreshold":70,"maxAssessmentFlags":2}'::jsonb
 );
 
 -- ── Reports ──

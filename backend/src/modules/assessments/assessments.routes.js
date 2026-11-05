@@ -13,9 +13,11 @@ import { attemptsRepository, AttemptRepositoryError } from "../../repositories/a
 import { upsertAttemptProjection } from "../../attempt-projection.js";
 import { registerAssessmentAuthoringPgRoutes, sendAssessmentAuthorityError } from "./assessments.pg.routes.js";
 import { assessmentAuthorityRepository, AssessmentAuthorityError } from "../../repositories/assessment-authority.repository.pg.js";
+import { settingsRepository } from "../../repositories/settings.repository.pg.js";
 
 const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
+const USE_PG_SETTINGS = process.env.USE_PG_SETTINGS === "1";
 const USE_RELATIONAL_ATTEMPTS = USE_PG_ATTEMPTS || USE_PG_COURSES;
 const findAssessmentRuntime = (id) => USE_PG_COURSES
   ? assessmentAuthorityRepository.findRuntimeById(id)
@@ -157,6 +159,11 @@ export function registerAssessments(app) {
 
   app.post("/api/assessments/:id/attempts/start", authenticate, requireRole("Employee", "Manager", "Admin", "Learner", "Instructor"), async (req, res) => {
     try {
+      // Resolve operational policy before creating an attempt so a settings
+      // authority outage cannot return failure after durable state changed.
+      const authoritativeSettings = USE_PG_SETTINGS
+        ? await settingsRepository.getProctoring()
+        : settings;
       let assessment;
       let committedAttempt;
       if (USE_PG_COURSES) {
@@ -210,7 +217,10 @@ export function registerAssessments(app) {
         selectedQuestionIds: committedAttempt.selectedQuestionIds,
       };
 
-      res.status(201).json({ data: clientSafeAttempt, strictRules: assessment.strictMode ? settings : null });
+      const strictRules = assessment.strictMode
+        ? authoritativeSettings
+        : null;
+      res.status(201).json({ data: clientSafeAttempt, strictRules });
     } catch (err) {
       if (err instanceof AssessmentAuthorityError) return sendAssessmentAuthorityError(res, err);
       res.status(attemptErrorStatus(err)).json({ error: err.message });

@@ -32,7 +32,7 @@ or step-up middleware disagrees with its declaration.
 | GET | `/api/health` | Public | N | N/A | N | G | Liveness, version, uptime and process memory |
 | GET | `/api/ready` | Public | N | N/A | N | G | Sanitized database, Redis and object-store readiness |
 | GET | `/api/csrf-token` | Public | Cookie | N/A | N | G | Token returned in body intentionally |
-| GET | `/api/app-data` | Any | N | N/A | N | G | Phase-23 relational identity scope plus canonical learning events/report metadata/AI feedback when cutovers are enabled; large response and remaining legacy projections require decomposition |
+| GET | `/api/app-data` | Any | N | N/A | N | G | Phases 23-24 relational identity scope plus canonical learning events, reports, AI feedback, settings, ratings and chapter feedback when cutovers are enabled; large response and remaining legacy projections require decomposition |
 | GET | `*splat` | Public | N | N/A | N | None | Frontend fallback; API paths return JSON 404 |
 | POST | `/api/auth/register` | Public | Y | Y | N | G + login map | Allows public Instructor self-assignment |
 | POST | `/api/auth/login` | Public | Y | Y | N | G + login map | Identifier lockout enables victim DoS |
@@ -163,7 +163,7 @@ The runtime-data ignore is anchored to `/uploads/`, so source modules under an
 | POST | `/api/skills/targets` | A | Y | Y | N | G | Missing referenced entity validation |
 | PATCH | `/api/skills/:id` | A | Y | Y | N | G | Unvalidated `req.body.status` path |
 | POST | `/api/target-skills` | A | Y | Y | N | G | Duplicate target route/model |
-| POST | `/api/chapter-feedbacks` | Any | Y | Y | N | G | No enrollment/chapter existence check |
+| POST | `/api/chapter-feedbacks` | Any | Y | Y | N | G | Phase-24 relational mode binds subject identity, matching chapter/course and active enrollment; feedback and audit commit atomically |
 | GET | `/api/analytics/global` | A | N | N/A | N | G | Phase-18 relational mode derives organization counts, progress, scores and performer ordering from PostgreSQL |
 | GET | `/api/analytics/team` | M | N | N/A | N | G | Phase-18 relational mode enforces direct-report scope in SQL and derives completion, skills and engagement |
 | GET | `/api/analytics/me` | Any | N | N/A | N | G | Phase-18 relational mode derives self-scoped enrollment, skill and course-suggestion metrics |
@@ -179,8 +179,8 @@ The runtime-data ignore is anchored to `/uploads/`, so source modules under an
 | POST | `/api/users/me/cancel-delete` | Any | Y | Y | Y | G | Self-scoped; step-up required; processing requests cannot be cancelled |
 | GET | `/api/privacy/requests` | A | N | N/A | N | G | Administrator review queue containing subject PII |
 | POST | `/api/privacy/requests/:requestId/review` | A | Y | Y | Y | G | Administrator step-up; explicit approve or legal hold reason |
-| GET | `/api/settings` | A | N | N/A | N | G | Admin-only |
-| PATCH | `/api/settings` | A | Y | Y | Y | G | Step-up present |
+| GET | `/api/settings` | A | N | N/A | N | G | Admin-only; Phase-24 relational mode reads constrained operational settings |
+| PATCH | `/api/settings` | A | Y | Y | Y | G | Strict bounded patch, step-up, row lock and atomic audit in Phase-24 relational mode |
 | GET | `/api/ai/generation-feedback` | A/M | N | N/A | N | G | Phase-21 relational mode gives Managers creator-only scope and Admins organization review scope; expired feedback is excluded |
 | POST | `/api/ai/generation-feedback` | A/M | Y | Y | N | G | Phase-21 relational mode validates bounded fields and commits feedback plus audit atomically with 180-day retention |
 | POST | `/api/ai/chat` | Any | Y | Y | N | G+AI | User/context injected into prompt; 4k message cap |

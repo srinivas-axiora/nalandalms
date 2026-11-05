@@ -156,7 +156,9 @@ For each bounded context, in roughly ascending coupling:
       default-off path verified unchanged; on-path uses Postgres (verify against a real DB)
 - [x] payment order/transaction/webhook repository and atomic entitlement/audit
       settlement built behind `USE_PG_PAYMENTS=1` (live-DB gate still pending)
-- [ ] chapter_feedbacks
+- [x] chapter feedback writes and projections enforce matching active
+      enrollment and commit audit evidence behind `USE_PG_SKILLS=1` (Phase 24;
+      live verifier pending)
 - [x] users/session authority repository, audit and Redis login lockouts behind
       `USE_PG_IDENTITY=1` (live-DB and failover gate still pending)
 - [x] Authenticated assessment attempts, grading/enrollment transitions and
@@ -212,7 +214,11 @@ For each bounded context, in roughly ascending coupling:
       `USE_PG_COURSES=1` (Phase 21; live verifier pending)
 - [x] `/api/app-data` uses relational identity visibility plus canonical
       learning events, report metadata and AI feedback when their cutovers are
-      enabled (Phase 23; audit/security/settings/feedback projections remain)
+      enabled (Phase 23)
+- [x] operational proctor settings use constrained relational state behind
+      `USE_PG_SETTINGS=1`; app-data ratings/feedback and local AI recommendations
+      use relational skill authority behind `USE_PG_SKILLS=1` (Phase 24; live
+      verifier pending)
 - [ ] remaining enrollment consumers; relational candidate-link creation uses
       the assessment authority when both cutover flags are enabled
 - [x] attempts (+ answers/flags as JSONB; reconcile status CHECK)
@@ -220,7 +226,7 @@ For each bounded context, in roughly ascending coupling:
 - [ ] archives  ·  audit_logs / security_events (certificate/attempt audit rows
       are durable, but application-wide audit authority remains incomplete)
 - [ ] application-wide audit/security-event authority and remaining legacy
-      app-data settings/skill-rating/chapter-feedback projections
+      app-data audit/archive projections
       (`GROUP BY`, views); candidate analytics now reads normalized submissions
 - [ ] remove the in-memory arrays + JSON-blob adapter; externalize rate-limit /
       session / lockout state to enable **multi-instance** horizontal scaling
