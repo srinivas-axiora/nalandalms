@@ -20,7 +20,7 @@ import {
   issuedCertificates, acharyaFeedbackMemory, candidateAssessments, storage, saveDb, loadDb,
 } from "./src/core.js";
 import {
-  publicUser, visibleUserIdsFor, coursesVisibleTo, assignmentVisibleTo,
+  publicUser, visibleUserIdsFor, coursesVisibleTo,
   assessmentsVisibleTo, assessmentForUser, targetSkillVisibleTo,
 } from "./src/domain.js";
 import {
@@ -68,6 +68,9 @@ import { certificatesPgRepository } from "./src/repositories/certificates.reposi
 import { candidateAssessmentsPgRepository } from "./src/repositories/candidate-assessments.repository.pg.js";
 import { courseAuthorityRepository } from "./src/repositories/courses-authority.repository.pg.js";
 import { assessmentAuthorityRepository } from "./src/repositories/assessment-authority.repository.pg.js";
+import { reportsRepository } from "./src/repositories/reports.repository.pg.js";
+import { aiFeedbackRepository } from "./src/repositories/ai-feedback.repository.pg.js";
+import { analyticsRepository } from "./src/repositories/analytics.repository.pg.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG = process.env.USE_PG === "1";
@@ -394,7 +397,14 @@ app.get("/api/csrf-token", (req, res) => {
 app.get("/api/app-data", authenticate, async (req, res) => {
   const admin = isAdmin(req.user.role);
   const superAdmin = req.user.role === "Super Admin";
-  const visibleUserIds = new Set(visibleUserIdsFor(req.user));
+  const authoritativeVisibleUsers = USE_PG_IDENTITY
+    ? (admin
+        ? await identityRepository.listUsers({ status: "All" })
+        : req.user.role === "Manager"
+          ? await identityRepository.listUsers({ managerId: req.user.id, status: "Active" })
+          : [await identityRepository.findUserById(req.user.id)].filter(Boolean))
+    : users.filter((user) => visibleUserIdsFor(req.user).includes(user.id));
+  const visibleUserIds = new Set(authoritativeVisibleUsers.map((user) => user.id));
   const allSkills = USE_PG_SKILLS ? await skillsRepo.listSkills() : skills;
   const allTargetSkills = USE_PG_SKILLS ? await skillsRepo.listTargetSkills() : targetSkills;
   const visibleCourses = USE_PG_COURSES
@@ -404,14 +414,23 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   const authoritativeAssignments = USE_PG_COURSES
     ? await enrollmentsRepo.listEnrollments()
     : assignments;
-  const scopedAssignments = authoritativeAssignments.filter((assignment) => assignmentVisibleTo(assignment, req.user) && (admin || visibleCourseIds.has(assignment.courseId)));
+  const scopedAssignments = authoritativeAssignments.filter((assignment) =>
+    visibleUserIds.has(assignment.userId) && (admin || visibleCourseIds.has(assignment.courseId)));
   const authoritativeAttempts = (USE_PG_ATTEMPTS || USE_PG_COURSES) ? await attemptsRepository.list() : attempts;
   const authoritativeProctoring = (USE_PG_ATTEMPTS || USE_PG_COURSES)
     ? await attemptsRepository.listProctorEvents(admin ? {} : { userIds: [...visibleUserIds] })
     : proctoringLogs;
   const scopedAttempts = authoritativeAttempts.filter((attempt) => admin || visibleUserIds.has(attempt.userId));
   const scopedProctoring = authoritativeProctoring.filter((event) => admin || visibleUserIds.has(event.userId));
-  const scopedReports = admin ? reportExports : reportExports.filter((report) => report.requestedBy === req.user.id);
+  const scopedReports = USE_PG_COURSES && (admin || req.user.role === "Manager")
+    ? await reportsRepository.listAccessible({ actor: req.user })
+    : (admin ? reportExports : reportExports.filter((report) => report.requestedBy === req.user.id));
+  const scopedAiFeedback = USE_PG_COURSES && (admin || req.user.role === "Manager")
+    ? await aiFeedbackRepository.list(req.user, 25)
+    : (admin ? acharyaFeedbackMemory : []);
+  const scopedLearningTimeEvents = USE_PG_COURSES
+    ? await analyticsRepository.listTimeEvents({ actor: req.user, limit: 500 })
+    : learningTimeEvents.filter((event) => admin || visibleUserIds.has(event.userId));
   const scopedCertificates = USE_PG_CERTIFICATES
     ? await certificatesPgRepository.listForUser(req.user)
     : issuedCertificates.filter((cert) => admin || visibleUserIds.has(cert.employeeId));
@@ -425,7 +444,7 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   const scopedAssessments = USE_PG_COURSES
     ? await assessmentAuthorityRepository.listVisible({ actor: req.user, status: "Active" })
     : assessmentsVisibleTo(req.user).map((assessment) => assessmentForUser(assessment, req.user));
-  const scopedUsers = users.filter((user) => visibleUserIds.has(user.id)).map(publicUser);
+  const scopedUsers = authoritativeVisibleUsers.map(publicUser);
   res.json({
     users: scopedUsers,
     courses: visibleCourses,
@@ -436,8 +455,8 @@ app.get("/api/app-data", authenticate, async (req, res) => {
     proctoringLogs: scopedProctoring,
     auditLogs: admin ? redactSensitive(auditLogs) : [],
     securityEvents: admin ? redactSensitive(securityEvents.slice(0, 500)) : [],
-    learningTimeEvents: learningTimeEvents.filter((event) => admin || visibleUserIds.has(event.userId)),
-    acharyaFeedbackMemory: admin ? acharyaFeedbackMemory : [],
+    learningTimeEvents: scopedLearningTimeEvents,
+    acharyaFeedbackMemory: scopedAiFeedback,
     reportExports: scopedReports,
     settings: admin ? settings : {},
     issuedCertificates: scopedCertificates,

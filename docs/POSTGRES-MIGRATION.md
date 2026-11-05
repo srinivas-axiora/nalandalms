@@ -210,14 +210,17 @@ For each bounded context, in roughly ascending coupling:
 - [x] AI generation feedback uses creator-scoped relational reads, 180-day
       retention, atomic audit writes and privacy lifecycle coverage behind
       `USE_PG_COURSES=1` (Phase 21; live verifier pending)
+- [x] `/api/app-data` uses relational identity visibility plus canonical
+      learning events, report metadata and AI feedback when their cutovers are
+      enabled (Phase 23; audit/security/settings/feedback projections remain)
 - [ ] remaining enrollment consumers; relational candidate-link creation uses
       the assessment authority when both cutover flags are enabled
 - [x] attempts (+ answers/flags as JSONB; reconcile status CHECK)
 - [x] proctoring_logs  ·  certificates
 - [ ] archives  ·  audit_logs / security_events (certificate/attempt audit rows
       are durable, but application-wide audit authority remains incomplete)
-- [ ] application-wide audit/security-event authority and legacy app-data
-      report projection remain to be converted to relational reads
+- [ ] application-wide audit/security-event authority and remaining legacy
+      app-data settings/skill-rating/chapter-feedback projections
       (`GROUP BY`, views); candidate analytics now reads normalized submissions
 - [ ] remove the in-memory arrays + JSON-blob adapter; externalize rate-limit /
       session / lockout state to enable **multi-instance** horizontal scaling

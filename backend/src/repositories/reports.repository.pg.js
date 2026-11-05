@@ -196,6 +196,16 @@ export function createReportsRepository(db = { query, withTransaction }) {
     return result.rows[0] ? { ...mapReport(result.rows[0]), storageKey: result.rows[0].storage_key } : null;
   };
 
+  const listAccessible = async ({ actor, limit = 100 }) => {
+    const result = await db.query(
+      `SELECT * FROM report_exports
+       WHERE ($1::boolean OR requested_by = $2)
+       ORDER BY created_at DESC, id DESC LIMIT $3`,
+      [isAdmin(actor.role), actor.id, limit],
+    );
+    return result.rows.map(mapReport);
+  };
+
   const recordDownload = ({ reportId, actorId }) => db.query(
     `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, metadata)
      VALUES ($1, 'DOWNLOAD_REPORT', 'REPORT', $2, '{}'::jsonb)`,
@@ -204,7 +214,7 @@ export function createReportsRepository(db = { query, withTransaction }) {
 
   return {
     prepareExport, claimDue, loadRowsForClaim, reserveStorageKey, markReady,
-    markFailed, getAccessibleById, recordDownload,
+    markFailed, getAccessibleById, listAccessible, recordDownload,
   };
 }
 

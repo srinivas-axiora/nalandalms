@@ -109,4 +109,16 @@ describe("relational report repository", () => {
       [reportRow.id, "reports/id/artifact.pdf"],
     );
   });
+
+  it("lists metadata without object keys under requester SQL scope", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{
+      ...reportRow, status: "Ready", storage_key: "reports/private/artifact.xlsx",
+      row_count: 4, summary: { courseTimeSeconds: 60 }, attempts: 1,
+    }] });
+    const repository = createReportsRepository({ query, withTransaction: vi.fn() });
+    const result = await repository.listAccessible({ actor: { id: "MGR-1", role: "Manager" } });
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("requested_by = $2"), [false, "MGR-1", 100]);
+    expect(result[0]).toMatchObject({ artifactAvailable: true, rowCount: 4 });
+    expect(result[0]).not.toHaveProperty("storageKey");
+  });
 });

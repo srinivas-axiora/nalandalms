@@ -32,7 +32,7 @@ or step-up middleware disagrees with its declaration.
 | GET | `/api/health` | Public | N | N/A | N | G | Liveness, version, uptime and process memory |
 | GET | `/api/ready` | Public | N | N/A | N | G | Sanitized database, Redis and object-store readiness |
 | GET | `/api/csrf-token` | Public | Cookie | N/A | N | G | Token returned in body intentionally |
-| GET | `/api/app-data` | Any | N | N/A | N | G | Primary scoped aggregate; large response |
+| GET | `/api/app-data` | Any | N | N/A | N | G | Phase-23 relational identity scope plus canonical learning events/report metadata/AI feedback when cutovers are enabled; large response and remaining legacy projections require decomposition |
 | GET | `*splat` | Public | N | N/A | N | None | Frontend fallback; API paths return JSON 404 |
 | POST | `/api/auth/register` | Public | Y | Y | N | G + login map | Allows public Instructor self-assignment |
 | POST | `/api/auth/login` | Public | Y | Y | N | G + login map | Identifier lockout enables victim DoS |
