@@ -37,6 +37,7 @@ import { objectStoreHealth } from "./src/storage/object-store.js";
 import { ensureRedisReady, redisHealth, closeRedis } from "./src/cache/redis.js";
 import { startRetentionDaemon } from "./src/workers/retention-cleanup.js";
 import { startPrivacyErasureDaemon } from "./src/workers/privacy-erasure.js";
+import { startReportExportDaemon } from "./src/workers/report-exports.js";
 import { registerGovernance } from "./src/modules/governance/governance.routes.js";
 import { registerSettings } from "./src/modules/settings/settings.routes.js";
 import { registerSkills } from "./src/modules/skills/skills.routes.js";
@@ -79,6 +80,7 @@ const USE_PG_CANDIDATE_ASSESSMENTS = process.env.USE_PG_CANDIDATE_ASSESSMENTS ==
 const USE_PG_PRIVACY = process.env.USE_PG_PRIVACY === "1";
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 const ENABLE_PRIVACY_ERASURE_WORKER = process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1";
+const ENABLE_REPORT_EXPORT_WORKER = process.env.ENABLE_REPORT_EXPORT_WORKER === "1";
 const PRIVACY_COVERAGE_ACK = process.env.PRIVACY_COVERAGE_ACK === "normalized-v1";
 
 const app = express();
@@ -148,7 +150,7 @@ app.get("/api/health", (_req, res) => {
 app.get("/api/ready", async (_req, res) => {
   const [
     database, redis, objects, payments, identity, attemptRuntime,
-    certificateAuthority, candidateRuntime, privacyAuthority,
+    certificateAuthority, candidateRuntime, privacyAuthority, reportAuthority,
   ] = await Promise.all([
     storage.health(),
     redisHealth(),
@@ -319,6 +321,22 @@ app.get("/api/ready", async (_req, res) => {
           worker: ENABLE_PRIVACY_ERASURE_WORKER ? "enabled" : "disabled",
         })).catch(() => ({ ok: false, mode: "normalized", worker: "unknown" }))
       : Promise.resolve({ ok: true, mode: "disabled", worker: "disabled" }),
+    USE_PG_COURSES
+      ? Promise.resolve().then(() => relationalQuery(
+          `SELECT
+             to_regclass('public.report_exports') IS NOT NULL AS reports,
+             to_regclass('public.idx_report_exports_due') IS NOT NULL AS due_index,
+             EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'report_exports'
+                 AND column_name = 'attempts'
+             ) AS retry_state`
+        )).then(({ rows }) => ({
+          ok: Object.values(rows[0] || {}).every(Boolean) && ENABLE_REPORT_EXPORT_WORKER,
+          mode: "normalized",
+          worker: ENABLE_REPORT_EXPORT_WORKER ? "enabled" : "disabled",
+        })).catch(() => ({ ok: false, mode: "normalized", worker: "unknown" }))
+      : Promise.resolve({ ok: true, mode: "disabled", worker: "disabled" }),
   ]);
   // The relational learning workflow is still a partial cutover. Course,
   // chapter, progress and assessment authority exist, but secondary consumers
@@ -329,11 +347,11 @@ app.get("/api/ready", async (_req, res) => {
   };
   const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok
     && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok && privacyAuthority.ok
-    && courseAuthority.ok;
+    && reportAuthority.ok && courseAuthority.ok;
   if (!ok) logger.error("READINESS_CHECK_FAILED", {
     database, redis, objects, payments, identity, attempts: attemptRuntime,
     certificates: certificateAuthority, candidateAssessments: candidateRuntime,
-    privacy: privacyAuthority, courses: courseAuthority, startupReady,
+    privacy: privacyAuthority, reports: reportAuthority, courses: courseAuthority, startupReady,
   });
   res.status(ok ? 200 : 503).json({
     ok,
@@ -351,6 +369,11 @@ app.get("/api/ready", async (_req, res) => {
         ok: privacyAuthority.ok,
         mode: privacyAuthority.mode,
         worker: privacyAuthority.worker,
+      },
+      reports: {
+        ok: reportAuthority.ok,
+        mode: reportAuthority.mode,
+        worker: reportAuthority.worker,
       },
       courses: courseAuthority,
     },
@@ -449,6 +472,7 @@ app.use(errorHandler);
 let httpServer = null;
 let retentionTimer = null;
 let privacyErasureTimer = null;
+let reportExportTimer = null;
 
 const start = async () => {
   try {
@@ -466,6 +490,9 @@ const start = async () => {
     retentionTimer = startRetentionDaemon();
     if (USE_PG_PRIVACY && ENABLE_PRIVACY_ERASURE_WORKER) {
       privacyErasureTimer = startPrivacyErasureDaemon();
+    }
+    if (USE_PG_COURSES && ENABLE_REPORT_EXPORT_WORKER) {
+      reportExportTimer = startReportExportDaemon();
     }
     startupReady = true;
   } catch (err) {
@@ -486,6 +513,7 @@ const shutdown = async (signal) => {
   if (httpServer) await new Promise((resolve) => httpServer.close(resolve)).catch(() => {});
   if (retentionTimer) clearInterval(retentionTimer);
   if (privacyErasureTimer) clearInterval(privacyErasureTimer);
+  if (reportExportTimer) clearInterval(reportExportTimer);
   try { await saveDb(); } catch (err) { console.error("[shutdown] final save failed:", err?.message || err); }
   try { await storage.close(); } catch { /* ignore */ }
   try { await closeRedis(); } catch { /* ignore */ }

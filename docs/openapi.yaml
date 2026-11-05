@@ -367,9 +367,31 @@ paths:
         "200": { description: Time added; response includes per-chapter, course, assessment, and minimum-time gate totals }
   /reports/export:
     post:
-      summary: Queue PDF or Excel report export with course, chapter, and assessment time totals
+      summary: Queue a private PDF or Excel report artifact with canonical time totals
       responses:
-        "202": { description: Report queued or ready; response includes timing summary and export rows }
+        "202": { description: Report prepared for asynchronous private artifact generation }
+  /reports/{reportId}:
+    get:
+      summary: Read an authorized report artifact status without exposing its object key
+      parameters:
+        - in: path
+          name: reportId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Requester-scoped or administrator-scoped report status }
+        "404": { description: Report not found within the caller scope }
+  /reports/{reportId}/download:
+    get:
+      summary: Issue an authorized five-minute attachment grant for a ready report
+      parameters:
+        - in: path
+          name: reportId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Subject-bound short-lived download grant }
+        "409": { description: Artifact is not ready }
   /settings:
     get:
       summary: Read proctoring and security settings

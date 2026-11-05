@@ -147,7 +147,9 @@ or step-up middleware disagrees with its declaration.
 | GET | `/api/content/:courseId/:chapterId/url` | Any | N | N/A | N | G | Relational owner/admin or published enrollment authority; prerequisite gate; object key must remain inside the requested course prefix |
 | POST | `/api/proctoring/captures` | Any | Y | Y | N | G | Attempt-scoped; strict JPEG decoding and 5MB cap |
 | GET | `/uploads/*` | Public | N | N/A | N | None | Explicit 404; local object directory is not published |
-| POST | `/api/reports/export` | A/M | Y | Y | N | G | Phase-19 relational mode uses strict filters, SQL scope, canonical totals, a 5,000-row cap and atomic report/audit persistence; binary artifact worker remains pending |
+| POST | `/api/reports/export` | A/M | Y | Y | N | G | Phase-22 relational mode uses strict filters, SQL scope, canonical totals, a 5,000-row cap and atomic report/audit persistence; the private artifact worker rechecks current authority |
+| GET | `/api/reports/:reportId` | A/M | N | N/A | N | G | Admin organization scope or requester-only Manager scope; private storage keys are redacted |
+| GET | `/api/reports/:reportId/download` | A/M | N | N/A | N | G | Ready artifacts only; Admin organization scope or requester-only Manager scope; five-minute attachment grant and audit evidence (S3 URL is bearer after issuance) |
 
 The runtime-data ignore is anchored to `/uploads/`, so source modules under an
 `uploads` directory remain tracked in clean checkouts.

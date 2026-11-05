@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { closePool, query } from "./pool.js";
 import { reportsRepository as repository } from "../repositories/reports.repository.pg.js";
+import { createReportArtifact } from "../reports/report-artifacts.js";
+import { deleteObject, getPresignedDownloadUrl, uploadBuffer } from "../storage/object-store.js";
 
 if (!process.env.DATABASE_URL && !process.env.PGHOST) {
   throw new Error("DATABASE_URL or PGHOST is required for report authority verification");
@@ -18,6 +20,7 @@ const learnerEnrollmentId = `VERIFY-REPORT-ENROLLMENT-${suffix}`;
 const outsiderEnrollmentId = `VERIFY-REPORT-OUT-ENROLLMENT-${suffix}`;
 const attemptId = `VERIFY-REPORT-ATTEMPT-${suffix}`;
 let reportId = null;
+let storageKey = null;
 const checks = [];
 const ok = (name, condition) => { assert.ok(condition, name); checks.push(name); };
 
@@ -94,6 +97,42 @@ try {
     report.status === "Prepared" && report.artifactAvailable === false && report.downloadUrl === null,
   );
 
+  await query(
+    `UPDATE report_exports SET status = 'Processing', attempts = attempts + 1,
+       claimed_at = now(), updated_at = now() WHERE id = $1`,
+    [report.id],
+  );
+  const claimed = {
+    ...report,
+    actor: { id: managerId, role: "Manager", status: "Active" },
+  };
+  const artifactRows = await repository.loadRowsForClaim(claimed);
+  const artifact = await createReportArtifact({ report: claimed, rows: artifactRows });
+  storageKey = `reports/${report.id}/verify-${suffix}.${artifact.extension}`;
+  await repository.reserveStorageKey({ reportId: report.id, storageKey });
+  await uploadBuffer(storageKey, artifact.buffer, artifact.contentType);
+  const ready = await repository.markReady({
+    reportId: report.id,
+    storageKey,
+    rowCount: artifactRows.length,
+    summary: report.summary,
+  });
+  const authorized = await repository.getAccessibleById({
+    reportId: report.id,
+    actor: { id: managerId, role: "Manager" },
+  });
+  const grant = await getPresignedDownloadUrl(storageKey, 60, managerId, {
+    filename: `verify-report.${artifact.extension}`,
+    contentType: artifact.contentType,
+  });
+  ok(
+    "real private artifact reaches Ready and receives an authorized short-lived download grant",
+    ready.status === "Ready"
+      && ready.artifactAvailable === true
+      && authorized?.storageKey === storageKey
+      && typeof grant.downloadUrl === "string",
+  );
+
   const evidence = await query(
     `SELECT
        (SELECT count(*) FROM report_exports WHERE id = $1)::integer AS reports,
@@ -110,6 +149,7 @@ try {
   console.log(`Report authority verification passed (${checks.length} checks).`);
 } finally {
   if (process.env.DATABASE_URL || process.env.PGHOST) {
+    if (storageKey) await deleteObject(storageKey).catch(() => {});
     if (reportId) {
       await query("DELETE FROM audit_logs WHERE entity_type = 'REPORT' AND entity_id = $1", [reportId]).catch(() => {});
       await query("DELETE FROM report_exports WHERE id = $1", [reportId]).catch(() => {});

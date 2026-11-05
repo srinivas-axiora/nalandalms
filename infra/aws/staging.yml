@@ -397,6 +397,7 @@ Resources:
             - { Name: USE_PG_COURSES, Value: "0" }
             - { Name: USE_PG_PRIVACY, Value: "0" }
             - { Name: ENABLE_PRIVACY_ERASURE_WORKER, Value: "0" }
+            - { Name: ENABLE_REPORT_EXPORT_WORKER, Value: "0" }
             - { Name: PRIVACY_COVERAGE_ACK, Value: "" }
             - { Name: REDIS_URL, Value: !Sub "rediss://${Cache.PrimaryEndPoint.Address}:${Cache.PrimaryEndPoint.Port}" }
             - { Name: S3_BUCKET, Value: !Ref MediaBucket }

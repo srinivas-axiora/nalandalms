@@ -86,7 +86,7 @@ The normalized PostgreSQL schema is defined in `database/schema.sql` (department
 | Enrollment | `POST /api/assignments` |
 | AI | `POST /api/ai/chat`, `POST /api/ai/generate-course`, `POST /api/ai/generate-course-stream`, `GET/POST /api/ai/generation-feedback` |
 | Certificates | `GET/POST /api/certificates` |
-| Analytics/Reports | `GET /api/analytics/{global|team|me|time|time/events}`, `POST /api/reports/export` |
+| Analytics/Reports | `GET /api/analytics/{global|team|me|time|time/events}`, `POST /api/reports/export`, `GET /api/reports/{reportId}`, `GET /api/reports/{reportId}/download` |
 | Governance | `GET /api/audit-logs`, `GET /api/archive`, `POST /api/archive/:id/restore`, `GET/PATCH /api/settings` |
 | Bootstrap | `GET /api/app-data` |
 

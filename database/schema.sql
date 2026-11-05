@@ -615,11 +615,23 @@ CREATE TABLE report_exports (
   report_type TEXT NOT NULL CHECK (report_type IN ('User', 'Team', 'Course')),
   format TEXT NOT NULL CHECK (format IN ('PDF', 'Excel')),
   filters JSONB NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL DEFAULT 'Queued',
+  status TEXT NOT NULL DEFAULT 'Queued'
+    CHECK (status IN ('Queued', 'Prepared', 'Processing', 'Ready', 'Failed')),
   storage_key TEXT,
+  row_count INTEGER NOT NULL DEFAULT 0,
+  summary JSONB NOT NULL DEFAULT '{}',
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 3),
+  last_error_code TEXT,
+  next_attempt_at TIMESTAMPTZ,
+  claimed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  completed_at TIMESTAMPTZ
+  completed_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE INDEX idx_report_exports_due ON report_exports(status, next_attempt_at, created_at)
+  WHERE status IN ('Queued', 'Prepared', 'Processing', 'Failed');
+CREATE INDEX idx_report_exports_requester ON report_exports(requested_by, created_at DESC);
 
 -- ── Audit Logs ──
 CREATE TABLE audit_logs (

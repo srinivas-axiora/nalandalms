@@ -72,4 +72,41 @@ describe("relational report repository", () => {
     expect(new ReportRepositoryError("X", "message", { field: "value" }))
       .toMatchObject({ name: "ReportRepositoryError", code: "X", details: { field: "value" } });
   });
+
+  it("claims due and stale jobs with row locking and current requester authority", async () => {
+    const query = vi.fn(async (sql, params) => {
+      if (sql.includes("WITH candidate")) {
+        expect(sql).toContain("FOR UPDATE SKIP LOCKED");
+        expect(sql).toContain("interval '15 minutes'");
+        expect(sql).toContain("report.status = 'Processing'");
+        expect(params).toEqual([3]);
+        return { rows: [{ ...reportRow, status: "Processing", attempts: 1, storage_key: "reports/stale.pdf" }] };
+      }
+      if (sql.includes("SELECT id, role, status FROM users")) {
+        return { rows: [{ id: "MGR-1", role: "Manager", status: "Active" }] };
+      }
+      throw new Error("unexpected query");
+    });
+    const db = { query, withTransaction: vi.fn((fn) => fn({ query })) };
+    const repository = createReportsRepository(db);
+
+    const claimed = await repository.claimDue();
+
+    expect(claimed).toMatchObject({
+      id: reportRow.id,
+      attempts: 1,
+      pendingStorageKey: "reports/stale.pdf",
+      actor: { id: "MGR-1", role: "Manager", status: "Active" },
+    });
+  });
+
+  it("reserves an in-flight object key only while the report is processing", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{ id: reportRow.id }] });
+    const repository = createReportsRepository({ query, withTransaction: vi.fn() });
+    await repository.reserveStorageKey({ reportId: reportRow.id, storageKey: "reports/id/artifact.pdf" });
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("status = 'Processing'"),
+      [reportRow.id, "reports/id/artifact.pdf"],
+    );
+  });
 });

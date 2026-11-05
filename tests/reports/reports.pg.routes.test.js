@@ -46,4 +46,41 @@ describe("PostgreSQL report routes", () => {
       .send({ format: "PDF", reportType: "User", filters: {} });
     expect(response.status).toBe(403);
   });
+
+  it("returns scoped report status without exposing the private storage key", async () => {
+    const reportId = "8a14967f-687d-4ab0-a253-ae01da76ecb8";
+    vi.spyOn(reportsRepository, "getAccessibleById").mockResolvedValue({
+      id: reportId, requestedBy: testUsers.manager.id, status: "Ready",
+      artifactAvailable: true, storageKey: "reports/private/report.pdf",
+    });
+    const response = await request(app).get(`/api/reports/${reportId}`)
+      .set("Cookie", authCookieFor(testUsers.manager));
+    expect(response.status).toBe(200);
+    expect(response.body.data).not.toHaveProperty("storageKey");
+    expect(response.body.data).toMatchObject({ id: reportId, artifactAvailable: true });
+  });
+
+  it("refuses a download until the worker has completed the artifact", async () => {
+    const reportId = "8a14967f-687d-4ab0-a253-ae01da76ecb8";
+    vi.spyOn(reportsRepository, "getAccessibleById").mockResolvedValue({ id: reportId, status: "Processing", storageKey: null });
+    const response = await request(app).get(`/api/reports/${reportId}/download`)
+      .set("Cookie", authCookieFor(testUsers.manager));
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe("REPORT_NOT_READY");
+  });
+
+  it("issues and audits a short-lived grant only for an accessible ready artifact", async () => {
+    const reportId = "8a14967f-687d-4ab0-a253-ae01da76ecb8";
+    vi.spyOn(reportsRepository, "getAccessibleById").mockResolvedValue({
+      id: reportId, reportType: "Team", format: "PDF", status: "Ready",
+      storageKey: `reports/${reportId}/artifact.pdf`,
+    });
+    const audit = vi.spyOn(reportsRepository, "recordDownload").mockResolvedValue(undefined);
+    const response = await request(app).get(`/api/reports/${reportId}/download`)
+      .set("Cookie", authCookieFor(testUsers.manager));
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ expiresInSeconds: 300 });
+    expect(response.body.downloadUrl).toMatch(/^\/api\/uploads\/download\?token=/);
+    expect(audit).toHaveBeenCalledWith({ reportId, actorId: testUsers.manager.id });
+  });
 });

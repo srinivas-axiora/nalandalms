@@ -199,10 +199,11 @@ For each bounded context, in roughly ascending coupling:
 - [x] global, team, personal and learning-time analytics use database-derived
       metrics with SQL-enforced administrator/manager/subject scope behind
       `USE_PG_COURSES=1` (Phase 18; live reconciliation verifier pending)
-- [x] report-data preparation uses typed filters, SQL-enforced scope, canonical
-      relational time totals and an atomic durable report/audit pair behind
-      `USE_PG_COURSES=1` (Phase 19; binary artifact worker and live verifier
-      remain pending)
+- [x] report-data preparation and private PDF/XLSX artifact generation use
+      typed filters, SQL-enforced scope, canonical relational totals, bounded
+      retry state, crash recovery and authenticated short-lived downloads
+      behind `USE_PG_COURSES=1` (Phases 19 and 22; live PostgreSQL/S3 verifier
+      remains pending)
 - [x] AI generation is draft-only, input-bounded and explicit-provider-opt-in;
       duplicate snapshot course/chapter/assessment writes are removed (Phase
       20; live provider evaluation remains pending)
@@ -215,7 +216,8 @@ For each bounded context, in roughly ascending coupling:
 - [x] proctoring_logs  ·  certificates
 - [ ] archives  ·  audit_logs / security_events (certificate/attempt audit rows
       are durable, but application-wide audit authority remains incomplete)
-- [ ] reports, application-wide analytics → convert aggregates to SQL
+- [ ] application-wide audit/security-event authority and legacy app-data
+      report projection remain to be converted to relational reads
       (`GROUP BY`, views); candidate analytics now reads normalized submissions
 - [ ] remove the in-memory arrays + JSON-blob adapter; externalize rate-limit /
       session / lockout state to enable **multi-instance** horizontal scaling

@@ -57,7 +57,7 @@ random unknown password so no source-visible credential can be used to sign in.
 - Assessments: `/api/assessments`, `/api/assessments/:id/approval`, `/api/assessments/:id/attempts/start`, `/api/assessments/attempts/:attemptId/submit`
 - Proctoring: `/api/proctoring/events`
 - Analytics: `/api/analytics/global`, `/api/analytics/team`, `/api/analytics/me`
-- Reports: `/api/reports/export`
+- Reports: `/api/reports/export`, `/api/reports/:reportId`, `/api/reports/:reportId/download`
 - Certificates: `/api/certificates`
 - Archive: `/api/archive`, `/api/archive/:id/restore`
 - Settings: `/api/settings`
