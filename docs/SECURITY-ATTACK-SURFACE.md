@@ -162,11 +162,11 @@ The runtime-data ignore is anchored to `/uploads/`, so source modules under an
 | PATCH | `/api/skills/:id` | A | Y | Y | N | G | Unvalidated `req.body.status` path |
 | POST | `/api/target-skills` | A | Y | Y | N | G | Duplicate target route/model |
 | POST | `/api/chapter-feedbacks` | Any | Y | Y | N | G | No enrollment/chapter existence check |
-| GET | `/api/analytics/global` | A | N | N/A | N | G | Returns hard-coded metrics in part |
-| GET | `/api/analytics/team` | M | N | N/A | N | G | Direct-report scope; hard-coded metrics in part |
-| GET | `/api/analytics/me` | Any | N | N/A | N | G | Hard-coded metrics |
-| GET | `/api/analytics/time` | A/M | N | N/A | N | G | Scope helper used |
-| GET | `/api/analytics/time/events` | A/M | N | N/A | N | G | Scope helper used; query coercion weak |
+| GET | `/api/analytics/global` | A | N | N/A | N | G | Phase-18 relational mode derives organization counts, progress, scores and performer ordering from PostgreSQL |
+| GET | `/api/analytics/team` | M | N | N/A | N | G | Phase-18 relational mode enforces direct-report scope in SQL and derives completion, skills and engagement |
+| GET | `/api/analytics/me` | Any | N | N/A | N | G | Phase-18 relational mode derives self-scoped enrollment, skill and course-suggestion metrics |
+| GET | `/api/analytics/time` | A/M | N | N/A | N | G | Phase-18 relational mode reconciles canonical chapter totals, attempts and enrollment time with SQL scope |
+| GET | `/api/analytics/time/events` | A/M | N | N/A | N | G | Phase-18 relational mode uses SQL scope, deterministic ordering and a strict 1-500 limit |
 | GET | `/api/archive` | SA | N | N/A | N | G | Redacted archive view; identity archives exclude password hashes |
 | POST | `/api/archive/:id/restore` | SA | Y | Y | Y | G | Step-up required; restored user is inactive with a rotated credential/session |
 | GET | `/api/audit-logs` | A | N | N/A | N | G | Redacted view; normalized identity/attempt writes use database audit rows |
