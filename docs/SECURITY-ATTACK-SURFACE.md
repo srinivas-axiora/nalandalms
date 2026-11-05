@@ -68,7 +68,7 @@ or step-up middleware disagrees with its declaration.
 | POST | `/api/courses/:courseId/chapters/:chapterId/time` | Any | Y | Y | N | G | Phase-13 relational mode requires a durable idempotency key and server-clock-clamped increment |
 | GET | `/api/courses/:courseId/chapters/:chapterId/progress` | Any | N | N/A | N | G | Phase-13 relational mode enforces enrollment and sequential unlock policy |
 | POST | `/api/courses/:courseId/chapters/:chapterId/heartbeat` | Any | Y | Y | N | G | Phase-13 relational mode locks enrollment, deduplicates retries and commits event/total/progress atomically |
-| POST | `/api/assignments` | A/M | Y | Y | N | G | Manager/direct-report scoping present |
+| POST | `/api/assignments` | A/M | Y | Y | N | G | Phase-16 relational mode locks course/user scope, restricts Managers to owned courses and active direct reports, and commits the bounded batch with audit atomically |
 | POST | `/api/cohorts` | A/M/I | Y | Y | N | G | Course ownership check present |
 | GET | `/api/cohorts` | Any | N | N/A | N | G | Scoped listing |
 | GET | `/api/cohorts/:id` | Any | N | N/A | N | G | Missing membership/ownership check; leaks invite code |

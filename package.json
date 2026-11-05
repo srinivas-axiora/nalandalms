@@ -23,7 +23,8 @@
     "db:verify-privacy": "node backend/src/db/verify-privacy.mjs",
     "db:verify-courses": "node backend/src/db/verify-courses.mjs",
     "db:verify-learning": "node backend/src/db/verify-learning.mjs",
-    "db:verify-assessments": "node backend/src/db/verify-assessments.mjs"
+    "db:verify-assessments": "node backend/src/db/verify-assessments.mjs",
+    "db:verify-assignments": "node backend/src/db/verify-assignments.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1160.0",

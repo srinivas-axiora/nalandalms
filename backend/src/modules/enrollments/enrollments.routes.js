@@ -4,8 +4,12 @@ import { z } from "zod";
 import { courses, users, assignments, now } from "../../core.js";
 import { audit, coursesVisibleTo, visibleUserIdsFor } from "../../domain.js";
 import { authenticate, requireRole } from "../../middleware.js";
+import { registerEnrollmentsPgRoutes } from "./enrollments.pg.routes.js";
+
+const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 
 export function registerEnrollments(app) {
+  if (USE_PG_COURSES) return registerEnrollmentsPgRoutes(app);
   app.post("/api/assignments", authenticate, requireRole("Admin", "Manager"), (req, res) => {
     const schema = z.object({
       courseId: z.string(),
