@@ -4,6 +4,9 @@ import crypto from "node:crypto";
 import { cohorts, courses, assignments, attempts, users, now, isAdmin } from "../../core.js";
 import { audit, canManageCourse } from "../../domain.js";
 import { authenticate, requireRole } from "../../middleware.js";
+import { registerCohortsPgRoutes } from "./cohorts.pg.routes.js";
+
+const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 
 function generateInviteCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -15,6 +18,7 @@ function generateInviteCode() {
 }
 
 export function registerCohorts(app) {
+  if (USE_PG_COURSES) return registerCohortsPgRoutes(app);
   // ── Create Cohort ──
   app.post(
     "/api/cohorts",

@@ -8,6 +8,7 @@ const mapEnrollment = (r) => ({
   courseId: r.course_id,
   userId: r.user_id,
   assignedBy: r.assigned_by,
+  cohortId: r.cohort_id || null,
   dueAt: r.due_at ? iso(r.due_at) : null,
   priority: r.priority || "Medium",
   mandatory: Boolean(r.mandatory),
@@ -53,20 +54,21 @@ export async function findEnrollment(courseId, userId) {
 export async function insertEnrollment(enrollment) {
   const { rows } = await query(
     `INSERT INTO enrollments (
-       id, course_id, user_id, assigned_by, due_at, priority,
+       id, course_id, user_id, assigned_by, cohort_id, due_at, priority,
        mandatory, progress, completed_chapters, time_spent_minutes,
        time_spent_seconds, chapter_time_spent_seconds, chapter_heartbeat_timestamps,
        video_progress, last_heartbeat_at, version, status, certificate_id, started_at
      ) VALUES (
-       $1, $2, $3, $4, $5, $6,
-       $7, $8, $9, $10,
-       $11, $12, $13, $14, $15, $16, $17, $18, COALESCE($19::timestamptz, now())
+       $1, $2, $3, $4, $5, $6, $7,
+       $8, $9, $10, $11,
+       $12, $13, $14, $15, $16, $17, $18, $19, COALESCE($20::timestamptz, now())
      ) RETURNING *`,
     [
       enrollment.id,
       enrollment.courseId,
       enrollment.userId,
       enrollment.assignedBy,
+      enrollment.cohortId || null,
       enrollment.dueAt || null,
       enrollment.priority || "Medium",
       enrollment.mandatory ?? false,

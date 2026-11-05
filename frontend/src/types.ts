@@ -194,8 +194,9 @@ export type Cohort = {
   endDate?: string | null;
   capacity: number;
   description: string;
-  inviteCode: string;
+  inviteCode?: string;
   active: boolean;
+  version?: number;
   memberCount?: number;
   createdAt: string;
   updatedAt: string;

@@ -69,11 +69,11 @@ or step-up middleware disagrees with its declaration.
 | GET | `/api/courses/:courseId/chapters/:chapterId/progress` | Any | N | N/A | N | G | Phase-13 relational mode enforces enrollment and sequential unlock policy |
 | POST | `/api/courses/:courseId/chapters/:chapterId/heartbeat` | Any | Y | Y | N | G | Phase-13 relational mode locks enrollment, deduplicates retries and commits event/total/progress atomically |
 | POST | `/api/assignments` | A/M | Y | Y | N | G | Phase-16 relational mode locks course/user scope, restricts Managers to owned courses and active direct reports, and commits the bounded batch with audit atomically |
-| POST | `/api/cohorts` | A/M/I | Y | Y | N | G | Course ownership check present |
-| GET | `/api/cohorts` | Any | N | N/A | N | G | Scoped listing |
-| GET | `/api/cohorts/:id` | Any | N | N/A | N | G | Missing membership/ownership check; leaks invite code |
-| POST | `/api/cohorts/join` | Any | Y | Y | N | G | Capacity check is race-prone |
-| GET | `/api/cohorts/:id/analytics` | Any | N | N/A | N | G | Owner/admin check present |
+| POST | `/api/cohorts` | A/M/I | Y | Y | N | G | Phase-17 relational mode requires active approved course authority, stores only the invite digest and couples create/audit transactionally |
+| GET | `/api/cohorts` | Any | N | N/A | N | G | Phase-17 relational mode scopes administrators, creators and enrolled members without returning invite material |
+| GET | `/api/cohorts/:id` | Any | N | N/A | N | G | Phase-17 relational mode requires administration, course/cohort authority or membership and returns no bearer invite |
+| POST | `/api/cohorts/join` | Any | Y | Y | N | G | Phase-17 relational mode locks the target cohort before capacity count and commits enrollment/audit atomically |
+| GET | `/api/cohorts/:id/analytics` | Any | N | N/A | N | G | Phase-17 relational mode requires cohort instructor, course owner or administrator authority |
 
 ## Assessments and external candidates
 

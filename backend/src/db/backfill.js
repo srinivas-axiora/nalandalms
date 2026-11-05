@@ -38,6 +38,7 @@ async function loadSource() {
       chapters: core.chapters || [],
       assessments: core.assessments || [],
       assignments: core.assignments || [],
+      cohorts: core.cohorts || [],
       attempts: core.attempts || [],
       proctoringLogs: core.proctoringLogs || [],
       issuedCertificates: core.issuedCertificates || [],
@@ -263,24 +264,57 @@ export async function backfill() {
       );
     }
 
-    // 6. Enrollments
+    // 6. Cohorts. Invite codes are one-way hashed; they must be reissued if the
+    // source snapshot did not contain the original bearer value.
+    const cohorts = data.cohorts || [];
+    console.log(`[backfill] Upserting ${cohorts.length} cohorts...`);
+    for (const cohort of cohorts) {
+      const inviteCode = String(cohort.inviteCode || `REISSUE-${cohort.id}`).trim().toUpperCase();
+      const inviteUsable = /^NLD-[A-HJ-NP-Z2-9]{12}$/.test(inviteCode);
+      const inviteCodeHash = crypto.createHash("sha256").update(inviteCode).digest("hex");
+      await client.query(
+        `INSERT INTO cohorts (
+           id, course_id, instructor_id, name, description, start_date,
+           end_date, capacity, invite_code_hash, active, version,
+           created_at, updated_at
+         ) VALUES (
+           $1, $2, $3, $4, $5, COALESCE($6::timestamptz, now()),
+           $7, $8, $9, $10, $11,
+           COALESCE($12::timestamptz, now()), COALESCE($13::timestamptz, now())
+         ) ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name, description = EXCLUDED.description,
+           start_date = EXCLUDED.start_date, end_date = EXCLUDED.end_date,
+           capacity = EXCLUDED.capacity, active = EXCLUDED.active,
+           version = GREATEST(cohorts.version, EXCLUDED.version),
+           updated_at = EXCLUDED.updated_at`,
+        [
+          cohort.id, cohort.courseId, cohort.instructorId, cohort.name,
+          cohort.description || "", cohort.startDate || null, cohort.endDate || null,
+          cohort.capacity || 100, inviteCodeHash, cohort.active !== false && inviteUsable,
+          cohort.version || 1, cohort.createdAt || null, cohort.updatedAt || null,
+        ],
+      );
+    }
+
+    // 7. Enrollments
     const enrollments = data.assignments || data.enrollments || [];
     console.log(`[backfill] Upserting ${enrollments.length} enrollments...`);
     for (const e of enrollments) {
       await client.query(
         `INSERT INTO enrollments (
-           id, course_id, user_id, assigned_by, due_at, priority,
+           id, course_id, user_id, assigned_by, cohort_id, due_at, priority,
            mandatory, progress, completed_chapters, time_spent_minutes,
            time_spent_seconds, chapter_time_spent_seconds,
            chapter_heartbeat_timestamps, video_progress, last_heartbeat_at,
            version, status, certificate_id, started_at, completed_at
          ) VALUES (
-           $1, $2, $3, $4, $5, $6,
-           $7, $8, $9, $10,
-           $11, $12, $13, $14, $15,
-           $16, $17, $18,
-           COALESCE($19::timestamptz, now()), $20
+           $1, $2, $3, $4, $5, $6, $7,
+           $8, $9, $10, $11,
+           $12, $13, $14, $15, $16,
+           $17, $18, $19,
+           COALESCE($20::timestamptz, now()), $21
          ) ON CONFLICT (course_id, user_id) DO UPDATE SET
+           cohort_id = EXCLUDED.cohort_id,
            progress = EXCLUDED.progress, completed_chapters = EXCLUDED.completed_chapters,
            status = EXCLUDED.status, certificate_id = EXCLUDED.certificate_id,
            completed_at = EXCLUDED.completed_at,
@@ -291,7 +325,7 @@ export async function backfill() {
         [
           e.id, e.courseId, e.userId,
           userIds.has(e.assignedBy) ? e.assignedBy : e.userId,
-          e.dueAt || null, e.priority || "Medium", e.mandatory ?? false,
+          e.cohortId || null, e.dueAt || null, e.priority || "Medium", e.mandatory ?? false,
           e.progress || 0, e.completedChapters || [], e.timeSpentMinutes || 0,
           e.timeSpentSeconds || 0, JSON.stringify(e.chapterTimeSpentSeconds || {}),
           JSON.stringify(e.lastHeartbeatTimestamps || {}),
