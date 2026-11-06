@@ -57,6 +57,19 @@ describe("AWS staging release controls", () => {
     expect(template).toContain("Action: [s3:GetObject, s3:GetObjectTagging, s3:PutObject, s3:DeleteObject]");
   });
 
+  it("configures custom-domain TLS only from a complete validated input tuple", () => {
+    expect(template).toContain("HasCustomDomain: !And");
+    expect(template).toContain("CompleteCustomDomainConfiguration:");
+    expect(template).toContain("AcmCertificateArn: !Ref CloudFrontCertificateArn");
+    expect(template).toContain("MinimumProtocolVersion: TLSv1.2_2021");
+    expect(template).toContain("SslSupportMethod: sni-only");
+    expect(template).toContain("Type: AAAA");
+    expect(template).toContain("HostedZoneId: Z2FDTNDATAQYW2");
+    expect(template).toMatch(/Name: ALLOWED_ORIGINS[\s\S]*?HasCustomDomain[\s\S]*?CustomDomainName/);
+    expect(deploymentScript).toContain("must be supplied together");
+    expect(deploymentScript).toContain("acm:us-east-1:");
+  });
+
   it("keeps relational authority flags disabled until live verification", () => {
     const expectedFlags = [
       "USE_PG_PAYMENTS",

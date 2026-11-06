@@ -64,7 +64,8 @@ mandatory staging gates, not assumed successes.
   normalized repositories before enabling multiple tasks.
 - Validate container build and CloudFormation deployment in the staging account.
 - Phase 25 adds regional AWS WAF, ALB access logs, CloudWatch alarms and SNS
-  routing; staging exercise and managed-rule tuning remain pending. Add malware
-  scanning/quarantine plus the custom domain/certificate before production.
+  routing; staging exercise and managed-rule tuning remain pending. Phase 26
+  adds malware quarantine and Phase 27 adds optional custom-domain/ACM/Route 53
+  wiring; both controls still require live staging evidence before production.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

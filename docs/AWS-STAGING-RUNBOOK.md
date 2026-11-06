@@ -12,6 +12,9 @@ Target: production-shaped staging only
 - Create three Secrets Manager values containing Razorpay test-mode key ID, key
   secret and webhook secret. Never place their values in command history,
   CloudFormation parameters, source files or Terraform state.
+- For a custom hostname, prepare a public Route 53 hosted zone and an already
+  validated ACM certificate in `us-east-1` whose subject/SAN covers the exact
+  hostname.
 - Start Docker Desktop and confirm Linux ARM64 builds work.
 - Confirm the repository is clean and the intended security commits are on the
   deployment branch.
@@ -56,6 +59,9 @@ For a new staging database, prepare (but do not enable) the normalized tables:
   -PrepareRelationalDatabase `
   -RunRelationalVerifiers `
   -AlertEmail $alertEmail `
+  -CustomDomainName $customDomainName `
+  -HostedZoneId $hostedZoneId `
+  -CloudFrontCertificateArn $cloudFrontCertificateArn `
   -RazorpayKeyIdSecretArn $keyIdArn `
   -RazorpayKeySecretArn $keySecretArn `
   -RazorpayWebhookSecretArn $webhookSecretArn
@@ -113,6 +119,10 @@ Do not use real learner/candidate PII or real payments in this staging stack.
   and verify the object remains unreadable, the scan result is
   `THREATS_FOUND`, and the EventBridge-to-SNS alert is delivered. Never use a
   real malicious file or production data for this exercise.
+- For a custom domain, verify Route 53 A and AAAA aliases, certificate name and
+  chain, `TLSv1.2_2021`, HTTP-to-HTTPS redirect, the application origin
+  allowlist and readiness through the custom hostname. Preserve DNS/TLS probe
+  evidence and the CloudFront deployed status.
 - Retrieve the generated bootstrap administrator secret, log in once, change
   the account password and rotate/remove bootstrap access.
 - Review CloudWatch errors and ALB target health for at least one normal user

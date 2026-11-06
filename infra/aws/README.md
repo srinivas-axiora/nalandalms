@@ -35,6 +35,9 @@ $env:AWS_PROFILE = "YOUR_PROFILE"
   -PrepareRelationalDatabase `
   -RunRelationalVerifiers `
   -AlertEmail sre@example.com `
+  -CustomDomainName staging.example.com `
+  -HostedZoneId Z0123456789EXAMPLE `
+  -CloudFrontCertificateArn arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000 `
   -RazorpayKeyIdSecretArn arn:aws:secretsmanager:...:secret:razorpay-key-id `
   -RazorpayKeySecretArn arn:aws:secretsmanager:...:secret:razorpay-key-secret `
   -RazorpayWebhookSecretArn arn:aws:secretsmanager:...:secret:razorpay-webhook
@@ -50,6 +53,13 @@ all current live PostgreSQL verification programs as isolated ECS tasks. Neither
 switch enables a PostgreSQL feature flag; review and reconcile their evidence
 before a separate cutover. The script finishes with a CloudFront readiness
 smoke gate.
+
+The three custom-domain parameters are optional but atomic: provide all three
+or none. The certificate must already be validated, cover the requested DNS
+name and reside in ACM `us-east-1`, as required by CloudFront. When supplied,
+the stack configures SNI-only `TLSv1.2_2021`, IPv4/IPv6 Route 53 aliases and the
+application origin allowlist. Without them, staging uses the generated
+`cloudfront.net` hostname and certificate.
 
 The optional alert email receives an AWS subscription confirmation. Until that
 confirmation is accepted, alarms publish to the encrypted SNS topic but email
@@ -88,9 +98,11 @@ production PII, payment records or real candidate evidence into this stack.
   whole-state JSONB persistence and the remaining in-memory state still require
   one writer.
 - No zero-downtime deployment or multi-AZ application service is safe yet.
-- A custom domain and ACM certificate are not yet configured. The regional WAF
-  protects the ALB origin; a separately managed `CLOUDFRONT`-scope web ACL in
-  `us-east-1` is still recommended when the custom distribution is promoted.
+- Custom-domain/ACM wiring is declared but needs the intended domain, public
+  hosted zone and a validated `us-east-1` certificate plus live DNS/TLS proof.
+  The regional WAF protects the ALB origin; a separately managed
+  `CLOUDFRONT`-scope web ACL in `us-east-1` is still recommended when the custom
+  distribution is promoted.
 - GuardDuty malware scanning/quarantine is declared, but staging must prove the
   plan becomes active, clean media becomes readable, non-clean media remains
   unreadable and alert delivery works before production.

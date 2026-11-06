@@ -6,6 +6,9 @@ param(
   [switch]$RunRelationalVerifiers,
   [string]$AlertEmail = "",
   [ValidateRange(100, 2000000000)][int]$WafRateLimit = 2000,
+  [string]$CustomDomainName = "",
+  [string]$HostedZoneId = "",
+  [string]$CloudFrontCertificateArn = "",
   [Parameter(Mandatory = $true)][string]$RazorpayKeyIdSecretArn,
   [Parameter(Mandatory = $true)][string]$RazorpayKeySecretArn,
   [Parameter(Mandatory = $true)][string]$RazorpayWebhookSecretArn
@@ -13,6 +16,19 @@ param(
 
 $ErrorActionPreference = "Stop"
 if (-not $ImageTag) { $ImageTag = (git rev-parse --short=12 HEAD).Trim() }
+$customDomainValues = @($CustomDomainName, $HostedZoneId, $CloudFrontCertificateArn) | Where-Object { $_ }
+if ($customDomainValues.Count -ne 0 -and $customDomainValues.Count -ne 3) {
+  throw "CustomDomainName, HostedZoneId and CloudFrontCertificateArn must be supplied together."
+}
+if ($CustomDomainName -and $CustomDomainName -notmatch '^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$') {
+  throw "CustomDomainName must be a valid fully qualified DNS name."
+}
+if ($HostedZoneId -and $HostedZoneId -notmatch '^Z[A-Z0-9]+$') {
+  throw "HostedZoneId must be a valid Route 53 hosted zone identifier."
+}
+if ($CloudFrontCertificateArn -and $CloudFrontCertificateArn -notmatch '^arn:[^:]+:acm:us-east-1:') {
+  throw "The CloudFront ACM certificate must be provisioned in us-east-1."
+}
 
 $identity = aws sts get-caller-identity --region $Region | ConvertFrom-Json
 if (-not $identity.Account) { throw "AWS authentication is required." }
@@ -74,6 +90,11 @@ $parameterOverrides = @(
   "WafRateLimit=$WafRateLimit"
 )
 if ($AlertEmail) { $parameterOverrides += "AlertEmail=$AlertEmail" }
+if ($CustomDomainName) {
+  $parameterOverrides += "CustomDomainName=$CustomDomainName"
+  $parameterOverrides += "HostedZoneId=$HostedZoneId"
+  $parameterOverrides += "CloudFrontCertificateArn=$CloudFrontCertificateArn"
+}
 
 aws cloudformation deploy `
   --template-file infra/aws/staging.yml `

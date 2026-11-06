@@ -55,6 +55,8 @@ const requiredResources = [
   "AccessLogBucket",
   "AccessLogBucketPolicy",
   "AlertTopic",
+  "CustomDomainARecord",
+  "CustomDomainAaaaRecord",
   "Distribution",
   "LoadBalancer",
   "MalwareProtectionPlan",

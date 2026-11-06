@@ -31,12 +31,45 @@ Parameters:
     Default: 2000
     MinValue: 100
     Description: Maximum requests per forwarded client IP in a five-minute window
+  CustomDomainName:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$'
+    Description: Optional validated DNS name for the CloudFront distribution
+  HostedZoneId:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^Z[A-Z0-9]+$'
+    Description: Route 53 public hosted zone ID for the optional custom domain
+  CloudFrontCertificateArn:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^arn:[^:]+:acm:us-east-1:[0-9]{12}:certificate/[A-Za-z0-9-]+$'
+    Description: Optional validated ACM certificate ARN from us-east-1
   CloudFrontOriginPrefixList:
     Type: AWS::SSM::Parameter::Value<String>
     Default: /aws/service/global-infrastructure/services/cloudfront/origin-facing/prefix-list-id
 
 Conditions:
   HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+  HasCustomDomain: !And
+    - !Not [!Equals [!Ref CustomDomainName, ""]]
+    - !Not [!Equals [!Ref HostedZoneId, ""]]
+    - !Not [!Equals [!Ref CloudFrontCertificateArn, ""]]
+
+Rules:
+  CompleteCustomDomainConfiguration:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref CustomDomainName, ""]
+            - !Equals [!Ref HostedZoneId, ""]
+            - !Equals [!Ref CloudFrontCertificateArn, ""]
+          - !And
+            - !Not [!Equals [!Ref CustomDomainName, ""]]
+            - !Not [!Equals [!Ref HostedZoneId, ""]]
+            - !Not [!Equals [!Ref CloudFrontCertificateArn, ""]]
+        AssertDescription: CustomDomainName, HostedZoneId and CloudFrontCertificateArn must be supplied together
 
 Resources:
   VPC:
@@ -707,7 +740,11 @@ Resources:
             - { Name: NODE_ENV, Value: production }
             - { Name: PORT, Value: "8080" }
             - { Name: TRUST_PROXY, Value: "2" }
-            - { Name: ALLOWED_ORIGINS, Value: !Sub "https://${Distribution.DomainName}" }
+            - Name: ALLOWED_ORIGINS
+              Value: !If
+                - HasCustomDomain
+                - !Sub https://${CustomDomainName}
+                - !Sub https://${Distribution.DomainName}
             - { Name: PGHOST, Value: !GetAtt Database.Endpoint.Address }
             - { Name: PGPORT, Value: !GetAtt Database.Endpoint.Port }
             - { Name: PGDATABASE, Value: !Ref DatabaseName }
@@ -1114,6 +1151,16 @@ Resources:
         HttpVersion: http2and3
         IPV6Enabled: true
         PriceClass: PriceClass_200
+        Aliases: !If
+          - HasCustomDomain
+          - [!Ref CustomDomainName]
+          - !Ref AWS::NoValue
+        ViewerCertificate: !If
+          - HasCustomDomain
+          - AcmCertificateArn: !Ref CloudFrontCertificateArn
+            MinimumProtocolVersion: TLSv1.2_2021
+            SslSupportMethod: sni-only
+          - CloudFrontDefaultCertificate: true
         Origins:
           - Id: alb
             DomainName: !GetAtt LoadBalancer.DNSName
@@ -1130,9 +1177,36 @@ Resources:
           OriginRequestPolicyId: !Ref OriginRequestPolicy
           ResponseHeadersPolicyId: !Ref ResponseHeadersPolicy
 
+  CustomDomainARecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasCustomDomain
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref CustomDomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
+  CustomDomainAaaaRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasCustomDomain
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref CustomDomainName
+      Type: AAAA
+      AliasTarget:
+        DNSName: !GetAtt Distribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
 Outputs:
   ApplicationUrl:
-    Value: !Sub https://${Distribution.DomainName}
+    Value: !If
+      - HasCustomDomain
+      - !Sub https://${CustomDomainName}
+      - !Sub https://${Distribution.DomainName}
   CloudFrontDistributionId:
     Value: !Ref Distribution
   ClusterName:
