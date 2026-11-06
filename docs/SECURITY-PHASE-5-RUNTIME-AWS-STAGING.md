@@ -63,7 +63,8 @@ mandatory staging gates, not assumed successes.
   still requires live PostgreSQL/concurrency validation and the remaining
   normalized repositories before enabling multiple tasks.
 - Validate container build and CloudFormation deployment in the staging account.
-- Add malware scanning/quarantine, AWS WAF, custom domain/certificate, access
-  logs, alarms and incident routing.
+- Phase 25 adds regional AWS WAF, ALB access logs, CloudWatch alarms and SNS
+  routing; staging exercise and managed-rule tuning remain pending. Add malware
+  scanning/quarantine plus the custom domain/certificate before production.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

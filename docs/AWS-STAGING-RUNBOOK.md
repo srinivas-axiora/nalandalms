@@ -1,7 +1,7 @@
 # AWS staging release runbook
 
-Date: 2026-11-03  
-Default region: `ap-south-1`  
+Date: 2026-11-06
+Default region: `ap-south-1`
 Target: production-shaped staging only
 
 ## 1. Before deployment
@@ -23,38 +23,48 @@ npm test
 npm run test:security
 npm run typecheck
 npm run build
+npm run infra:validate
 npm audit --audit-level=high
 ```
 
-Expected gate: 133 functional tests, 30 adversarial tests, type/build success
-and no high/critical dependency advisory.
+Also parse `infra/aws/deploy-staging.ps1` with the PowerShell language parser
+before invoking it. The repository tests pin its service-validation, image-scan,
+relational-verifier and readiness gates.
+
+Expected gate: the current committed functional and adversarial suites pass,
+type/build succeed, and no high/critical dependency advisory is present. Record
+the exact test counts in the release evidence rather than relying on stale
+hard-coded totals.
 
 ## 2. Deploy
 
 Run `infra/aws/deploy-staging.ps1` using the three secret ARNs. The script:
 
-1. verifies AWS identity;
+1. verifies AWS identity and validates the template through CloudFormation;
 2. creates or locates the immutable/scanned ECR repository;
 3. builds and pushes an immutable ARM64 image;
-4. deploys the CloudFormation stack; and
-5. optionally runs guarded schema bootstrap and snapshot backfill as one-off ECS
-   tasks when `-PrepareRelationalDatabase` is supplied; and
-6. prints the CloudFront URL and operational identifiers.
+4. waits for ECR scanning and rejects any critical/high finding;
+5. deploys the CloudFormation stack;
+6. optionally runs guarded schema/bootstrap/backfill and every relational live
+   verifier as isolated ECS tasks; and
+7. requires a successful CloudFront readiness response before printing outputs.
 
 For a new staging database, prepare (but do not enable) the normalized tables:
 
 ```powershell
 .\infra\aws\deploy-staging.ps1 `
   -PrepareRelationalDatabase `
+  -RunRelationalVerifiers `
+  -AlertEmail $alertEmail `
   -RazorpayKeyIdSecretArn $keyIdArn `
   -RazorpayKeySecretArn $keySecretArn `
   -RazorpayWebhookSecretArn $webhookSecretArn
 ```
 
-The two one-off tasks must exit zero. Reconcile the tables using
-`SECURITY-PHASE-6-PAYMENT-PERSISTENCE.md`. `USE_PG_PAYMENTS` remains off; do not
-manually add it to the task definition until the live database and concurrency
-gate is signed off.
+Every one-off task must exit zero. Preserve the task ARNs and CloudWatch streams
+as release evidence. Reconcile the tables using the phase documents and keep
+all cutover flags off until their live database, concurrency and rollback gates
+are signed off.
 
 The task definition also pins `USE_PG_IDENTITY=0`. Run the verifier and all
 cutover/failover checks in `SECURITY-PHASE-7-IDENTITY-PERSISTENCE.md` before
@@ -89,6 +99,13 @@ Do not use real learner/candidate PII or real payments in this staging stack.
 - Confirm RDS automated backups and S3 versioning are enabled.
 - Confirm Redis and RDS have no public endpoint exposure.
 - Confirm S3 Block Public Access is enabled at all four settings.
+- Confirm ALB access-log test and request objects appear under
+  `alb/AWSLogs/<account-id>/` in the retained logging bucket.
+- Confirm the regional WAF is associated with the ALB, the forwarded-IP rate
+  rule blocks a synthetic flood, known-bad inputs block, and common managed
+  rules emit count metrics without breaking valid large requests.
+- Confirm the alert SNS subscription and exercise unhealthy-target, readiness
+  failure and application-error alarm delivery/recovery in staging.
 - Retrieve the generated bootstrap administrator secret, log in once, change
   the account password and rotate/remove bootstrap access.
 - Review CloudWatch errors and ALB target health for at least one normal user

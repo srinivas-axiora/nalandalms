@@ -3,7 +3,8 @@
 This stack is intentionally a **single-writer staging environment**, not a
 production approval. It provides CloudFront HTTPS, an ALB, one ARM64 ECS Fargate
 task, private RDS PostgreSQL, private TLS-enabled ElastiCache Redis, private S3,
-Secrets Manager and CloudWatch Logs.
+Secrets Manager, ALB access logs, a regional AWS WAF and CloudWatch/SNS alarms
+encrypted with a rotating customer-managed KMS key.
 
 The ECS deployment configuration never overlaps old and new tasks. This avoids
 two application processes writing the current whole-state JSONB snapshot at the
@@ -18,7 +19,7 @@ is complete and multi-instance concurrency tests pass.
 - Three existing Secrets Manager secrets containing the Razorpay key ID, key
   secret and webhook secret. Use test-mode Razorpay credentials in staging.
 - Permission to create VPC, ECS, ECR, RDS, ElastiCache, CloudFront, S3, IAM,
-  Secrets Manager and CloudWatch resources.
+  KMS, Secrets Manager, WAF, SNS and CloudWatch resources.
 
 ## Deploy
 
@@ -29,6 +30,8 @@ $env:AWS_PROFILE = "YOUR_PROFILE"
 .\infra\aws\deploy-staging.ps1 `
   -Region ap-south-1 `
   -PrepareRelationalDatabase `
+  -RunRelationalVerifiers `
+  -AlertEmail sre@example.com `
   -RazorpayKeyIdSecretArn arn:aws:secretsmanager:...:secret:razorpay-key-id `
   -RazorpayKeySecretArn arn:aws:secretsmanager:...:secret:razorpay-key-secret `
   -RazorpayWebhookSecretArn arn:aws:secretsmanager:...:secret:razorpay-webhook
@@ -36,9 +39,21 @@ $env:AWS_PROFILE = "YOUR_PROFILE"
 
 CloudFront provisioning commonly takes several minutes. The script prints the
 application URL and operational resource identifiers after the stack completes.
-`-PrepareRelationalDatabase` runs the guarded baseline/migrations and then an
-idempotent snapshot backfill inside the VPC. It does not enable any PostgreSQL
-feature flag. Review and reconcile the result before a separate cutover.
+Before deployment the script validates the template with CloudFormation, builds
+and pushes an immutable image, and blocks on any critical/high ECR scan finding.
+`-PrepareRelationalDatabase` runs the guarded baseline/migrations and an
+idempotent snapshot backfill inside the VPC. `-RunRelationalVerifiers` then runs
+all current live PostgreSQL verification programs as isolated ECS tasks. Neither
+switch enables a PostgreSQL feature flag; review and reconcile their evidence
+before a separate cutover. The script finishes with a CloudFront readiness
+smoke gate.
+
+The optional alert email receives an AWS subscription confirmation. Until that
+confirmation is accepted, alarms publish to the encrypted SNS topic but email
+delivery is inactive. ALB request logs are retained for 90 days. WAF blocks
+known-bad inputs and forwarded-client floods; the AWS common rule set starts in
+count mode so staging evidence can identify legitimate large HTML, JSON and
+upload payloads before selected rules are promoted to block.
 
 ## First-login and validation
 
@@ -63,7 +78,9 @@ production PII, payment records or real candidate evidence into this stack.
   whole-state JSONB persistence and the remaining in-memory state still require
   one writer.
 - No zero-downtime deployment or multi-AZ application service is safe yet.
-- The stack does not yet attach AWS WAF or a custom domain/certificate.
+- A custom domain and ACM certificate are not yet configured. The regional WAF
+  protects the ALB origin; a separately managed `CLOUDFRONT`-scope web ACL in
+  `us-east-1` is still recommended when the custom distribution is promoted.
 - Malware scanning/quarantine must be added before untrusted file uploads are
   enabled for production.
 - Restore, failover, load, privacy-erasure and payment reconciliation drills

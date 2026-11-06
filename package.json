@@ -13,6 +13,7 @@
     "test:security": "vitest run --config vitest.security.config.ts",
     "typecheck": "tsc -p frontend/tsconfig.json --noEmit",
     "routes:inventory": "node scripts/authorization-matrix.mjs --json",
+    "infra:validate": "node scripts/validate-cloudformation.mjs",
     "db:bootstrap": "node backend/src/db/bootstrap.js",
     "db:migrate": "node backend/src/db/migrate.js",
     "db:backfill": "node backend/src/db/backfill.js",
@@ -68,6 +69,7 @@
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3",
     "vite": "^8.0.16",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "yaml": "^2.9.1"
   }
 }
