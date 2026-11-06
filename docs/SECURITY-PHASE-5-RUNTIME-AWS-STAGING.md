@@ -89,5 +89,8 @@ mandatory staging gates, not assumed successes.
   gates.
   Phase 37 applies a second relational authorization check while resolving
   timeline labels so mid-request ownership revocation fails closed.
+  Phase 38 establishes one runtime invariant: enabling relational course
+  authority also enables relational attempt authority for every exam,
+  proctoring and companion mutation path and for startup/readiness.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

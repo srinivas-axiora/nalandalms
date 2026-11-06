@@ -11,9 +11,10 @@ import { ENROLLMENT_STATUS } from "../enrollments/progress.service.js";
 import { attemptsRepository, AttemptRepositoryError } from "../../repositories/attempts.repository.pg.js";
 import { proctorCockpitRepository } from "../../repositories/proctor-cockpit.repository.pg.js";
 import { upsertAttemptProjection } from "../../attempt-projection.js";
+import { relationalAttemptsEnabled } from "../../runtime-modes.js";
 
-const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
+const USE_RELATIONAL_ATTEMPTS = relationalAttemptsEnabled();
 const attemptErrorStatus = (error) => {
   if (!(error instanceof AttemptRepositoryError)) return error.status || 400;
   if (error.code === "ATTEMPT_NOT_FOUND") return 404;
@@ -27,7 +28,7 @@ const commitAttemptMutation = async (attempt, {
   metadata = {},
   enrollment = null,
 }) => {
-  if (!USE_PG_ATTEMPTS) {
+  if (!USE_RELATIONAL_ATTEMPTS) {
     audit(actorId, action, "ASSESSMENT_ATTEMPT", attempt.id, metadata);
     return attempt;
   }
@@ -49,7 +50,7 @@ export function registerCockpit(app, options = {}) {
   app.get("/api/proctoring/cockpit/active", authenticate, requireRole("Admin", "Manager", "Instructor"), async (req, res) => {
     const activeContexts = usePgCourses
       ? await cockpitAuthority.listActiveForActor(req.user)
-      : (USE_PG_ATTEMPTS ? await attemptsRepository.list({ statuses: ["InProgress", "Paused"] }) : attempts)
+      : (USE_RELATIONAL_ATTEMPTS ? await attemptsRepository.list({ statuses: ["InProgress", "Paused"] }) : attempts)
         .filter((attempt) => (
           (attempt.status === "InProgress" || attempt.status === "Paused")
           && canControlProctoring(req.user, attempt)
@@ -262,7 +263,7 @@ export function registerCockpit(app, options = {}) {
     attempt.score = 0;
     attempt.feedback = `Disqualified by proctor: ${parsed.data.reason}`;
 
-    if (!USE_PG_ATTEMPTS) {
+    if (!USE_RELATIONAL_ATTEMPTS) {
       const assignment = assignments.find((a) => a.courseId === attempt.courseId && a.userId === attempt.userId);
       if (assignment) assignment.status = ENROLLMENT_STATUS.FAILED;
     }
@@ -275,7 +276,7 @@ export function registerCockpit(app, options = {}) {
           reason: parsed.data.reason,
           evidenceSummary: parsed.data.evidenceSummary || "",
         },
-        enrollment: USE_PG_ATTEMPTS ? { status: ENROLLMENT_STATUS.FAILED } : null,
+        enrollment: USE_RELATIONAL_ATTEMPTS ? { status: ENROLLMENT_STATUS.FAILED } : null,
       });
       res.json({
         ok: true,

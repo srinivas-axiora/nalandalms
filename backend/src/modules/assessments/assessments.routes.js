@@ -14,11 +14,11 @@ import { upsertAttemptProjection } from "../../attempt-projection.js";
 import { registerAssessmentAuthoringPgRoutes, sendAssessmentAuthorityError } from "./assessments.pg.routes.js";
 import { assessmentAuthorityRepository, AssessmentAuthorityError } from "../../repositories/assessment-authority.repository.pg.js";
 import { settingsRepository } from "../../repositories/settings.repository.pg.js";
+import { relationalAttemptsEnabled } from "../../runtime-modes.js";
 
-const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 const USE_PG_SETTINGS = process.env.USE_PG_SETTINGS === "1";
-const USE_RELATIONAL_ATTEMPTS = USE_PG_ATTEMPTS || USE_PG_COURSES;
+const USE_RELATIONAL_ATTEMPTS = relationalAttemptsEnabled();
 const findAssessmentRuntime = (id) => USE_PG_COURSES
   ? assessmentAuthorityRepository.findRuntimeById(id)
   : Promise.resolve(assessments.find((item) => item.id === id));

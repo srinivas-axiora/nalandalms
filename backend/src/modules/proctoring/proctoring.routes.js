@@ -12,8 +12,9 @@ import { authorizeCompanionToken, createPairingToken, verifyAndPairCompanion, up
 import { attemptsRepository, AttemptRepositoryError } from "../../repositories/attempts.repository.pg.js";
 import { upsertAttemptProjection } from "../../attempt-projection.js";
 import { settingsRepository } from "../../repositories/settings.repository.pg.js";
+import { relationalAttemptsEnabled } from "../../runtime-modes.js";
 
-const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
+const USE_RELATIONAL_ATTEMPTS = relationalAttemptsEnabled();
 const USE_PG_SETTINGS = process.env.USE_PG_SETTINGS === "1";
 const attemptErrorStatus = (error) => {
   if (!(error instanceof AttemptRepositoryError)) return error.status || 400;
@@ -107,7 +108,6 @@ export function registerProctoring(app) {
 
     // Auto-submit on tab switch if strict policy is enabled
     if (proctoringSettings.tabSwitchAutoSubmit && parsed.data.eventType === "TAB_SWITCH" && !attempt.submittedAt) {
-      const assessment = assessments.find((item) => item.id === attempt.assessmentId);
       const submittedAt = now();
       const timeSpentSeconds = Math.max(
         1,
@@ -119,10 +119,13 @@ export function registerProctoring(app) {
         autoSubmittedReason: "TAB_SWITCH",
         timeSpentSeconds,
       });
-      if (!USE_PG_ATTEMPTS) addAssessmentTime({ attempt, assessment, seconds: timeSpentSeconds });
+      if (!USE_RELATIONAL_ATTEMPTS) {
+        const assessment = assessments.find((item) => item.id === attempt.assessmentId);
+        addAssessmentTime({ attempt, assessment, seconds: timeSpentSeconds });
+      }
     }
 
-    if (USE_PG_ATTEMPTS) {
+    if (USE_RELATIONAL_ATTEMPTS) {
       try {
         const committed = await attemptsRepository.recordProctorEvent({
           attempt,
@@ -215,7 +218,7 @@ export function registerProctoring(app) {
         };
 
         let totalChunks;
-        if (USE_PG_ATTEMPTS) {
+        if (USE_RELATIONAL_ATTEMPTS) {
           const saved = await attemptsRepository.appendVideoChunk({
             attemptId: attempt.id,
             chunk: chunkMeta,

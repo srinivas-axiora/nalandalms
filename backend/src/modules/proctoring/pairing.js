@@ -11,9 +11,10 @@ import {
 } from "../../cache/redis.js";
 import { attemptsRepository } from "../../repositories/attempts.repository.pg.js";
 import { upsertAttemptProjection } from "../../attempt-projection.js";
+import { relationalAttemptsEnabled } from "../../runtime-modes.js";
 
 const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
-const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
+const USE_RELATIONAL_ATTEMPTS = relationalAttemptsEnabled();
 const tokenDigest = (token) => crypto.createHash("sha256").update(token).digest("hex");
 
 const getCandidate = (id) => USE_PG_IDENTITY
@@ -69,7 +70,7 @@ export async function verifyAndPairCompanion(pairingToken, deviceMetadata = {}) 
     throw err;
   }
 
-  const attempt = USE_PG_ATTEMPTS
+  const attempt = USE_RELATIONAL_ATTEMPTS
     ? await attemptsRepository.findById(data.attemptId)
     : attempts.find((a) => a.id === data.attemptId);
   if (!attempt) {
@@ -108,7 +109,7 @@ export async function verifyAndPairCompanion(pairingToken, deviceMetadata = {}) 
     batteryLevel: deviceMetadata.batteryLevel ?? null,
   };
 
-  if (USE_PG_ATTEMPTS) {
+  if (USE_RELATIONAL_ATTEMPTS) {
     try {
       const saved = await attemptsRepository.save(attempt, {
         expectedVersion: attempt.version,
@@ -143,11 +144,11 @@ export async function authorizeCompanionToken(token, attemptId) {
     await deleteCompanionPairing(digest);
     return null;
   }
-  const candidateAttempt = USE_PG_ATTEMPTS
+  const candidateAttempt = USE_RELATIONAL_ATTEMPTS
     ? await attemptsRepository.findById(attemptId)
     : attempts.find((item) => item.id === attemptId);
   const attempt = candidateAttempt?.userId === data.candidateUserId ? candidateAttempt : null;
-  if (attempt && USE_PG_ATTEMPTS) upsertAttemptProjection(attempt);
+  if (attempt && USE_RELATIONAL_ATTEMPTS) upsertAttemptProjection(attempt);
   return attempt ? { attempt, candidate, tokenData: data } : null;
 }
 
@@ -156,7 +157,7 @@ export async function updateCompanionHeartbeat(token, attemptId, metadata = {}) 
   const attempt = authorized?.attempt;
   if (!attempt || !attempt.companion) return false;
 
-  if (USE_PG_ATTEMPTS) {
+  if (USE_RELATIONAL_ATTEMPTS) {
     const saved = await attemptsRepository.saveCompanionHeartbeat({
       attemptId: attempt.id,
       at: now(),

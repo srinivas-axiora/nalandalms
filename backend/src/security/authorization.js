@@ -3,10 +3,10 @@ import { isAdminRole } from "../roles.js";
 import { attemptsRepository } from "../repositories/attempts.repository.pg.js";
 import { upsertAttemptProjection } from "../attempt-projection.js";
 import { assessmentAuthorityRepository } from "../repositories/assessment-authority.repository.pg.js";
+import { relationalAttemptsEnabled } from "../runtime-modes.js";
 
-const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
-const USE_RELATIONAL_ATTEMPTS = USE_PG_ATTEMPTS || USE_PG_COURSES;
+const USE_RELATIONAL_ATTEMPTS = relationalAttemptsEnabled();
 
 const assignedProctorId = (attempt) => (
   attempt?.assignedProctorId || attempt?.proctorId || attempt?.proctorUserId || null

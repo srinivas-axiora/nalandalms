@@ -190,6 +190,8 @@ The runtime-data ignore is anchored to `/uploads/`, so source modules under an
 Attempt permission middleware uses only relational attempt principals and
 relational assessment/course ownership when `USE_PG_COURSES=1`; stale snapshot
 ownership cannot authorize view, control or grading operations (Phase 35).
+Course cutover also implies relational attempt persistence across assessment,
+cockpit, proctor-event, media-chunk and companion-pairing paths (Phase 38).
 
 ## Highest-priority route mismatches
 

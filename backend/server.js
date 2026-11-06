@@ -75,21 +75,22 @@ import { settingsRepository } from "./src/repositories/settings.repository.pg.js
 import { securityEvidenceRepository } from "./src/repositories/security-evidence.repository.pg.js";
 import { archiveAuthorityRepository } from "./src/repositories/archive-authority.repository.pg.js";
 import { evidenceWriteContextMiddleware } from "./src/security/evidence-write-context.js";
+import { relationalAttemptsEnabled } from "./src/runtime-modes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG = process.env.USE_PG === "1";
 const USE_PG_SKILLS = USE_PG || process.env.USE_PG_SKILLS === "1";
 const USE_PG_PAYMENTS = process.env.USE_PG_PAYMENTS === "1";
 const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
-const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
 const USE_PG_CERTIFICATES = process.env.USE_PG_CERTIFICATES === "1";
 const USE_PG_CANDIDATE_ASSESSMENTS = process.env.USE_PG_CANDIDATE_ASSESSMENTS === "1";
 const USE_PG_PRIVACY = process.env.USE_PG_PRIVACY === "1";
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 const USE_PG_SETTINGS = process.env.USE_PG_SETTINGS === "1";
 const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
+const USE_RELATIONAL_ATTEMPTS = relationalAttemptsEnabled();
 const AUDIT_TRANSACTIONAL_DEPENDENCIES = USE_PG_PAYMENTS && USE_PG_SKILLS
-  && USE_PG_IDENTITY && USE_PG_ATTEMPTS && USE_PG_CERTIFICATES
+  && USE_PG_IDENTITY && USE_RELATIONAL_ATTEMPTS && USE_PG_CERTIFICATES
   && USE_PG_CANDIDATE_ASSESSMENTS && USE_PG_COURSES && USE_PG_PRIVACY
   && USE_PG_SETTINGS;
 const ENABLE_PRIVACY_ERASURE_WORKER = process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1";
@@ -206,7 +207,7 @@ app.get("/api/ready", async (_req, res) => {
           mode: "normalized",
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
-    USE_PG_ATTEMPTS
+    USE_RELATIONAL_ATTEMPTS
       ? readinessQuery(
           `SELECT
              to_regclass('public.assessment_attempts') IS NOT NULL AS attempts,
@@ -330,7 +331,7 @@ app.get("/api/ready", async (_req, res) => {
             && PRIVACY_COVERAGE_ACK
             && USE_PG_PAYMENTS
             && USE_PG_IDENTITY
-            && USE_PG_ATTEMPTS
+            && USE_RELATIONAL_ATTEMPTS
             && USE_PG_CERTIFICATES
             && USE_PG_CANDIDATE_ASSESSMENTS,
           mode: "normalized",
@@ -492,8 +493,8 @@ app.get("/api/app-data", authenticate, async (req, res) => {
     : assignments;
   const scopedAssignments = authoritativeAssignments.filter((assignment) =>
     visibleUserIds.has(assignment.userId) && (admin || visibleCourseIds.has(assignment.courseId)));
-  const authoritativeAttempts = (USE_PG_ATTEMPTS || USE_PG_COURSES) ? await attemptsRepository.list() : attempts;
-  const authoritativeProctoring = (USE_PG_ATTEMPTS || USE_PG_COURSES)
+  const authoritativeAttempts = USE_RELATIONAL_ATTEMPTS ? await attemptsRepository.list() : attempts;
+  const authoritativeProctoring = USE_RELATIONAL_ATTEMPTS
     ? await attemptsRepository.listProctorEvents(admin ? {} : { userIds: [...visibleUserIds] })
     : proctoringLogs;
   const scopedAttempts = authoritativeAttempts.filter((attempt) => admin || visibleUserIds.has(attempt.userId));
@@ -601,7 +602,7 @@ const start = async () => {
     if (USE_PG_IDENTITY) {
       replaceIdentityProjection(await identityRepository.listUsers({ status: "All" }));
     }
-    if (USE_PG_ATTEMPTS) {
+    if (USE_RELATIONAL_ATTEMPTS) {
       replaceAttemptProjection(await attemptsRepository.list());
     }
     await ensureRedisReady();
