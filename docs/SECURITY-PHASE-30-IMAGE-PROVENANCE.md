@@ -47,6 +47,9 @@ documented field, and both tests and the deployed verifier pin that spelling.
   digest, task definition, completed ECS deployment and zero critical/high scan
   path under PowerShell strict mode.
 - A negative scan fixture with one high finding was rejected.
+- After the checkpoint commit, the real deployment preflight reached the AWS
+  authentication boundary from a clean worktree and rejected a temporary
+  untracked-file probe before any AWS or Docker action.
 - The full functional suite passed 58 files and 292 tests; the isolated
   adversarial suite passed all 32 tests.
 - Frontend type checking and the production build passed. The known
