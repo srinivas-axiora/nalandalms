@@ -67,7 +67,8 @@ mandatory staging gates, not assumed successes.
   routing; staging exercise and managed-rule tuning remain pending. Phase 26
   adds malware quarantine and Phase 27 adds optional custom-domain/ACM/Route 53
   wiring. Phase 28 adds optional regional ALB origin TLS and removes port 80
-  whenever it is enabled; all three controls still require live staging evidence
+  whenever it is enabled. Phase 29 adds a post-deploy AWS attestation and
+  redacted evidence artifact; all controls still require live staging evidence
   before production.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

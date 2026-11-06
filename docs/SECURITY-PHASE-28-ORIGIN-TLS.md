@@ -54,6 +54,9 @@ listener rather than leaving a parallel cleartext route.
   configured on this workstation (`NoCredentials`).
 - Regional certificate status, DNS resolution and CloudFront-to-ALB TLS
   handshake proof: pending the intended account, region and domains.
+- Phase 29 now automates the deployed distribution, listener, certificate,
+  security-group, WAF and readiness checks and records a redacted JSON
+  attestation; it still requires authenticated AWS execution.
 
 ## Required deployment evidence
 

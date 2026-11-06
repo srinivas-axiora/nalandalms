@@ -33,9 +33,10 @@ npm run infra:validate
 npm audit --audit-level=high
 ```
 
-Also parse `infra/aws/deploy-staging.ps1` with the PowerShell language parser
-before invoking it. The repository tests pin its service-validation, image-scan,
-relational-verifier and readiness gates.
+Also parse `infra/aws/deploy-staging.ps1` and
+`infra/aws/verify-staging.ps1` with the PowerShell language parser before
+invoking them. The repository tests pin service-validation, image-scan,
+relational-verifier, readiness and deployed-attestation gates.
 
 Expected gate: the current committed functional and adversarial suites pass,
 type/build succeed, and no high/critical dependency advisory is present. Record
@@ -67,6 +68,7 @@ For a new staging database, prepare (but do not enable) the normalized tables:
   -CloudFrontCertificateArn $cloudFrontCertificateArn `
   -OriginDomainName $originDomainName `
   -OriginCertificateArn $originCertificateArn `
+  -EvidencePath artifacts/aws/nalanda-staging-attestation.json `
   -RazorpayKeyIdSecretArn $keyIdArn `
   -RazorpayKeySecretArn $keySecretArn `
   -RazorpayWebhookSecretArn $webhookSecretArn
@@ -132,6 +134,10 @@ Do not use real learner/candidate PII or real payments in this staging stack.
   HTTPS/443 to the CloudFront managed prefix list, and the regional certificate
   matches the origin name. Confirm CloudFront returns a healthy response over
   `https-only` origin transport and no HTTP/80 origin listener remains.
+- Preserve the JSON produced by `verify-staging.ps1` in the controlled release
+  record. Review its account, region, stack, distribution, listener,
+  prefix-list, WAF and readiness fields; evidence from another account or stack
+  is not transferable.
 - Retrieve the generated bootstrap administrator secret, log in once, change
   the account password and rotate/remove bootstrap access.
 - Review CloudWatch errors and ALB target health for at least one normal user

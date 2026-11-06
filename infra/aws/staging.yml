@@ -1271,6 +1271,14 @@ Outputs:
       - HasOriginTls
       - !Ref OriginDomainName
       - !GetAtt LoadBalancer.DNSName
+  LoadBalancerArn:
+    Value: !Ref LoadBalancer
+  LoadBalancerSecurityGroupId:
+    Value: !Ref LoadBalancerSecurityGroup
+  ApplicationListenerArn:
+    Value: !Ref HttpListener
+  CloudFrontOriginPrefixListId:
+    Value: !Ref CloudFrontOriginPrefixList
   ClusterName:
     Value: !Ref Cluster
   ServiceName:

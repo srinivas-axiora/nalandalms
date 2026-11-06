@@ -9,5 +9,6 @@ tmp-dev-logs/
 database/db.json
 database/db.json.tmp
 /uploads/
+/artifacts/aws/
 
 build_*.cjs

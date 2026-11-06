@@ -11,6 +11,7 @@ param(
   [string]$CloudFrontCertificateArn = "",
   [string]$OriginDomainName = "",
   [string]$OriginCertificateArn = "",
+  [string]$EvidencePath = "",
   [Parameter(Mandatory = $true)][string]$RazorpayKeyIdSecretArn,
   [Parameter(Mandatory = $true)][string]$RazorpayKeySecretArn,
   [Parameter(Mandatory = $true)][string]$RazorpayWebhookSecretArn
@@ -18,7 +19,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 if (-not $ImageTag) { $ImageTag = (git rev-parse --short=12 HEAD).Trim() }
-$customDomainValues = @($CustomDomainName, $HostedZoneId, $CloudFrontCertificateArn) | Where-Object { $_ }
+if (-not $EvidencePath) { $EvidencePath = "artifacts/aws/$StackName-$ImageTag-attestation.json" }
+$customDomainValues = @(@($CustomDomainName, $HostedZoneId, $CloudFrontCertificateArn) | Where-Object { $_ })
 if ($customDomainValues.Count -ne 0 -and $customDomainValues.Count -ne 3) {
   throw "CustomDomainName, HostedZoneId and CloudFrontCertificateArn must be supplied together."
 }
@@ -31,7 +33,7 @@ if ($HostedZoneId -and $HostedZoneId -notmatch '^Z[A-Z0-9]+$') {
 if ($CloudFrontCertificateArn -and $CloudFrontCertificateArn -notmatch '^arn:[^:]+:acm:us-east-1:') {
   throw "The CloudFront ACM certificate must be provisioned in us-east-1."
 }
-$originTlsValues = @($OriginDomainName, $OriginCertificateArn) | Where-Object { $_ }
+$originTlsValues = @(@($OriginDomainName, $OriginCertificateArn) | Where-Object { $_ })
 if ($originTlsValues.Count -ne 0 -and $originTlsValues.Count -ne 2) {
   throw "OriginDomainName and OriginCertificateArn must be supplied together."
 }
@@ -216,6 +218,17 @@ for ($attempt = 1; $attempt -le 12; $attempt++) {
 }
 if (-not $ready.ok) { throw "Staging readiness smoke gate failed." }
 Write-Host "Staging readiness smoke gate passed: $applicationUrl"
+
+Write-Host "Running deployed AWS control attestation..."
+& (Join-Path $PSScriptRoot "verify-staging.ps1") `
+  -Region $Region `
+  -StackName $StackName `
+  -ExpectedCustomDomainName $CustomDomainName `
+  -ExpectedCloudFrontCertificateArn $CloudFrontCertificateArn `
+  -ExpectedOriginDomainName $OriginDomainName `
+  -ExpectedOriginCertificateArn $OriginCertificateArn `
+  -RequireEndToEndTls:([bool]$OriginDomainName) `
+  -EvidencePath $EvidencePath
 
 aws cloudformation describe-stacks `
   --stack-name $StackName `

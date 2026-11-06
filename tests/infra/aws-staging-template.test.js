@@ -9,6 +9,10 @@ const deploymentScript = fs.readFileSync(
   path.join(repositoryRoot, "infra", "aws", "deploy-staging.ps1"),
   "utf8",
 );
+const verificationScript = fs.readFileSync(
+  path.join(repositoryRoot, "infra", "aws", "verify-staging.ps1"),
+  "utf8",
+);
 
 describe("AWS staging release controls", () => {
   it("retains encrypted ALB access logs behind a scoped delivery policy", () => {
@@ -108,6 +112,7 @@ describe("AWS staging release controls", () => {
     expect(deploymentScript).toContain("$criticalFindings -gt 0 -or $highFindings -gt 0");
     expect(deploymentScript).toContain("RunRelationalVerifiers");
     expect(deploymentScript).toContain("Staging readiness smoke gate passed");
+    expect(deploymentScript).toContain("verify-staging.ps1");
 
     const expectedVerifiers = [
       "verify-identity.mjs",
@@ -126,5 +131,20 @@ describe("AWS staging release controls", () => {
       "verify-operational-authority.mjs",
     ];
     for (const verifier of expectedVerifiers) expect(deploymentScript).toContain(verifier);
+  });
+
+  it("attests deployed edge, origin, WAF and readiness state before preserving evidence", () => {
+    expect(template).toContain("LoadBalancerSecurityGroupId:");
+    expect(template).toContain("ApplicationListenerArn:");
+    expect(template).toContain("CloudFrontOriginPrefixListId:");
+    expect(verificationScript).toContain('\"cloudfront\", \"get-distribution\"');
+    expect(verificationScript).toContain('\"elbv2\", \"describe-listeners\"');
+    expect(verificationScript).toContain('\"elbv2\", \"describe-listener-certificates\"');
+    expect(verificationScript).toContain('\"ec2\", \"describe-security-groups\"');
+    expect(verificationScript).toContain('\"wafv2\", \"get-web-acl-for-resource\"');
+    expect(verificationScript).toContain("RequireEndToEndTls requires both expected viewer and origin TLS tuples");
+    expect(verificationScript).toContain("The ALB must expose exactly one listener");
+    expect(verificationScript).toContain("The ALB security group must have exactly one ingress rule");
+    expect(verificationScript).toContain("Set-Content -LiteralPath $resolvedEvidencePath");
   });
 });

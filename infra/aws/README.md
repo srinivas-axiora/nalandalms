@@ -54,7 +54,7 @@ idempotent snapshot backfill inside the VPC. `-RunRelationalVerifiers` then runs
 all current live PostgreSQL verification programs as isolated ECS tasks. Neither
 switch enables a PostgreSQL feature flag; review and reconcile their evidence
 before a separate cutover. The script finishes with a CloudFront readiness
-smoke gate.
+smoke gate and deployed-control attestation.
 
 The three custom-domain parameters are optional but atomic: provide all three
 or none. The certificate must already be validated, cover the requested DNS
@@ -84,6 +84,28 @@ policy permit reads only for `NO_THREATS_FOUND`. Threats, skipped scans,
 permission failures, internal failures and objects without a verdict remain
 quarantined. EventBridge sends non-clean results and protection-health failures
 to the encrypted alert topic.
+
+After readiness passes, deployment invokes `verify-staging.ps1`. The verifier
+fails closed unless CloudFront is deployed, expected viewer/origin TLS settings
+and certificates match, the ALB exposes one approved listener, its security
+group is scoped only to the CloudFront managed prefix list, the regional WAF is
+attached and `/api/ready` succeeds. It writes a redacted JSON attestation under
+`artifacts/aws/` by default; Git ignores that directory, so copy the result to
+the controlled release record.
+
+The verification can also be rerun without redeploying:
+
+```powershell
+./infra/aws/verify-staging.ps1 `
+  -Region ap-south-1 `
+  -StackName nalanda-staging `
+  -ExpectedCustomDomainName staging.example.com `
+  -ExpectedCloudFrontCertificateArn $cloudFrontCertificateArn `
+  -ExpectedOriginDomainName origin.staging.example.com `
+  -ExpectedOriginCertificateArn $originCertificateArn `
+  -RequireEndToEndTls `
+  -EvidencePath artifacts/aws/nalanda-staging-attestation.json
+```
 
 ## First-login and validation
 

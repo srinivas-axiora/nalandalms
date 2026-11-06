@@ -74,8 +74,12 @@ if (
   || !outputs?.RegionalWebAclArn
   || !outputs?.AccessLogBucketName
   || !outputs?.MalwareProtectionPlanArn
+  || !outputs?.LoadBalancerArn
+  || !outputs?.ApplicationListenerArn
+  || !outputs?.LoadBalancerSecurityGroupId
+  || !outputs?.CloudFrontOriginPrefixListId
 ) {
-  throw new Error("Required application, WAF, access-log or malware-protection outputs are missing.");
+  throw new Error("Required application, edge, WAF, access-log or malware-protection outputs are missing.");
 }
 
 console.log(
