@@ -38,6 +38,8 @@ $env:AWS_PROFILE = "YOUR_PROFILE"
   -CustomDomainName staging.example.com `
   -HostedZoneId Z0123456789EXAMPLE `
   -CloudFrontCertificateArn arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000 `
+  -OriginDomainName origin.staging.example.com `
+  -OriginCertificateArn arn:aws:acm:ap-south-1:123456789012:certificate/11111111-1111-1111-1111-111111111111 `
   -RazorpayKeyIdSecretArn arn:aws:secretsmanager:...:secret:razorpay-key-id `
   -RazorpayKeySecretArn arn:aws:secretsmanager:...:secret:razorpay-key-secret `
   -RazorpayWebhookSecretArn arn:aws:secretsmanager:...:secret:razorpay-webhook
@@ -60,6 +62,14 @@ name and reside in ACM `us-east-1`, as required by CloudFront. When supplied,
 the stack configures SNI-only `TLSv1.2_2021`, IPv4/IPv6 Route 53 aliases and the
 application origin allowlist. Without them, staging uses the generated
 `cloudfront.net` hostname and certificate.
+
+The two origin-TLS parameters are also optional but atomic and require the
+complete custom-domain tuple. The origin hostname must be distinct from the
+application hostname, and its public ACM certificate must be validated in the
+deployment region. When supplied, Route 53 aliases the origin name to the ALB,
+the listener moves from HTTP/80 to HTTPS/443 with a TLS 1.2/1.3 policy, the
+CloudFront origin becomes `https-only`, and the security group exposes only 443
+to the CloudFront managed origin-facing prefix list.
 
 The optional alert email receives an AWS subscription confirmation. Until that
 confirmation is accepted, alarms publish to the encrypted SNS topic but email
@@ -100,6 +110,9 @@ production PII, payment records or real candidate evidence into this stack.
 - No zero-downtime deployment or multi-AZ application service is safe yet.
 - Custom-domain/ACM wiring is declared but needs the intended domain, public
   hosted zone and a validated `us-east-1` certificate plus live DNS/TLS proof.
+  Origin TLS is declared separately and needs a distinct origin hostname, a
+  validated regional certificate and a successful CloudFront-to-ALB handshake
+  probe; do not promote the HTTP fallback to production.
   The regional WAF protects the ALB origin; a separately managed
   `CLOUDFRONT`-scope web ACL in `us-east-1` is still recommended when the custom
   distribution is promoted.

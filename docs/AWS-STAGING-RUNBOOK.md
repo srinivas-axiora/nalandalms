@@ -15,6 +15,9 @@ Target: production-shaped staging only
 - For a custom hostname, prepare a public Route 53 hosted zone and an already
   validated ACM certificate in `us-east-1` whose subject/SAN covers the exact
   hostname.
+- For encrypted origin traffic, prepare a distinct public origin hostname in
+  that hosted zone and a second validated ACM certificate in the deployment
+  region whose subject/SAN covers the origin hostname.
 - Start Docker Desktop and confirm Linux ARM64 builds work.
 - Confirm the repository is clean and the intended security commits are on the
   deployment branch.
@@ -62,6 +65,8 @@ For a new staging database, prepare (but do not enable) the normalized tables:
   -CustomDomainName $customDomainName `
   -HostedZoneId $hostedZoneId `
   -CloudFrontCertificateArn $cloudFrontCertificateArn `
+  -OriginDomainName $originDomainName `
+  -OriginCertificateArn $originCertificateArn `
   -RazorpayKeyIdSecretArn $keyIdArn `
   -RazorpayKeySecretArn $keySecretArn `
   -RazorpayWebhookSecretArn $webhookSecretArn
@@ -123,6 +128,10 @@ Do not use real learner/candidate PII or real payments in this staging stack.
   chain, `TLSv1.2_2021`, HTTP-to-HTTPS redirect, the application origin
   allowlist and readiness through the custom hostname. Preserve DNS/TLS probe
   evidence and the CloudFront deployed status.
+- Verify the origin A alias resolves to the ALB, the ALB listener exposes only
+  HTTPS/443 to the CloudFront managed prefix list, and the regional certificate
+  matches the origin name. Confirm CloudFront returns a healthy response over
+  `https-only` origin transport and no HTTP/80 origin listener remains.
 - Retrieve the generated bootstrap administrator secret, log in once, change
   the account password and rotate/remove bootstrap access.
 - Review CloudWatch errors and ALB target health for at least one normal user

@@ -57,6 +57,7 @@ const requiredResources = [
   "AlertTopic",
   "CustomDomainARecord",
   "CustomDomainAaaaRecord",
+  "OriginDomainARecord",
   "Distribution",
   "LoadBalancer",
   "MalwareProtectionPlan",

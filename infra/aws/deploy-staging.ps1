@@ -9,6 +9,8 @@ param(
   [string]$CustomDomainName = "",
   [string]$HostedZoneId = "",
   [string]$CloudFrontCertificateArn = "",
+  [string]$OriginDomainName = "",
+  [string]$OriginCertificateArn = "",
   [Parameter(Mandatory = $true)][string]$RazorpayKeyIdSecretArn,
   [Parameter(Mandatory = $true)][string]$RazorpayKeySecretArn,
   [Parameter(Mandatory = $true)][string]$RazorpayWebhookSecretArn
@@ -28,6 +30,22 @@ if ($HostedZoneId -and $HostedZoneId -notmatch '^Z[A-Z0-9]+$') {
 }
 if ($CloudFrontCertificateArn -and $CloudFrontCertificateArn -notmatch '^arn:[^:]+:acm:us-east-1:') {
   throw "The CloudFront ACM certificate must be provisioned in us-east-1."
+}
+$originTlsValues = @($OriginDomainName, $OriginCertificateArn) | Where-Object { $_ }
+if ($originTlsValues.Count -ne 0 -and $originTlsValues.Count -ne 2) {
+  throw "OriginDomainName and OriginCertificateArn must be supplied together."
+}
+if ($OriginDomainName -and $customDomainValues.Count -ne 3) {
+  throw "Origin TLS requires the complete custom-domain configuration and its Route 53 hosted zone."
+}
+if ($OriginDomainName -and $OriginDomainName -notmatch '^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$') {
+  throw "OriginDomainName must be a valid fully qualified DNS name."
+}
+if ($OriginDomainName -and $OriginDomainName -eq $CustomDomainName) {
+  throw "OriginDomainName must differ from CustomDomainName."
+}
+if ($OriginCertificateArn -and $OriginCertificateArn -notmatch "^arn:[^:]+:acm:$([regex]::Escape($Region)):") {
+  throw "The origin ACM certificate must be provisioned in the deployment region ($Region)."
 }
 
 $identity = aws sts get-caller-identity --region $Region | ConvertFrom-Json
@@ -94,6 +112,10 @@ if ($CustomDomainName) {
   $parameterOverrides += "CustomDomainName=$CustomDomainName"
   $parameterOverrides += "HostedZoneId=$HostedZoneId"
   $parameterOverrides += "CloudFrontCertificateArn=$CloudFrontCertificateArn"
+}
+if ($OriginDomainName) {
+  $parameterOverrides += "OriginDomainName=$OriginDomainName"
+  $parameterOverrides += "OriginCertificateArn=$OriginCertificateArn"
 }
 
 aws cloudformation deploy `

@@ -70,6 +70,20 @@ describe("AWS staging release controls", () => {
     expect(deploymentScript).toContain("acm:us-east-1:");
   });
 
+  it("encrypts the CloudFront-to-ALB hop only from a complete regional origin tuple", () => {
+    expect(template).toContain("HasOriginTls: !And");
+    expect(template).toContain("CompleteOriginTlsConfiguration:");
+    expect(template).toContain("OriginProtocolPolicy: !If [HasOriginTls, https-only, http-only]");
+    expect(template).toContain("OriginSSLProtocols: !If");
+    expect(template).toContain("- [TLSv1.2]");
+    expect(template).toContain("SslPolicy: !If [HasOriginTls, ELBSecurityPolicy-TLS13-1-2-2021-06");
+    expect(template).toContain("CertificateArn: !Ref OriginCertificateArn");
+    expect(template).toContain("HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID");
+    expect(template).toMatch(/HasOriginTls[\s\S]*?FromPort: 443[\s\S]*?SourcePrefixListId/);
+    expect(deploymentScript).toContain("OriginDomainName must differ from CustomDomainName");
+    expect(deploymentScript).toContain("origin ACM certificate must be provisioned in the deployment region");
+  });
+
   it("keeps relational authority flags disabled until live verification", () => {
     const expectedFlags = [
       "USE_PG_PAYMENTS",

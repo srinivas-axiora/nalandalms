@@ -46,6 +46,16 @@ Parameters:
     Default: ""
     AllowedPattern: '^$|^arn:[^:]+:acm:us-east-1:[0-9]{12}:certificate/[A-Za-z0-9-]+$'
     Description: Optional validated ACM certificate ARN from us-east-1
+  OriginDomainName:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$'
+    Description: Optional public DNS name used only by CloudFront to reach the ALB over TLS
+  OriginCertificateArn:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^arn:[^:]+:acm:[a-z0-9-]+:[0-9]{12}:certificate/[A-Za-z0-9-]+$'
+    Description: Optional validated ACM certificate ARN from the deployment region for the origin hostname
   CloudFrontOriginPrefixList:
     Type: AWS::SSM::Parameter::Value<String>
     Default: /aws/service/global-infrastructure/services/cloudfront/origin-facing/prefix-list-id
@@ -56,6 +66,9 @@ Conditions:
     - !Not [!Equals [!Ref CustomDomainName, ""]]
     - !Not [!Equals [!Ref HostedZoneId, ""]]
     - !Not [!Equals [!Ref CloudFrontCertificateArn, ""]]
+  HasOriginTls: !And
+    - !Not [!Equals [!Ref OriginDomainName, ""]]
+    - !Not [!Equals [!Ref OriginCertificateArn, ""]]
 
 Rules:
   CompleteCustomDomainConfiguration:
@@ -70,6 +83,18 @@ Rules:
             - !Not [!Equals [!Ref HostedZoneId, ""]]
             - !Not [!Equals [!Ref CloudFrontCertificateArn, ""]]
         AssertDescription: CustomDomainName, HostedZoneId and CloudFrontCertificateArn must be supplied together
+  CompleteOriginTlsConfiguration:
+    Assertions:
+      - Assert: !Or
+          - !And
+            - !Equals [!Ref OriginDomainName, ""]
+            - !Equals [!Ref OriginCertificateArn, ""]
+          - !And
+            - !Not [!Equals [!Ref OriginDomainName, ""]]
+            - !Not [!Equals [!Ref OriginCertificateArn, ""]]
+            - !Not [!Equals [!Ref HostedZoneId, ""]]
+            - !Not [!Equals [!Ref OriginDomainName, !Ref CustomDomainName]]
+        AssertDescription: OriginDomainName and OriginCertificateArn must be supplied together with a hosted zone, and the origin name must differ from the application name
 
 Resources:
   VPC:
@@ -166,10 +191,16 @@ Resources:
       GroupDescription: CloudFront origin traffic only
       VpcId: !Ref VPC
       SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          SourcePrefixListId: !Ref CloudFrontOriginPrefixList
+        - !If
+          - HasOriginTls
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            SourcePrefixListId: !Ref CloudFrontOriginPrefixList
+          - IpProtocol: tcp
+            FromPort: 80
+            ToPort: 80
+            SourcePrefixListId: !Ref CloudFrontOriginPrefixList
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: 0.0.0.0/0
@@ -888,8 +919,14 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       LoadBalancerArn: !Ref LoadBalancer
-      Port: 80
-      Protocol: HTTP
+      Port: !If [HasOriginTls, 443, 80]
+      Protocol: !If [HasOriginTls, HTTPS, HTTP]
+      SslPolicy: !If [HasOriginTls, ELBSecurityPolicy-TLS13-1-2-2021-06, !Ref AWS::NoValue]
+      Certificates:
+        - !If
+          - HasOriginTls
+          - CertificateArn: !Ref OriginCertificateArn
+          - !Ref AWS::NoValue
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
@@ -1163,10 +1200,18 @@ Resources:
           - CloudFrontDefaultCertificate: true
         Origins:
           - Id: alb
-            DomainName: !GetAtt LoadBalancer.DNSName
+            DomainName: !If
+              - HasOriginTls
+              - !Ref OriginDomainARecord
+              - !GetAtt LoadBalancer.DNSName
             CustomOriginConfig:
-              OriginProtocolPolicy: http-only
-              HTTPPort: 80
+              OriginProtocolPolicy: !If [HasOriginTls, https-only, http-only]
+              HTTPPort: !If [HasOriginTls, !Ref AWS::NoValue, 80]
+              HTTPSPort: !If [HasOriginTls, 443, !Ref AWS::NoValue]
+              OriginSSLProtocols: !If
+                - HasOriginTls
+                - [TLSv1.2]
+                - !Ref AWS::NoValue
         DefaultCacheBehavior:
           TargetOriginId: alb
           ViewerProtocolPolicy: redirect-to-https
@@ -1189,6 +1234,18 @@ Resources:
         HostedZoneId: Z2FDTNDATAQYW2
         EvaluateTargetHealth: false
 
+  OriginDomainARecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasOriginTls
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref OriginDomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt LoadBalancer.DNSName
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+        EvaluateTargetHealth: false
+
   CustomDomainAaaaRecord:
     Type: AWS::Route53::RecordSet
     Condition: HasCustomDomain
@@ -1209,6 +1266,11 @@ Outputs:
       - !Sub https://${Distribution.DomainName}
   CloudFrontDistributionId:
     Value: !Ref Distribution
+  CloudFrontOriginName:
+    Value: !If
+      - HasOriginTls
+      - !Ref OriginDomainName
+      - !GetAtt LoadBalancer.DNSName
   ClusterName:
     Value: !Ref Cluster
   ServiceName:

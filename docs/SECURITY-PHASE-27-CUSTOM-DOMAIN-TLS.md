@@ -49,12 +49,10 @@ smoke test consequently validates that public hostname.
 
 ## Remaining TLS boundary
 
-This phase protects the viewer-to-CloudFront connection. The distribution's
-custom origin still uses `http-only` to reach the ALB. Although the ALB ingress
-is restricted to the CloudFront managed prefix list, origin traffic is not yet
-encrypted. Production remains blocked until CloudFront-to-ALB HTTPS is
-configured with a regional certificate and matching origin hostname, then
-proved from the deployed stack.
+This phase protects the viewer-to-CloudFront connection. Phase 28 now declares
+an optional regional-certificate path for CloudFront-to-ALB HTTPS, but that path
+still requires service validation and a live handshake from the deployed stack.
+The HTTP staging fallback must never be promoted to production.
 
 ## Required deployment evidence
 
@@ -77,6 +75,6 @@ proved from the deployed stack.
 - Route 53 alias routing to CloudFront:
   <https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-to-cloudfront-distribution.html>
 
-Production remains blocked on this live evidence, origin TLS, AWS deployment,
+Production remains blocked on this live evidence, live origin-TLS proof, AWS deployment,
 restore/failover/load/privacy/payment drills and completion of the relational
 multi-writer cutover.
