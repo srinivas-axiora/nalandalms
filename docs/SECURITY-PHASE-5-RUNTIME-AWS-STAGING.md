@@ -70,6 +70,7 @@ mandatory staging gates, not assumed successes.
   whenever it is enabled. Phase 29 adds a post-deploy AWS attestation and
   redacted evidence artifact. Phase 30 pins the deployed ECS image to its
   scanned digest and attests the source revision and running service; all
-  controls still require live staging evidence before production.
+  controls still require live staging evidence before production. Phase 31
+  removes task public IPs and provides redundant private-subnet NAT egress.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

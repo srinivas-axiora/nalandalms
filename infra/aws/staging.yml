@@ -143,6 +143,28 @@ Resources:
         - Key: Name
           Value: !Sub ${EnvironmentName}-public-b
 
+  ApplicationSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.40.2.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-application-a
+
+  ApplicationSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: 10.40.3.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-application-b
+
   DataSubnetA:
     Type: AWS::EC2::Subnet
     Properties:
@@ -189,6 +211,72 @@ Resources:
     Properties:
       SubnetId: !Ref PublicSubnetB
       RouteTableId: !Ref PublicRouteTable
+
+  NatEipA:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatEipB:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGatewayA:
+    Type: AWS::EC2::NatGateway
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      AllocationId: !GetAtt NatEipA.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-nat-a
+
+  NatGatewayB:
+    Type: AWS::EC2::NatGateway
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      AllocationId: !GetAtt NatEipB.AllocationId
+      SubnetId: !Ref PublicSubnetB
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-nat-b
+
+  ApplicationRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  ApplicationRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  ApplicationDefaultRouteA:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref ApplicationRouteTableA
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA
+
+  ApplicationDefaultRouteB:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref ApplicationRouteTableB
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayB
+
+  ApplicationRouteAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref ApplicationSubnetA
+      RouteTableId: !Ref ApplicationRouteTableA
+
+  ApplicationRouteAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref ApplicationSubnetB
+      RouteTableId: !Ref ApplicationRouteTableB
 
   LoadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -958,9 +1046,9 @@ Resources:
           Rollback: true
       NetworkConfiguration:
         AwsvpcConfiguration:
-          AssignPublicIp: ENABLED
+          AssignPublicIp: DISABLED
           SecurityGroups: [!Ref ApplicationSecurityGroup]
-          Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+          Subnets: [!Ref ApplicationSubnetA, !Ref ApplicationSubnetB]
       LoadBalancers:
         - ContainerName: nalanda
           ContainerPort: 8080
@@ -1310,5 +1398,11 @@ Outputs:
     Value: !Ref SourceRevision
   PublicSubnetIds:
     Value: !Join [",", [!Ref PublicSubnetA, !Ref PublicSubnetB]]
+  ApplicationSubnetIds:
+    Value: !Join [",", [!Ref ApplicationSubnetA, !Ref ApplicationSubnetB]]
+  ApplicationRouteTableIds:
+    Value: !Join [",", [!Ref ApplicationRouteTableA, !Ref ApplicationRouteTableB]]
+  NatGatewayIds:
+    Value: !Join [",", [!Ref NatGatewayA, !Ref NatGatewayB]]
   ApplicationSecurityGroupId:
     Value: !Ref ApplicationSecurityGroup

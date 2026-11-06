@@ -55,6 +55,12 @@ const requiredResources = [
   "AccessLogBucket",
   "AccessLogBucketPolicy",
   "AlertTopic",
+  "ApplicationSubnetA",
+  "ApplicationSubnetB",
+  "NatGatewayA",
+  "NatGatewayB",
+  "ApplicationRouteTableA",
+  "ApplicationRouteTableB",
   "CustomDomainARecord",
   "CustomDomainAaaaRecord",
   "OriginDomainARecord",
@@ -79,6 +85,9 @@ if (
   || !outputs?.LoadBalancerSecurityGroupId
   || !outputs?.CloudFrontOriginPrefixListId
   || !outputs?.SourceRevision
+  || !outputs?.ApplicationSubnetIds
+  || !outputs?.ApplicationRouteTableIds
+  || !outputs?.NatGatewayIds
 ) {
   throw new Error("Required application, edge, WAF, access-log or malware-protection outputs are missing.");
 }

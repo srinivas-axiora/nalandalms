@@ -167,9 +167,9 @@ function Get-StackOutput([string]$OutputKey) {
 function Invoke-OneOffTask([string[]]$Command) {
   $cluster = Get-StackOutput "ClusterName"
   $taskDefinition = Get-StackOutput "TaskDefinitionArn"
-  $subnets = Get-StackOutput "PublicSubnetIds"
+  $subnets = Get-StackOutput "ApplicationSubnetIds"
   $securityGroup = Get-StackOutput "ApplicationSecurityGroupId"
-  $network = "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$securityGroup],assignPublicIp=ENABLED}"
+  $network = "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$securityGroup],assignPublicIp=DISABLED}"
   $overrides = (@{
     containerOverrides = @(@{ name = "nalanda"; command = $Command })
   } | ConvertTo-Json -Depth 5 -Compress)

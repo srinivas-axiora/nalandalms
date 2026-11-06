@@ -2,7 +2,8 @@
 
 This stack is intentionally a **single-writer staging environment**, not a
 production approval. It provides CloudFront HTTPS, an ALB, one ARM64 ECS Fargate
-task, private RDS PostgreSQL, private TLS-enabled ElastiCache Redis, private S3,
+task in private application subnets, private RDS PostgreSQL, private TLS-enabled
+ElastiCache Redis, private S3,
 Secrets Manager, ALB access logs, a regional AWS WAF and CloudWatch/SNS alarms
 encrypted with a rotating customer-managed KMS key. GuardDuty Malware
 Protection scans course media, chapter PDFs and proctoring objects.
@@ -12,6 +13,12 @@ two application processes writing the current whole-state JSONB snapshot at the
 same time. Deployments therefore have a short interruption. Do not raise
 `DesiredCount` above one until the normalized transactional repository cutover
 is complete and multi-instance concurrency tests pass.
+
+Application tasks and one-off database/verifier tasks never receive public IPs.
+Each application subnet uses a NAT gateway in the same Availability Zone for
+outbound ECR, AWS API, payment and AI-provider access. This deliberately creates
+two NAT gateways for zone-resilient egress and therefore incurs hourly and data
+processing charges in staging.
 
 ## Prerequisites
 
@@ -97,6 +104,10 @@ attached and `/api/ready` succeeds. It writes a redacted JSON attestation under
 the controlled release record. The attestation also proves the task definition
 and active ECS service use the expected digest and revision, the service is at a
 stable 1/1 single-writer count, and ECR reports no critical or high findings.
+It also proves public IP assignment is disabled, the service uses only the two
+private application subnets and application security group, both NAT gateways
+are available in the public subnets, and each private route table has one active
+same-zone NAT default route.
 
 The verification can also be rerun without redeploying:
 

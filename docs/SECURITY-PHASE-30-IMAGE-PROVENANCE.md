@@ -50,6 +50,8 @@ documented field, and both tests and the deployed verifier pin that spelling.
 - After the checkpoint commit, the real deployment preflight reached the AWS
   authentication boundary from a clean worktree and rejected a temporary
   untracked-file probe before any AWS or Docker action.
+- Phase 31 moves both service and one-off tasks to private application subnets
+  and extends the attestation with subnet, public-IP, NAT and route evidence.
 - The full functional suite passed 58 files and 292 tests; the isolated
   adversarial suite passed all 32 tests.
 - Frontend type checking and the production build passed. The known

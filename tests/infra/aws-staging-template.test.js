@@ -166,4 +166,25 @@ describe("AWS staging release controls", () => {
     expect(verificationScript).toContain("findingSeverityCounts");
     expect(verificationScript).toContain("supplyChain = [ordered]@{");
   });
+
+  it("keeps service and one-off tasks private with resilient per-AZ NAT egress", () => {
+    expect(template).toContain("ApplicationSubnetA:");
+    expect(template).toContain("ApplicationSubnetB:");
+    expect((template.match(/Type: AWS::EC2::NatGateway/g) ?? []).length).toBe(2);
+    expect(template).toContain("ApplicationDefaultRouteA:");
+    expect(template).toContain("ApplicationDefaultRouteB:");
+    expect(template).toContain("NatGatewayId: !Ref NatGatewayA");
+    expect(template).toContain("NatGatewayId: !Ref NatGatewayB");
+    expect(template).toMatch(/Service:[\s\S]*?AssignPublicIp: DISABLED[\s\S]*?Subnets: \[!Ref ApplicationSubnetA, !Ref ApplicationSubnetB\]/);
+    expect(deploymentScript).toContain('Get-StackOutput "ApplicationSubnetIds"');
+    expect(deploymentScript).toContain("assignPublicIp=DISABLED");
+    expect(deploymentScript).not.toContain("assignPublicIp=ENABLED");
+    expect(verificationScript).toContain('"ec2", "describe-subnets"');
+    expect(verificationScript).toContain('"ec2", "describe-nat-gateways"');
+    expect(verificationScript).toContain('"ec2", "describe-route-tables"');
+    expect(verificationScript).toContain("The ECS service still assigns public IP addresses");
+    expect(verificationScript).toContain("routes through a NAT gateway in a different Availability Zone");
+    expect(verificationScript).toContain("sameZoneNatRoutingVerified = $true");
+    expect(verificationScript).toContain("network = [ordered]@{");
+  });
 });

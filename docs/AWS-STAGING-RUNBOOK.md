@@ -18,6 +18,9 @@ Target: production-shaped staging only
 - For encrypted origin traffic, prepare a distinct public origin hostname in
   that hosted zone and a second validated ACM certificate in the deployment
   region whose subject/SAN covers the origin hostname.
+- Obtain budget approval for two NAT gateways and their data-processing
+  charges; one gateway per Availability Zone avoids a cross-zone egress
+  dependency.
 - Start Docker Desktop and confirm Linux ARM64 builds work.
 - Confirm the repository is clean and the intended security commits are on the
   deployment branch.
@@ -114,6 +117,10 @@ Do not use real learner/candidate PII or real payments in this staging stack.
 - Force-stop the ECS task and verify ECS replaces it and readiness recovers.
 - Confirm RDS automated backups and S3 versioning are enabled.
 - Confirm Redis and RDS have no public endpoint exposure.
+- Confirm ECS service and one-off tasks use the private application subnets,
+  `assignPublicIp=DISABLED`, and only the application security group. Verify
+  both NAT gateways are available in their corresponding public subnets and
+  each application route table sends `0.0.0.0/0` to its same-zone NAT gateway.
 - Confirm S3 Block Public Access is enabled at all four settings.
 - Confirm ALB access-log test and request objects appear under
   `alb/AWSLogs/<account-id>/` in the retained logging bucket.
@@ -152,7 +159,7 @@ Do not use real learner/candidate PII or real payments in this staging stack.
 
 ## 5. Rollback
 
-Redeploy the last known-good immutable ECR image tag through the same script.
+Redeploy the last known-good immutable ECR image digest through the same script.
 Because this is a single-writer service, ECS stops the old task before starting
 the replacement. Do not roll back the database independently unless a reviewed
 data migration requires it.

@@ -35,6 +35,12 @@ function Get-RequiredOutput([hashtable]$Outputs, [string]$Key) {
   return $value
 }
 
+function Test-SameStringSet([object[]]$Actual, [object[]]$Expected) {
+  $difference = @(Compare-Object -ReferenceObject @($Expected | ForEach-Object { [string]$_ } | Sort-Object) `
+    -DifferenceObject @($Actual | ForEach-Object { [string]$_ } | Sort-Object))
+  return $difference.Count -eq 0
+}
+
 $viewerValues = @(@($ExpectedCustomDomainName, $ExpectedCloudFrontCertificateArn) | Where-Object { $_ })
 if ($viewerValues.Count -ne 0 -and $viewerValues.Count -ne 2) {
   throw "ExpectedCustomDomainName and ExpectedCloudFrontCertificateArn must be supplied together."
@@ -82,6 +88,11 @@ $expectedWebAclArn = Get-RequiredOutput $outputs "RegionalWebAclArn"
 $taskDefinitionArn = Get-RequiredOutput $outputs "TaskDefinitionArn"
 $clusterName = Get-RequiredOutput $outputs "ClusterName"
 $serviceName = Get-RequiredOutput $outputs "ServiceName"
+$applicationSecurityGroupId = Get-RequiredOutput $outputs "ApplicationSecurityGroupId"
+$applicationSubnetIds = @((Get-RequiredOutput $outputs "ApplicationSubnetIds") -split ",")
+$publicSubnetIds = @((Get-RequiredOutput $outputs "PublicSubnetIds") -split ",")
+$applicationRouteTableIds = @((Get-RequiredOutput $outputs "ApplicationRouteTableIds") -split ",")
+$natGatewayIds = @((Get-RequiredOutput $outputs "NatGatewayIds") -split ",")
 $deployedSourceRevision = Get-RequiredOutput $outputs "SourceRevision"
 Assert-Condition ($deployedSourceRevision -eq $ExpectedSourceRevision) `
   "The stack source revision does not match the expected Git commit."
@@ -109,6 +120,59 @@ Assert-Condition ([int]$service.desiredCount -eq 1 -and [int]$service.runningCou
 $primaryDeployment = @($service.deployments | Where-Object { $_.status -eq "PRIMARY" })[0]
 Assert-Condition ($null -ne $primaryDeployment -and [string]$primaryDeployment.rolloutState -eq "COMPLETED") `
   "The ECS primary deployment has not completed."
+$serviceNetwork = $service.networkConfiguration.awsvpcConfiguration
+Assert-Condition ([string]$serviceNetwork.assignPublicIp -eq "DISABLED") `
+  "The ECS service still assigns public IP addresses."
+Assert-Condition (Test-SameStringSet -Actual @($serviceNetwork.subnets) -Expected $applicationSubnetIds) `
+  "The ECS service is not attached to the expected private application subnets."
+Assert-Condition (Test-SameStringSet -Actual @($serviceNetwork.securityGroups) -Expected @($applicationSecurityGroupId)) `
+  "The ECS service security groups do not match the expected application group."
+
+$subnetEnvelope = Invoke-AwsJson (@("ec2", "describe-subnets", "--subnet-ids") + $applicationSubnetIds + $publicSubnetIds)
+$allNetworkSubnets = @($subnetEnvelope.Subnets)
+$applicationSubnets = @($allNetworkSubnets | Where-Object { $applicationSubnetIds -contains $_.SubnetId })
+$publicSubnets = @($allNetworkSubnets | Where-Object { $publicSubnetIds -contains $_.SubnetId })
+Assert-Condition ($applicationSubnets.Count -eq 2) `
+  "Expected two private application subnets; found $($applicationSubnets.Count)."
+Assert-Condition (@($applicationSubnets | Where-Object { [bool]$_.MapPublicIpOnLaunch }).Count -eq 0) `
+  "An application subnet still maps public IP addresses on launch."
+Assert-Condition ($publicSubnets.Count -eq 2) `
+  "Expected two public ingress/NAT subnets; found $($publicSubnets.Count)."
+
+$natEnvelope = Invoke-AwsJson (@("ec2", "describe-nat-gateways", "--nat-gateway-ids") + $natGatewayIds)
+$natGateways = @($natEnvelope.NatGateways)
+Assert-Condition ($natGateways.Count -eq 2 -and @($natGateways | Where-Object { $_.State -ne "available" }).Count -eq 0) `
+  "Both application NAT gateways must be available."
+Assert-Condition (Test-SameStringSet -Actual @($natGateways | ForEach-Object { $_.SubnetId }) -Expected $publicSubnetIds) `
+  "The NAT gateways are not placed one-per-public-subnet."
+
+$routeEnvelope = Invoke-AwsJson (@("ec2", "describe-route-tables", "--route-table-ids") + $applicationRouteTableIds)
+$routeTables = @($routeEnvelope.RouteTables)
+Assert-Condition ($routeTables.Count -eq 2) `
+  "Expected two application route tables; found $($routeTables.Count)."
+$verifiedApplicationSubnets = @()
+$verifiedNatGatewayIds = @()
+foreach ($routeTable in $routeTables) {
+  $subnetAssociation = @($routeTable.Associations | Where-Object { $applicationSubnetIds -contains $_.SubnetId })[0]
+  Assert-Condition ($null -ne $subnetAssociation) `
+    "An application route table is not associated with an expected private subnet."
+  $defaultRoute = @($routeTable.Routes | Where-Object {
+    $_.DestinationCidrBlock -eq "0.0.0.0/0" -and $_.State -eq "active" -and $natGatewayIds -contains $_.NatGatewayId
+  })[0]
+  Assert-Condition ($null -ne $defaultRoute) `
+    "An application route table lacks an active default route through an expected NAT gateway."
+  $applicationSubnet = @($applicationSubnets | Where-Object { $_.SubnetId -eq $subnetAssociation.SubnetId })[0]
+  $natGateway = @($natGateways | Where-Object { $_.NatGatewayId -eq $defaultRoute.NatGatewayId })[0]
+  $natPublicSubnet = @($publicSubnets | Where-Object { $_.SubnetId -eq $natGateway.SubnetId })[0]
+  Assert-Condition ($null -ne $applicationSubnet -and $null -ne $natPublicSubnet `
+    -and [string]$applicationSubnet.AvailabilityZone -eq [string]$natPublicSubnet.AvailabilityZone) `
+    "An application subnet routes through a NAT gateway in a different Availability Zone."
+  $verifiedApplicationSubnets += [string]$applicationSubnet.SubnetId
+  $verifiedNatGatewayIds += [string]$natGateway.NatGatewayId
+}
+Assert-Condition ((Test-SameStringSet -Actual $verifiedApplicationSubnets -Expected $applicationSubnetIds) `
+  -and (Test-SameStringSet -Actual $verifiedNatGatewayIds -Expected $natGatewayIds)) `
+  "Application routing does not cover each private subnet and NAT gateway exactly once."
 
 $scanEnvelope = Invoke-AwsJson @(
   "ecr", "describe-image-scan-findings",
@@ -271,6 +335,15 @@ $evidence = [ordered]@{
     desiredTasks = [int]$service.desiredCount
     runningTasks = [int]$service.runningCount
     rolloutState = [string]$primaryDeployment.rolloutState
+  }
+  network = [ordered]@{
+    assignPublicIp = [string]$serviceNetwork.assignPublicIp
+    applicationSubnetIds = $applicationSubnetIds
+    applicationSecurityGroupId = $applicationSecurityGroupId
+    natGatewayIds = $natGatewayIds
+    applicationRouteTableIds = $applicationRouteTableIds
+    activeNatDefaultRoutes = $verifiedNatGatewayIds.Count
+    sameZoneNatRoutingVerified = $true
   }
 }
 
