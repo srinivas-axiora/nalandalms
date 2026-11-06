@@ -779,12 +779,27 @@ CREATE TABLE deleted_archives (
   related_data JSONB NOT NULL DEFAULT '{}',
   deleted_by TEXT NOT NULL REFERENCES users(id),
   deleted_by_name TEXT NOT NULL DEFAULT '',
-  deletion_comment TEXT NOT NULL CHECK (length(trim(deletion_comment)) >= 10),
+  deletion_comment TEXT NOT NULL CHECK (
+    length(trim(deletion_comment)) >= 10 AND length(deletion_comment) <= 5000
+  ),
+  source_key TEXT,
+  CONSTRAINT deleted_archives_json_shape CHECK (
+    jsonb_typeof(entity_data) = 'object'
+    AND jsonb_typeof(related_data) = 'object'
+    AND length(entity_id) BETWEEN 1 AND 200
+    AND length(deleted_by_name) <= 300
+    AND length(deletion_comment) <= 5000
+    AND (source_key IS NULL OR source_key ~ '^[a-f0-9]{64}$')
+  ),
   deleted_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_archives_entity ON deleted_archives(entity_type, deleted_at DESC);
 CREATE INDEX idx_archives_deleted_by ON deleted_archives(deleted_by);
+CREATE UNIQUE INDEX uq_deleted_archives_source_key
+  ON deleted_archives(source_key) WHERE source_key IS NOT NULL;
+CREATE INDEX idx_deleted_archives_order
+  ON deleted_archives(deleted_at DESC, id DESC);
 
 -- ── Privacy Erasure Workflow ──
 CREATE TABLE privacy_requests (

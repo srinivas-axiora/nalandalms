@@ -165,4 +165,31 @@ describe("PostgreSQL course authority", () => {
 
     expect(client.query.mock.calls.some(([sql]) => sql.startsWith("DELETE FROM courses"))).toBe(false);
   });
+
+  it("archives assessment questions before deleting a history-free course", async () => {
+    const question = { id: "11111111-1111-4111-8111-111111111111", assessment_id: "ASM-1" };
+    const { db, client } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT * FROM courses")) return { rows: [courseRow()] };
+      if (sql.includes("SELECT\n           (SELECT count(*) FROM enrollments")) {
+        return { rows: [{ enrollments: 0, payment_orders: 0, attempts: 0, certificates: 0,
+          candidate_links: 0, proctor_captures: 0, feedbacks: 0, time_events: 0 }] };
+      }
+      if (sql.includes("AS chapters") && sql.includes("AS questions")) {
+        return { rows: [{ chapters: [], assessments: [], questions: [question], archiveVersion: 2 }] };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    const repository = createCourseAuthorityRepository(db);
+
+    await repository.archiveAndDelete({
+      id: "CRS-1",
+      actor: { id: "OWNER-1", name: "Owner", role: "Manager" },
+      expectedVersion: 1,
+      deletionComment: "Retire obsolete authoring draft",
+    });
+
+    const archiveCall = client.query.mock.calls.find(([sql]) => sql.includes("INSERT INTO deleted_archives"));
+    expect(JSON.parse(archiveCall[1][2])).toMatchObject({ archiveVersion: 2, questions: [question] });
+    expect(client.query.mock.calls.some(([sql]) => sql.startsWith("DELETE FROM courses"))).toBe(true);
+  });
 });

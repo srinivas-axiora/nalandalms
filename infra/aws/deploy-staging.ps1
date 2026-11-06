@@ -221,7 +221,8 @@ if ($RunRelationalVerifiers) {
     "verify-reports.mjs",
     "verify-ai-feedback.mjs",
     "verify-operational-authority.mjs",
-    "verify-security-evidence.mjs"
+    "verify-security-evidence.mjs",
+    "verify-archives.mjs"
   )
   foreach ($verifier in $verifiers) {
     Write-Host "Running relational verifier: $verifier"

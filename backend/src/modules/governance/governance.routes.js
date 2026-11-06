@@ -7,17 +7,26 @@ import crypto from "node:crypto";
 import { identityRepository } from "../../repositories/identity.repository.pg.js";
 import { upsertIdentityProjection } from "../../identity-projection.js";
 import { securityEvidenceRepository } from "../../repositories/security-evidence.repository.pg.js";
+import {
+  archiveAuthorityRepository,
+  ArchiveAuthorityError,
+} from "../../repositories/archive-authority.repository.pg.js";
 
 const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
+const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
 // Module: Governance (audit logs, security events, archive + restore).
 // Handlers moved verbatim from server.js; shared deps injected via ctx.
 export function registerGovernance(app) {
   app.get("/api/archive", authenticate, requireRole("Super Admin"), async (req, res) => {
-    if (USE_PG_IDENTITY) {
-      const userArchives = await identityRepository.listUserArchives();
-      const nonUserArchives = archives.filter((item) => item.entityType !== "User");
-      const data = [...userArchives, ...nonUserArchives]
+    const relationalTypes = [
+      ...(USE_PG_IDENTITY ? ["User"] : []),
+      ...(USE_PG_COURSES ? ["Course", "Assessment"] : []),
+    ];
+    if (relationalTypes.length) {
+      const relationalArchives = await archiveAuthorityRepository.listArchives({ entityTypes: relationalTypes });
+      const snapshotArchives = archives.filter((item) => !relationalTypes.includes(item.entityType));
+      const data = [...relationalArchives, ...snapshotArchives]
         .sort((a, b) => new Date(b.deletedAt).getTime() - new Date(a.deletedAt).getTime());
       return res.json({ data: redactSensitive(data), total: data.length });
     }
@@ -25,18 +34,42 @@ export function registerGovernance(app) {
   });
 
   app.post("/api/archive/:id/restore", authenticate, requireRole("Super Admin"), requireStepUp, async (req, res) => {
-    if (USE_PG_IDENTITY) {
-      const restored = await identityRepository.restoreUserArchive({
-        archiveId: req.params.id,
-        actorId: req.user.id,
-        replacementPasswordHash: bcrypt.hashSync(crypto.randomBytes(32).toString("hex"), 10),
-      });
-      if (restored) {
-        upsertIdentityProjection(restored);
-        return res.json({
-          success: true,
-          message: "User restored as inactive; an administrator must set a new password before activation",
+    if (USE_PG_IDENTITY || USE_PG_COURSES) {
+      const archive = await archiveAuthorityRepository.findArchiveById(req.params.id);
+      if (archive?.entityType === "User" && USE_PG_IDENTITY) {
+        const restored = await identityRepository.restoreUserArchive({
+          archiveId: req.params.id,
+          actorId: req.user.id,
+          replacementPasswordHash: bcrypt.hashSync(crypto.randomBytes(32).toString("hex"), 10),
         });
+        if (restored) {
+          upsertIdentityProjection(restored);
+          return res.json({
+            success: true,
+            message: "User restored as inactive; an administrator must set a new password before activation",
+          });
+        }
+      }
+      if (["Course", "Assessment"].includes(archive?.entityType) && USE_PG_COURSES) {
+        try {
+          const restored = await archiveAuthorityRepository.restoreAuthoringArchive({
+            archiveId: req.params.id,
+            actor: req.user,
+          });
+          if (restored) {
+            return res.json({
+              success: true,
+              message: `${restored.entityType} restored as inactive draft for review`,
+            });
+          }
+        } catch (error) {
+          if (error instanceof ArchiveAuthorityError) {
+            const status = ["ARCHIVE_CONFLICT", "ARCHIVE_INCOMPLETE", "ARCHIVE_PARENT_MISSING"]
+              .includes(error.code) ? 409 : 400;
+            return res.status(status).json({ error: error.message, code: error.code, details: error.details });
+          }
+          throw error;
+        }
       }
     }
     const idx = archives.findIndex((item) => item.id === req.params.id);
@@ -61,7 +94,7 @@ export function registerGovernance(app) {
     }
 
     archives.splice(idx, 1);
-    audit(req.user.id, "RESTORE_ARCHIVE", record.entityType.toUpperCase(), record.entityId);
+    await audit(req.user.id, "RESTORE_ARCHIVE", record.entityType.toUpperCase(), record.entityId);
     res.json({ success: true, message: `${record.entityType} restored` });
   });
 

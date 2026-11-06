@@ -510,6 +510,7 @@ const videoProgress = {}; // { "userId-courseId-chapterId": { currentTime, updat
 const dbPath = path.resolve(__dirname, "..", "..", "database", "db.json");
 const storage = createStorage({ filePath: dbPath, databaseUrl: process.env.DATABASE_URL });
 const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
+const USE_PG_ARCHIVES = process.env.USE_PG_IDENTITY === "1" && process.env.USE_PG_COURSES === "1";
 
 const snapshot = () => ({
   users,
@@ -536,7 +537,7 @@ const snapshot = () => ({
   paymentOrders,
   paymentTransactions,
   paymentWebhookEvents,
-  archives,
+  ...(USE_PG_ARCHIVES ? {} : { archives }),
   skills,
   targetSkills,
   skillRatings,
@@ -592,7 +593,7 @@ const loadDb = async () => {
     if (data.paymentOrders) { paymentOrders.length = 0; paymentOrders.push(...data.paymentOrders); }
     if (data.paymentTransactions) { paymentTransactions.length = 0; paymentTransactions.push(...data.paymentTransactions); }
     if (data.paymentWebhookEvents) { paymentWebhookEvents.length = 0; paymentWebhookEvents.push(...data.paymentWebhookEvents); }
-    if (data.archives) { archives.length = 0; archives.push(...data.archives); }
+    if (!USE_PG_ARCHIVES && data.archives) { archives.length = 0; archives.push(...data.archives); }
     if (data.skills) { skills.length = 0; skills.push(...data.skills); }
     if (data.targetSkills) { targetSkills.length = 0; targetSkills.push(...data.targetSkills); }
     if (data.skillRatings) { skillRatings.length = 0; skillRatings.push(...data.skillRatings); }

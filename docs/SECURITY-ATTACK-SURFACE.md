@@ -32,7 +32,7 @@ or step-up middleware disagrees with its declaration.
 | GET | `/api/health` | Public | N | N/A | N | G | Liveness, version, uptime and process memory |
 | GET | `/api/ready` | Public | N | N/A | N | G | Sanitized database, Redis and object-store readiness |
 | GET | `/api/csrf-token` | Public | Cookie | N/A | N | G | Token returned in body intentionally |
-| GET | `/api/app-data` | Any | N | N/A | N | G | Phases 23-24/32 relational identity scope plus canonical learning events, reports, AI feedback, settings, ratings, chapter feedback and administrator security evidence when cutovers are enabled; large response and remaining archive projections require decomposition |
+| GET | `/api/app-data` | Any | N | N/A | N | G | Phases 23-24/32-33 relational identity scope plus canonical learning events, reports, AI feedback, settings, ratings, chapter feedback, administrator security evidence and Super Admin archives when cutovers are enabled; large response still requires decomposition |
 | GET | `*splat` | Public | N | N/A | N | None | Frontend fallback; API paths return JSON 404 |
 | POST | `/api/auth/register` | Public | Y | Y | N | G + registration limiter | Strict schema ignores/rejects role input and assigns Learner only |
 | POST | `/api/auth/login` | Public | Y | Y | N | G + login map | Identifier lockout enables victim DoS |
@@ -169,8 +169,8 @@ The runtime-data ignore is anchored to `/uploads/`, so source modules under an
 | GET | `/api/analytics/me` | Any | N | N/A | N | G | Phase-18 relational mode derives self-scoped enrollment, skill and course-suggestion metrics |
 | GET | `/api/analytics/time` | A/M | N | N/A | N | G | Phase-18 relational mode reconciles canonical chapter totals, attempts and enrollment time with SQL scope |
 | GET | `/api/analytics/time/events` | A/M | N | N/A | N | G | Phase-18 relational mode uses SQL scope, deterministic ordering and a strict 1-500 limit |
-| GET | `/api/archive` | SA | N | N/A | N | G | Redacted archive view; identity archives exclude password hashes |
-| POST | `/api/archive/:id/restore` | SA | Y | Y | Y | G | Step-up required; restored user is inactive with a rotated credential/session |
+| GET | `/api/archive` | SA | N | N/A | N | G | Phase-33 relational mode provides a bounded, deterministic redacted archive view; identity archives exclude password hashes |
+| POST | `/api/archive/:id/restore` | SA | Y | Y | Y | G | Step-up required; user restores inactive with rotated credentials; course/assessment restores are atomic, versioned and forced to inactive draft review |
 | GET | `/api/audit-logs` | A | N | N/A | N | G | Phase-32 bounded, redacted, deterministically ordered PostgreSQL projection when enabled; snapshot fallback remains feature-gated |
 | GET | `/api/security-events` | A | N | N/A | N | G | Phase-32 bounded, redacted, deterministically ordered PostgreSQL projection when enabled; response evidence writes fail closed |
 | GET | `/api/users/me/data-export` | Any | N | N/A | Y | G | Self-scoped bulk export; step-up required; relational mode uses explicit allowlists and omits secrets/object keys |

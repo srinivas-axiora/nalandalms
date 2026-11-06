@@ -353,7 +353,14 @@ export function createCourseAuthorityRepository(db = { query, withTransaction })
       const related = await client.query(
         `SELECT
            COALESCE((SELECT jsonb_agg(to_jsonb(ch)) FROM chapters ch WHERE ch.course_id = $1), '[]'::jsonb) AS chapters,
-           COALESCE((SELECT jsonb_agg(to_jsonb(a)) FROM assessments a WHERE a.course_id = $1), '[]'::jsonb) AS assessments`,
+           COALESCE((SELECT jsonb_agg(to_jsonb(a)) FROM assessments a WHERE a.course_id = $1), '[]'::jsonb) AS assessments,
+           COALESCE((
+             SELECT jsonb_agg(to_jsonb(q) ORDER BY q.assessment_id, q.sort_order, q.id)
+             FROM questions q
+             JOIN assessments a ON a.id = q.assessment_id
+             WHERE a.course_id = $1
+           ), '[]'::jsonb) AS questions,
+           2 AS "archiveVersion"`,
         [id]
       );
       await client.query(

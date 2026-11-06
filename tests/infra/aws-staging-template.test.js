@@ -131,6 +131,7 @@ describe("AWS staging release controls", () => {
       "verify-ai-feedback.mjs",
       "verify-operational-authority.mjs",
       "verify-security-evidence.mjs",
+      "verify-archives.mjs",
     ];
     for (const verifier of expectedVerifiers) expect(deploymentScript).toContain(verifier);
   });

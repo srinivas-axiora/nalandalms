@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { query, closePool, withTransaction } from "./pool.js";
 import { hashCandidateToken } from "../repositories/candidate-assessments.repository.pg.js";
-import { redactAuditMetadata } from "../security/redaction.js";
+import { redactAuditMetadata, redactSensitive } from "../security/redaction.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_JSON = path.resolve(__dirname, "..", "..", "..", "database", "db.json");
@@ -50,6 +50,7 @@ async function loadSource() {
       candidateAssessments: core.candidateAssessments || [],
       auditLogs: core.auditLogs || [],
       securityEvents: core.securityEvents || [],
+      archives: core.archives || [],
     },
     source: "in-memory seed",
   };
@@ -103,6 +104,39 @@ export async function backfill() {
       if (u.managerId) {
         await client.query("UPDATE users SET manager_id = $2 WHERE id = $1", [u.id, u.managerId]);
       }
+    }
+
+    // 1b. Legacy deletion archives. The source key makes repeated backfills
+    // idempotent without trusting process-local archive identifiers as UUIDs.
+    const archives = data.archives || [];
+    console.log(`[backfill] Upserting ${archives.length} deletion archives...`);
+    for (const archive of archives) {
+      if (!["User", "Course", "Assessment"].includes(archive.entityType)) continue;
+      const deletedBy = userIds.has(archive.deletedBy) ? archive.deletedBy : users[0]?.id;
+      if (!deletedBy) continue;
+      const sourceKey = crypto.createHash("sha256").update(String(
+        archive.id || `${archive.entityType}:${archive.entityId}:${archive.deletedAt || "legacy"}`
+      )).digest("hex");
+      const deletionComment = String(archive.deletionComment || "Imported legacy deletion archive").trim();
+      const entityData = archive.entityData && typeof archive.entityData === "object"
+        && !Array.isArray(archive.entityData) ? archive.entityData : {};
+      const relatedData = archive.relatedData && typeof archive.relatedData === "object"
+        && !Array.isArray(archive.relatedData) ? archive.relatedData : {};
+      await client.query(
+        `INSERT INTO deleted_archives (
+           entity_type, entity_id, entity_data, related_data, deleted_by,
+           deleted_by_name, deletion_comment, deleted_at, source_key
+         ) VALUES (
+           $1, $2, $3::jsonb, $4::jsonb, $5,
+           $6, $7, COALESCE($8::timestamptz, now()), $9
+         ) ON CONFLICT (source_key) WHERE source_key IS NOT NULL DO NOTHING`,
+        [archive.entityType, String(archive.entityId),
+          JSON.stringify(redactSensitive(entityData)),
+          JSON.stringify(redactSensitive(relatedData)), deletedBy,
+          String(archive.deletedByName || "").slice(0, 300),
+          (deletionComment.length >= 10 ? deletionComment : "Imported legacy archive").slice(0, 5000),
+          archive.deletedAt || null, sourceKey]
+      );
     }
 
     // 2. Skills & Target Skills

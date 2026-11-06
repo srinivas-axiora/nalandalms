@@ -73,6 +73,7 @@ import { aiFeedbackRepository } from "./src/repositories/ai-feedback.repository.
 import { analyticsRepository } from "./src/repositories/analytics.repository.pg.js";
 import { settingsRepository } from "./src/repositories/settings.repository.pg.js";
 import { securityEvidenceRepository } from "./src/repositories/security-evidence.repository.pg.js";
+import { archiveAuthorityRepository } from "./src/repositories/archive-authority.repository.pg.js";
 import { evidenceWriteContextMiddleware } from "./src/security/evidence-write-context.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -161,15 +162,17 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/ready", async (_req, res) => {
+  const readinessQuery = (...args) => Promise.resolve().then(() => relationalQuery(...args));
   const [
     database, redis, objects, payments, identity, attemptRuntime,
     certificateAuthority, candidateRuntime, privacyAuthority, reportAuthority, settingsAuthority, auditAuthority,
+    archiveAuthority,
   ] = await Promise.all([
     storage.health(),
     redisHealth(),
     objectStoreHealth(),
     USE_PG_PAYMENTS
-      ? relationalQuery(
+      ? readinessQuery(
           `SELECT
              to_regclass('public.payment_orders') IS NOT NULL AS orders,
              to_regclass('public.payment_transactions') IS NOT NULL AS transactions,
@@ -181,7 +184,7 @@ app.get("/api/ready", async (_req, res) => {
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
     USE_PG_IDENTITY
-      ? relationalQuery(
+      ? readinessQuery(
           `SELECT
              to_regclass('public.users') IS NOT NULL AS users,
              to_regclass('public.audit_logs') IS NOT NULL AS audits,
@@ -204,7 +207,7 @@ app.get("/api/ready", async (_req, res) => {
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
     USE_PG_ATTEMPTS
-      ? relationalQuery(
+      ? readinessQuery(
           `SELECT
              to_regclass('public.assessment_attempts') IS NOT NULL AS attempts,
              to_regclass('public.proctoring_logs') IS NOT NULL AS proctoring,
@@ -235,7 +238,7 @@ app.get("/api/ready", async (_req, res) => {
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
     USE_PG_CERTIFICATES
-      ? relationalQuery(
+      ? readinessQuery(
           `SELECT
              to_regclass('public.issued_certificates') IS NOT NULL AS certificates,
              EXISTS (
@@ -282,7 +285,7 @@ app.get("/api/ready", async (_req, res) => {
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
     USE_PG_CANDIDATE_ASSESSMENTS
-      ? relationalQuery(
+      ? readinessQuery(
           `SELECT
              to_regclass('public.candidate_assessment_links') IS NOT NULL AS links,
              to_regclass('public.candidate_assessment_submissions') IS NOT NULL AS submissions,
@@ -306,7 +309,7 @@ app.get("/api/ready", async (_req, res) => {
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
     USE_PG_PRIVACY
-      ? relationalQuery(
+      ? readinessQuery(
           `SELECT
              to_regclass('public.privacy_requests') IS NOT NULL AS requests,
              to_regclass('public.privacy_erasure_objects') IS NOT NULL AS objects,
@@ -388,6 +391,20 @@ app.get("/api/ready", async (_req, res) => {
           dependencies: AUDIT_TRANSACTIONAL_DEPENDENCIES ? "complete" : "incomplete",
         }))
       : Promise.resolve({ ok: true, mode: "disabled", dependencies: "disabled" }),
+    (USE_PG_IDENTITY || USE_PG_COURSES)
+      ? Promise.resolve().then(() => relationalQuery(
+          `SELECT
+             to_regclass('public.deleted_archives') IS NOT NULL AS archives,
+             to_regclass('public.uq_deleted_archives_source_key') IS NOT NULL AS backfill_idempotency,
+             to_regclass('public.idx_deleted_archives_order') IS NOT NULL AS deterministic_ordering,
+             EXISTS (
+               SELECT 1 FROM pg_constraint
+               WHERE conname = 'deleted_archives_json_shape'
+             ) AS json_shape`
+        )).then(({ rows }) => ({
+          ok: Object.values(rows[0] || {}).every(Boolean), mode: "normalized",
+        })).catch(() => ({ ok: false, mode: "normalized" }))
+      : Promise.resolve({ ok: true, mode: "disabled" }),
   ]);
   // The relational learning workflow is still a partial cutover. Course,
   // chapter, progress and assessment authority exist, but secondary consumers
@@ -398,12 +415,14 @@ app.get("/api/ready", async (_req, res) => {
   };
   const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok
     && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok && privacyAuthority.ok
-    && reportAuthority.ok && settingsAuthority.ok && auditAuthority.ok && courseAuthority.ok;
+    && reportAuthority.ok && settingsAuthority.ok && auditAuthority.ok && archiveAuthority.ok
+    && courseAuthority.ok;
   if (!ok) logger.error("READINESS_CHECK_FAILED", {
     database, redis, objects, payments, identity, attempts: attemptRuntime,
     certificates: certificateAuthority, candidateAssessments: candidateRuntime,
     privacy: privacyAuthority, reports: reportAuthority, settings: settingsAuthority,
     audit: auditAuthority,
+    archives: archiveAuthority,
     courses: courseAuthority, startupReady,
   });
   res.status(ok ? 200 : 503).json({
@@ -434,6 +453,7 @@ app.get("/api/ready", async (_req, res) => {
         mode: auditAuthority.mode,
         dependencies: auditAuthority.dependencies,
       },
+      archives: { ok: archiveAuthority.ok, mode: archiveAuthority.mode },
       courses: courseAuthority,
     },
   });
@@ -502,6 +522,16 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   const authoritativeSecurityEvents = admin && USE_PG_AUDIT
     ? await securityEvidenceRepository.listSecurityEvents({ limit: 500 })
     : null;
+  const relationalArchiveTypes = [
+    ...(USE_PG_IDENTITY ? ["User"] : []),
+    ...(USE_PG_COURSES ? ["Course", "Assessment"] : []),
+  ];
+  const authoritativeArchives = superAdmin && relationalArchiveTypes.length
+    ? [
+        ...await archiveAuthorityRepository.listArchives({ entityTypes: relationalArchiveTypes }),
+        ...archives.filter((item) => !relationalArchiveTypes.includes(item.entityType)),
+      ].sort((a, b) => new Date(b.deletedAt).getTime() - new Date(a.deletedAt).getTime())
+    : archives;
   const scopedCertificates = USE_PG_CERTIFICATES
     ? await certificatesPgRepository.listForUser(req.user)
     : issuedCertificates.filter((cert) => admin || visibleUserIds.has(cert.employeeId));
@@ -531,7 +561,7 @@ app.get("/api/app-data", authenticate, async (req, res) => {
     reportExports: scopedReports,
     settings: authoritativeSettings,
     issuedCertificates: scopedCertificates,
-    archives: superAdmin ? redactSensitive(archives) : [],
+    archives: superAdmin ? redactSensitive(authoritativeArchives) : [],
     skills: allSkills,
     targetSkills: allTargetSkills.filter((target) => targetSkillVisibleTo(target, req.user)),
     skillRatings: scopedSkillRatings,

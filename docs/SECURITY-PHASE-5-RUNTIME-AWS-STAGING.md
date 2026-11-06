@@ -75,5 +75,8 @@ mandatory staging gates, not assumed successes.
   Phase 32 adds feature-gated relational audit/security evidence, a fail-closed
   response write gate and a live database verifier; AWS keeps the cutover off
   until staging proof and the remaining transactional authority work complete.
+  Phase 33 adds complete relational course/assessment archives and a
+  review-gated restore verifier; course authority remains disabled pending the
+  remaining learning consumers and live RDS proof.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

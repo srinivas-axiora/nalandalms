@@ -67,6 +67,9 @@ backend/src/db/verify-learning.mjs                live lock/time/idempotency ver
 database/migrations/0013_assessment_authority.sql assessment versions + active-attempt invariant
 backend/src/repositories/assessment-authority.repository.pg.js transactional assessment authority
 backend/src/db/verify-assessments.mjs             live authoring/eligibility/attempt verifier
+database/migrations/0019_archive_authority.sql     archive integrity/backfill controls
+backend/src/repositories/archive-authority.repository.pg.js transactional archive restore authority
+backend/src/db/verify-archives.mjs                 live complete archive/restore verifier
 ```
 
 The **skills** bounded context is the pilot (like the certificates pilot for the
@@ -117,6 +120,7 @@ npm run db:verify-courses
 npm run db:verify-learning
 npm run db:verify-assessments
 npm run db:verify-security-evidence
+npm run db:verify-archives
 ```
 
 If `verify-skills.mjs` prints all `ok`, the pilot pattern is sound and we proceed
@@ -230,8 +234,10 @@ For each bounded context, in roughly ascending coupling:
       metadata scrubbing, fail-closed request evidence draining, backfill,
       governance/app-data projections and live verifier are implemented behind
       `USE_PG_AUDIT=1` (Phase 32; live RDS proof pending)
-- [ ] course/assessment archive authority and remaining legacy archive
-      projections; candidate analytics now reads normalized submissions
+- [x] course/assessment archive authority captures complete question state,
+      restores atomically as inactive draft content, backfills legacy archives
+      idempotently and serves governance projections behind `USE_PG_COURSES=1`
+      (Phase 33; live RDS verifier and legacy-incomplete reconciliation pending)
 - [ ] remove the in-memory arrays + JSON-blob adapter; externalize rate-limit /
       session / lockout state to enable **multi-instance** horizontal scaling
 

@@ -91,8 +91,8 @@ response fails closed without unhandled promise rejection.
 - Database-owner tamper resistance, append-only external export, retention
   policy, alerting and restore evidence remain required for production audit
   assurance.
-- Course/assessment archives still have snapshot-backed projections outside
-  the relational user archive path.
+- Course/assessment archive authority was completed in Phase 33; its live RDS
+  verifier and legacy-incomplete archive reconciliation remain pending.
 - Live AWS, load, failover, restore, payment reconciliation and privacy-erasure
   drills remain outstanding.
 
