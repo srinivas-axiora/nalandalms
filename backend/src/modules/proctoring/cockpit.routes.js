@@ -9,9 +9,11 @@ import { getExamClock } from "../assessments/exam.service.js";
 import { postSignal } from "./signaling.js";
 import { ENROLLMENT_STATUS } from "../enrollments/progress.service.js";
 import { attemptsRepository, AttemptRepositoryError } from "../../repositories/attempts.repository.pg.js";
+import { proctorCockpitRepository } from "../../repositories/proctor-cockpit.repository.pg.js";
 import { upsertAttemptProjection } from "../../attempt-projection.js";
 
 const USE_PG_ATTEMPTS = process.env.USE_PG_ATTEMPTS === "1";
+const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 const attemptErrorStatus = (error) => {
   if (!(error instanceof AttemptRepositoryError)) return error.status || 400;
   if (error.code === "ATTEMPT_NOT_FOUND") return 404;
@@ -39,23 +41,31 @@ const commitAttemptMutation = async (attempt, {
   return upsertAttemptProjection(saved);
 };
 
-export function registerCockpit(app) {
+export function registerCockpit(app, options = {}) {
+  const usePgCourses = options.usePgCourses ?? USE_PG_COURSES;
+  const cockpitAuthority = options.proctorCockpitRepository || proctorCockpitRepository;
+
   // ── Live Active Exam Sessions Grid ──
   app.get("/api/proctoring/cockpit/active", authenticate, requireRole("Admin", "Manager", "Instructor"), async (req, res) => {
-    const attemptSource = USE_PG_ATTEMPTS
-      ? await attemptsRepository.list({ statuses: ["InProgress", "Paused"] })
-      : attempts;
-    const activeAttempts = attemptSource.filter((attempt) => (
-      (attempt.status === "InProgress" || attempt.status === "Paused")
-      && canControlProctoring(req.user, attempt)
-    ));
+    const activeContexts = usePgCourses
+      ? await cockpitAuthority.listActiveForActor(req.user)
+      : (USE_PG_ATTEMPTS ? await attemptsRepository.list({ statuses: ["InProgress", "Paused"] }) : attempts)
+        .filter((attempt) => (
+          (attempt.status === "InProgress" || attempt.status === "Paused")
+          && canControlProctoring(req.user, attempt)
+        ))
+        .map((attempt) => ({
+          attempt,
+          candidate: users.find((user) => user.id === attempt.userId),
+          assessment: assessments.find((item) => item.id === attempt.assessmentId),
+          course: courses.find((item) => item.id === attempt.courseId),
+        }));
 
-    const sessionGrid = activeAttempts.map((attempt) => {
-      const user = users.find((u) => u.id === attempt.userId);
-      const assessment = assessments.find((asm) => asm.id === attempt.assessmentId);
-      const course = courses.find((c) => c.id === attempt.courseId);
-
-      const clock = assessment ? getExamClock(attempt, assessment) : { durationSeconds: 0, timeRemainingSeconds: 0 };
+    const sessionGrid = activeContexts.map(({ attempt, candidate, assessment, course }) => {
+      const clockAssessment = {
+        durationMinutes: attempt.durationMinutesSnapshot || assessment?.durationMinutes || 0,
+      };
+      const clock = getExamClock(attempt, clockAssessment);
       const flags = attempt.flags || [];
       const trustScore = attempt.trustScore ?? 100;
 
@@ -70,8 +80,8 @@ export function registerCockpit(app) {
       return {
         attemptId: attempt.id,
         candidateId: attempt.userId,
-        candidateName: user?.name || "Unknown Candidate",
-        candidateEmail: user?.email || "",
+        candidateName: candidate?.name || "Unknown Candidate",
+        candidateEmail: candidate?.email || "",
         courseId: attempt.courseId,
         courseTitle: course?.title || "Unknown Course",
         assessmentId: attempt.assessmentId,

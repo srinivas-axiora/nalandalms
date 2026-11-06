@@ -84,5 +84,8 @@ mandatory staging gates, not assumed successes.
   Phase 35 also removes stale snapshot ownership from relational attempt
   authorization; reassignment and revocation still require multi-task RDS
   evidence before cutover.
+  Phase 36 moves the active proctor cockpit grid to a minimal, SQL-scoped
+  projection; live concurrency and ownership-change behavior remain staging
+  gates.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

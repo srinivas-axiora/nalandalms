@@ -119,7 +119,7 @@ or step-up middleware disagrees with its declaration.
 | POST | `/api/proctoring/companion/pair` | Public token | Y | Exempt | N | G | Pair token expiry present; reusable token not deleted |
 | POST | `/api/proctoring/attempts/:attemptId/companion/ping` | Public token | Y | Exempt | N | G | Scoped companion token bound to attempt, candidate and session version |
 | GET | `/api/proctoring/attempts/:attemptId/companion/status` | Any | N | N/A | N | G | Central attempt view policy |
-| GET | `/api/proctoring/cockpit/active` | A/M/I | N | N/A | N | G | Manager sees all; Instructor owned-course filter only |
+| GET | `/api/proctoring/cockpit/active` | A/M/I | N | N/A | N | G | Phase-36 relational mode scopes assigned proctor/assessment owner/course owner in SQL; minimal projection excludes answers and question maps |
 | POST | `/api/proctoring/attempts/:attemptId/warn` | A/M/I | Y | Y | Y | G | Central attempt policy plus step-up |
 | GET | `/api/assessments/attempts/:attemptId/warnings` | Any | N | N/A | N | G | Central attempt view policy |
 | POST | `/api/assessments/attempts/:attemptId/warnings/:warningId/ack` | Any | Y | Y | N | G | Candidate/admin plus central attempt view policy |

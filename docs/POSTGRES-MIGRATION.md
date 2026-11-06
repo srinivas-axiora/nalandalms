@@ -229,7 +229,8 @@ For each bounded context, in roughly ascending coupling:
 - [ ] remaining enrollment consumers; Phase 34 moved local Copilot course,
       enrollment, chapter and assessment projections to scoped relational
       authorities, and relational candidate-link creation already uses the
-      assessment authority when both cutover flags are enabled
+      assessment authority when both cutover flags are enabled; Phase 36 moved
+      the active proctor cockpit to a minimal SQL-scoped learning projection
 - [x] attempts (+ answers/flags as JSONB; reconcile status CHECK)
 - [x] proctoring_logs  ·  certificates
 - [x] application-wide audit/security-event repository, recursive database
