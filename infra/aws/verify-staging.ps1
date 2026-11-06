@@ -6,6 +6,8 @@ param(
   [string]$ExpectedCloudFrontCertificateArn = "",
   [string]$ExpectedOriginDomainName = "",
   [string]$ExpectedOriginCertificateArn = "",
+  [Parameter(Mandatory = $true)][string]$ExpectedContainerImage,
+  [Parameter(Mandatory = $true)][string]$ExpectedSourceRevision,
   [switch]$RequireEndToEndTls,
   [string]$EvidencePath = ""
 )
@@ -47,8 +49,19 @@ if ($originValues.Count -and $viewerValues.Count -ne 2) {
 if ($RequireEndToEndTls -and ($viewerValues.Count -ne 2 -or $originValues.Count -ne 2)) {
   throw "RequireEndToEndTls requires both expected viewer and origin TLS tuples."
 }
+if ($ExpectedContainerImage -notmatch '^(?<registry>[^/]+)/(?<repository>[a-z0-9][a-z0-9._/-]{1,255})@(?<digest>sha256:[0-9a-f]{64})$') {
+  throw "ExpectedContainerImage must be an ECR image URI pinned to a sha256 digest."
+}
+$expectedRegistry = [string]$Matches.registry
+$expectedRepository = [string]$Matches.repository
+$expectedImageDigest = [string]$Matches.digest
+if ($ExpectedSourceRevision -notmatch '^[0-9a-f]{40}$') {
+  throw "ExpectedSourceRevision must be a full 40-character Git commit."
+}
 
 $identity = Invoke-AwsJson @("sts", "get-caller-identity")
+Assert-Condition ($expectedRegistry.StartsWith("$($identity.Account).dkr.ecr.$Region.")) `
+  "The expected image registry does not belong to the authenticated account and region."
 $stackEnvelope = Invoke-AwsJson @("cloudformation", "describe-stacks", "--stack-name", $StackName)
 $stack = @($stackEnvelope.Stacks)[0]
 Assert-Condition ($null -ne $stack) "CloudFormation stack '$StackName' was not found."
@@ -66,6 +79,55 @@ $listenerArn = Get-RequiredOutput $outputs "ApplicationListenerArn"
 $loadBalancerSecurityGroupId = Get-RequiredOutput $outputs "LoadBalancerSecurityGroupId"
 $originPrefixListId = Get-RequiredOutput $outputs "CloudFrontOriginPrefixListId"
 $expectedWebAclArn = Get-RequiredOutput $outputs "RegionalWebAclArn"
+$taskDefinitionArn = Get-RequiredOutput $outputs "TaskDefinitionArn"
+$clusterName = Get-RequiredOutput $outputs "ClusterName"
+$serviceName = Get-RequiredOutput $outputs "ServiceName"
+$deployedSourceRevision = Get-RequiredOutput $outputs "SourceRevision"
+Assert-Condition ($deployedSourceRevision -eq $ExpectedSourceRevision) `
+  "The stack source revision does not match the expected Git commit."
+
+$taskDefinitionEnvelope = Invoke-AwsJson @("ecs", "describe-task-definition", "--task-definition", $taskDefinitionArn)
+$taskContainer = @($taskDefinitionEnvelope.taskDefinition.containerDefinitions | Where-Object { $_.name -eq "nalanda" })[0]
+Assert-Condition ($null -ne $taskContainer) "The Nalanda task container is missing."
+Assert-Condition ([string]$taskContainer.image -eq $ExpectedContainerImage) `
+  "The task definition image does not match the expected immutable digest."
+$revisionLabel = $null
+if ($null -ne $taskContainer.dockerLabels) {
+  $revisionLabel = $taskContainer.dockerLabels.PSObject.Properties["org.opencontainers.image.revision"]
+}
+Assert-Condition ($null -ne $revisionLabel -and [string]$revisionLabel.Value -eq $ExpectedSourceRevision) `
+  "The task definition source-revision label does not match the expected Git commit."
+
+$serviceEnvelope = Invoke-AwsJson @("ecs", "describe-services", "--cluster", $clusterName, "--services", $serviceName)
+$service = @($serviceEnvelope.services)[0]
+Assert-Condition ($null -ne $service -and [string]$service.status -eq "ACTIVE") `
+  "The ECS service is not active."
+Assert-Condition ([string]$service.taskDefinition -eq $taskDefinitionArn) `
+  "The ECS service is not running the stack task definition."
+Assert-Condition ([int]$service.desiredCount -eq 1 -and [int]$service.runningCount -eq 1 -and [int]$service.pendingCount -eq 0) `
+  "The single-writer staging service is not at a stable 1/1 task count."
+$primaryDeployment = @($service.deployments | Where-Object { $_.status -eq "PRIMARY" })[0]
+Assert-Condition ($null -ne $primaryDeployment -and [string]$primaryDeployment.rolloutState -eq "COMPLETED") `
+  "The ECS primary deployment has not completed."
+
+$scanEnvelope = Invoke-AwsJson @(
+  "ecr", "describe-image-scan-findings",
+  "--repository-name", $expectedRepository,
+  "--image-id", "imageDigest=$expectedImageDigest",
+  "--no-paginate"
+)
+$scanStatus = [string]$scanEnvelope.imageScanStatus.status
+Assert-Condition (@("COMPLETE", "ACTIVE") -contains $scanStatus) `
+  "The deployed image scan is not complete or active: $scanStatus"
+$severityCounts = $null
+$severityProperty = $scanEnvelope.imageScanFindings.PSObject.Properties["findingSeverityCounts"]
+if ($null -ne $severityProperty) { $severityCounts = $severityProperty.Value }
+$criticalProperty = if ($null -ne $severityCounts) { $severityCounts.PSObject.Properties["CRITICAL"] } else { $null }
+$highProperty = if ($null -ne $severityCounts) { $severityCounts.PSObject.Properties["HIGH"] } else { $null }
+$criticalFindings = if ($null -eq $criticalProperty) { 0 } else { [int]$criticalProperty.Value }
+$highFindings = if ($null -eq $highProperty) { 0 } else { [int]$highProperty.Value }
+Assert-Condition ($criticalFindings -eq 0 -and $highFindings -eq 0) `
+  "The deployed image scan contains $criticalFindings critical and $highFindings high findings."
 
 $distributionEnvelope = Invoke-AwsJson @("cloudfront", "get-distribution", "--id", $distributionId)
 $distribution = $distributionEnvelope.Distribution
@@ -197,6 +259,18 @@ $evidence = [ordered]@{
     endToEndTlsRequired = [bool]$RequireEndToEndTls
     endToEndTlsVerified = [bool]$originTlsEnabled
     regionalWebAclArn = [string]$webAclEnvelope.WebACL.ARN
+  }
+  supplyChain = [ordered]@{
+    sourceRevision = $ExpectedSourceRevision
+    taskDefinitionArn = $taskDefinitionArn
+    containerImage = $ExpectedContainerImage
+    imageDigest = $expectedImageDigest
+    imageScanStatus = $scanStatus
+    criticalFindings = $criticalFindings
+    highFindings = $highFindings
+    desiredTasks = [int]$service.desiredCount
+    runningTasks = [int]$service.runningCount
+    rolloutState = [string]$primaryDeployment.rolloutState
   }
 }
 

@@ -48,7 +48,10 @@ $env:AWS_PROFILE = "YOUR_PROFILE"
 CloudFront provisioning commonly takes several minutes. The script prints the
 application URL and operational resource identifiers after the stack completes.
 Before deployment the script validates the template with CloudFormation, builds
-and pushes an immutable image, and blocks on any critical/high ECR scan finding.
+and pushes an immutable image from a clean Git worktree, and blocks on any
+critical/high ECR scan finding. It then resolves the scanned manifest digest and
+passes the digest URI—not the mutable tag—to the ECS task definition together
+with the full Git revision.
 `-PrepareRelationalDatabase` runs the guarded baseline/migrations and an
 idempotent snapshot backfill inside the VPC. `-RunRelationalVerifiers` then runs
 all current live PostgreSQL verification programs as isolated ECS tasks. Neither
@@ -91,7 +94,9 @@ and certificates match, the ALB exposes one approved listener, its security
 group is scoped only to the CloudFront managed prefix list, the regional WAF is
 attached and `/api/ready` succeeds. It writes a redacted JSON attestation under
 `artifacts/aws/` by default; Git ignores that directory, so copy the result to
-the controlled release record.
+the controlled release record. The attestation also proves the task definition
+and active ECS service use the expected digest and revision, the service is at a
+stable 1/1 single-writer count, and ECR reports no critical or high findings.
 
 The verification can also be rerun without redeploying:
 
@@ -103,6 +108,8 @@ The verification can also be rerun without redeploying:
   -ExpectedCloudFrontCertificateArn $cloudFrontCertificateArn `
   -ExpectedOriginDomainName origin.staging.example.com `
   -ExpectedOriginCertificateArn $originCertificateArn `
+  -ExpectedContainerImage $expectedContainerImageDigestUri `
+  -ExpectedSourceRevision $expectedGitRevision `
   -RequireEndToEndTls `
   -EvidencePath artifacts/aws/nalanda-staging-attestation.json
 ```

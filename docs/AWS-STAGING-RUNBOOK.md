@@ -49,12 +49,15 @@ Run `infra/aws/deploy-staging.ps1` using the three secret ARNs. The script:
 
 1. verifies AWS identity and validates the template through CloudFormation;
 2. creates or locates the immutable/scanned ECR repository;
-3. builds and pushes an immutable ARM64 image;
+3. refuses a dirty worktree, builds and pushes an immutable ARM64 image;
 4. waits for ECR scanning and rejects any critical/high finding;
-5. deploys the CloudFormation stack;
-6. optionally runs guarded schema/bootstrap/backfill and every relational live
+5. resolves the scanned manifest digest and deploys that digest with the full
+   Git revision embedded in the task definition;
+6. deploys the CloudFormation stack;
+7. optionally runs guarded schema/bootstrap/backfill and every relational live
    verifier as isolated ECS tasks; and
-7. requires a successful CloudFront readiness response before printing outputs.
+8. requires readiness plus deployed edge, image, task and scan attestation
+   before printing outputs.
 
 For a new staging database, prepare (but do not enable) the normalized tables:
 
@@ -138,6 +141,10 @@ Do not use real learner/candidate PII or real payments in this staging stack.
   record. Review its account, region, stack, distribution, listener,
   prefix-list, WAF and readiness fields; evidence from another account or stack
   is not transferable.
+- Confirm the attestation's source revision equals the release commit, the
+  container image contains `@sha256:`, the ECS task definition and primary
+  service deployment match, the rollout is complete, and critical/high ECR
+  counts are both zero.
 - Retrieve the generated bootstrap administrator secret, log in once, change
   the account password and rotate/remove bootstrap access.
 - Review CloudWatch errors and ALB target health for at least one normal user

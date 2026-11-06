@@ -8,7 +8,12 @@ Parameters:
     AllowedPattern: "[a-z0-9-]+"
   ContainerImage:
     Type: String
-    Description: Immutable ECR image URI including tag or digest
+    AllowedPattern: '^[^\s]+@sha256:[0-9a-f]{64}$'
+    Description: Immutable ECR image URI pinned to a sha256 manifest digest
+  SourceRevision:
+    Type: String
+    AllowedPattern: '^[0-9a-f]{40}$'
+    Description: Full Git commit revision used to build the container image
   DatabaseName:
     Type: String
     Default: nalanda
@@ -763,6 +768,8 @@ Resources:
       ContainerDefinitions:
         - Name: nalanda
           Image: !Ref ContainerImage
+          DockerLabels:
+            org.opencontainers.image.revision: !Ref SourceRevision
           Essential: true
           PortMappings:
             - ContainerPort: 8080
@@ -1299,6 +1306,8 @@ Outputs:
     Value: !GetAtt Database.MasterUserSecret.SecretArn
   TaskDefinitionArn:
     Value: !Ref TaskDefinition
+  SourceRevision:
+    Value: !Ref SourceRevision
   PublicSubnetIds:
     Value: !Join [",", [!Ref PublicSubnetA, !Ref PublicSubnetB]]
   ApplicationSecurityGroupId:

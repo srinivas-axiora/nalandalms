@@ -78,6 +78,7 @@ if (
   || !outputs?.ApplicationListenerArn
   || !outputs?.LoadBalancerSecurityGroupId
   || !outputs?.CloudFrontOriginPrefixListId
+  || !outputs?.SourceRevision
 ) {
   throw new Error("Required application, edge, WAF, access-log or malware-protection outputs are missing.");
 }

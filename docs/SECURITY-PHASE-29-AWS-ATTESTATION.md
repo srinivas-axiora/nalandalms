@@ -35,6 +35,8 @@ resource and hostname identifiers even though it contains no secret values.
 - Records timestamp, AWS account, region, stack, CloudFront, listener,
   security-group, WAF and readiness facts as JSON without credentials or secret
   values.
+- Phase 30 extends the same artifact with Git revision, digest-pinned image,
+  task-definition/service convergence and ECR scan evidence.
 
 ## Local evidence
 

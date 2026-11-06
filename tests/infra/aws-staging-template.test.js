@@ -147,4 +147,23 @@ describe("AWS staging release controls", () => {
     expect(verificationScript).toContain("The ALB security group must have exactly one ingress rule");
     expect(verificationScript).toContain("Set-Content -LiteralPath $resolvedEvidencePath");
   });
+
+  it("deploys and attests the scanned image by digest and source revision", () => {
+    expect(template).toContain("Description: Immutable ECR image URI pinned to a sha256 manifest digest");
+    expect(template).toContain("SourceRevision:");
+    expect(template).toContain("org.opencontainers.image.revision: !Ref SourceRevision");
+    expect(deploymentScript).toContain("git status --porcelain --untracked-files=normal");
+    expect(deploymentScript).toContain("The Git worktree must be clean before building a release image");
+    expect(deploymentScript).toContain('"imageDetails[0].imageDigest"');
+    expect(deploymentScript).toContain("$deployedImage = \"$repositoryUri@$($imageDigest.Trim())\"");
+    expect(deploymentScript).toContain("$scan.imageScanFindings.findingSeverityCounts");
+    expect(deploymentScript).not.toContain("findingsSeverityCounts");
+    expect(verificationScript).toContain('\"ecs\", \"describe-task-definition\"');
+    expect(verificationScript).toContain('\"ecs\", \"describe-services\"');
+    expect(verificationScript).toContain('\"ecr\", \"describe-image-scan-findings\"');
+    expect(verificationScript).toContain("The task definition image does not match the expected immutable digest");
+    expect(verificationScript).toContain("The ECS primary deployment has not completed");
+    expect(verificationScript).toContain("findingSeverityCounts");
+    expect(verificationScript).toContain("supplyChain = [ordered]@{");
+  });
 });

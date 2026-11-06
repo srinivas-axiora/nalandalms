@@ -18,7 +18,19 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-if (-not $ImageTag) { $ImageTag = (git rev-parse --short=12 HEAD).Trim() }
+$sourceRevision = (git rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or $sourceRevision -notmatch '^[0-9a-f]{40}$') {
+  throw "A valid Git source revision is required before deployment."
+}
+$worktreeChanges = @(git status --porcelain --untracked-files=normal)
+if ($LASTEXITCODE -ne 0) { throw "Unable to verify Git worktree state." }
+if ($worktreeChanges.Count -gt 0) {
+  throw "The Git worktree must be clean before building a release image."
+}
+if (-not $ImageTag) { $ImageTag = $sourceRevision.Substring(0, 12) }
+if ($ImageTag -notmatch '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$') {
+  throw "ImageTag is not a valid ECR tag."
+}
 if (-not $EvidencePath) { $EvidencePath = "artifacts/aws/$StackName-$ImageTag-attestation.json" }
 $customDomainValues = @(@($CustomDomainName, $HostedZoneId, $CloudFrontCertificateArn) | Where-Object { $_ })
 if ($customDomainValues.Count -ne 0 -and $customDomainValues.Count -ne 3) {
@@ -76,10 +88,10 @@ $registry = "$($identity.Account).dkr.ecr.$Region.amazonaws.com"
 aws ecr get-login-password --region $Region | docker login --username AWS --password-stdin $registry
 if ($LASTEXITCODE -ne 0) { throw "ECR login failed." }
 
-$image = "$repositoryUri`:$ImageTag"
-docker build --platform linux/arm64 --tag $image .
+$taggedImage = "$repositoryUri`:$ImageTag"
+docker build --platform linux/arm64 --tag $taggedImage .
 if ($LASTEXITCODE -ne 0) { throw "Container build failed." }
-docker push $image
+docker push $taggedImage
 if ($LASTEXITCODE -ne 0) { throw "Container push failed." }
 
 Write-Host "Waiting for ECR vulnerability scan..."
@@ -94,16 +106,27 @@ $scan = aws ecr describe-image-scan-findings `
   --region $Region `
   --output json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw "Unable to retrieve ECR image scan findings." }
-$severity = $scan.imageScanFindings.findingsSeverityCounts
+$severity = $scan.imageScanFindings.findingSeverityCounts
 $criticalFindings = if ($null -eq $severity.CRITICAL) { 0 } else { [int]$severity.CRITICAL }
 $highFindings = if ($null -eq $severity.HIGH) { 0 } else { [int]$severity.HIGH }
 if ($criticalFindings -gt 0 -or $highFindings -gt 0) {
   throw "ECR image scan failed the release gate: $criticalFindings critical, $highFindings high findings."
 }
+$imageDigest = aws ecr describe-images `
+  --repository-name $repositoryName `
+  --image-ids "imageTag=$ImageTag" `
+  --region $Region `
+  --query "imageDetails[0].imageDigest" `
+  --output text
+if ($LASTEXITCODE -ne 0 -or $imageDigest -notmatch '^sha256:[0-9a-f]{64}$') {
+  throw "Unable to resolve the scanned ECR image to an immutable sha256 digest."
+}
+$deployedImage = "$repositoryUri@$($imageDigest.Trim())"
 
 $parameterOverrides = @(
   "EnvironmentName=$StackName",
-  "ContainerImage=$image",
+  "ContainerImage=$deployedImage",
+  "SourceRevision=$sourceRevision",
   "RazorpayKeyIdSecretArn=$RazorpayKeyIdSecretArn",
   "RazorpayKeySecretArn=$RazorpayKeySecretArn",
   "RazorpayWebhookSecretArn=$RazorpayWebhookSecretArn",
@@ -227,6 +250,8 @@ Write-Host "Running deployed AWS control attestation..."
   -ExpectedCloudFrontCertificateArn $CloudFrontCertificateArn `
   -ExpectedOriginDomainName $OriginDomainName `
   -ExpectedOriginCertificateArn $OriginCertificateArn `
+  -ExpectedContainerImage $deployedImage `
+  -ExpectedSourceRevision $sourceRevision `
   -RequireEndToEndTls:([bool]$OriginDomainName) `
   -EvidencePath $EvidencePath
 
