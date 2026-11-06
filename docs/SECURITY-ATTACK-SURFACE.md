@@ -187,6 +187,10 @@ The runtime-data ignore is anchored to `/uploads/`, so source modules under an
 | POST | `/api/ai/generate-course-stream` | A/M | Y | Y | N | G+AI | Phase-20 strict 50-50,000 character input, 1-20 chapters and explicit provider opt-in; NDJSON errors can occur after HTTP 200 |
 | POST | `/api/ai/generate-course` | A/M | Y | Y | N | G+AI | Phase-20 single draft-only handler; strict shared input schema and no direct content-authority mutation |
 
+Attempt permission middleware uses only relational attempt principals and
+relational assessment/course ownership when `USE_PG_COURSES=1`; stale snapshot
+ownership cannot authorize view, control or grading operations (Phase 35).
+
 ## Highest-priority route mismatches
 
 1. Public registration can create an Instructor, while Instructor is trusted by

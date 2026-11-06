@@ -86,6 +86,16 @@ const ATTEMPT_POLICIES = Object.freeze({
   grade: canGradeAttempt,
 });
 
+const RELATIONAL_ATTEMPT_STAFF_ROLES = new Set(["Manager", "Instructor"]);
+
+const canDirectlyAccessRelationalAttempt = (user, attempt, permission) => {
+  if (!user || !attempt) return false;
+  if (isAdminRole(user.role)) return true;
+  if (permission === "view" && attempt.userId === user.id) return true;
+  return RELATIONAL_ATTEMPT_STAFF_ROLES.has(user.role)
+    && assignedProctorId(attempt) === user.id;
+};
+
 export const requireAttemptPermission = (permission) => {
   const policy = ATTEMPT_POLICIES[permission];
   if (!policy) throw new TypeError(`Unknown attempt permission: ${permission}`);
@@ -96,12 +106,20 @@ export const requireAttemptPermission = (permission) => {
         ? await attemptsRepository.findById(attemptId)
         : attempts.find((item) => item.id === attemptId);
       if (!persisted) return res.status(404).json({ error: "Exam attempt not found" });
-      let authorized = policy(req.user, persisted);
-      if (!authorized && USE_PG_COURSES && ["view", "control", "grade"].includes(permission)) {
-        authorized = await assessmentAuthorityRepository.canManageAssessment({
-          id: persisted.assessmentId,
-          actor: req.user,
-        });
+      let authorized;
+      if (USE_PG_COURSES) {
+        // Never mix a relational attempt with process-local course ownership.
+        // Direct principals come from the authoritative attempt row; all
+        // course/assessment ownership is resolved by PostgreSQL.
+        authorized = canDirectlyAccessRelationalAttempt(req.user, persisted, permission);
+        if (!authorized && RELATIONAL_ATTEMPT_STAFF_ROLES.has(req.user?.role)) {
+          authorized = await assessmentAuthorityRepository.canManageAssessment({
+            id: persisted.assessmentId,
+            actor: req.user,
+          });
+        }
+      } else {
+        authorized = policy(req.user, persisted);
       }
       if (!authorized) return res.status(403).json({ error: "Forbidden" });
       if (USE_RELATIONAL_ATTEMPTS) upsertAttemptProjection(persisted);

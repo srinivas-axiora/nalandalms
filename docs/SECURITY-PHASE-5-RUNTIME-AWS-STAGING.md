@@ -81,5 +81,8 @@ mandatory staging gates, not assumed successes.
   Phase 34 removes snapshot learning projections from local Copilot commands;
   AWS still keeps course authority disabled until all remaining consumers and
   multi-task staging evidence are complete.
+  Phase 35 also removes stale snapshot ownership from relational attempt
+  authorization; reassignment and revocation still require multi-task RDS
+  evidence before cutover.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.
