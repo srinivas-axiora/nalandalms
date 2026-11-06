@@ -20,6 +20,17 @@ const mapChapter = (r) => ({
   updatedAt: iso(r.updated_at),
 });
 
+const mapChapterMetadata = (r) => ({
+  id: r.id,
+  courseId: r.course_id,
+  sequence: r.sequence,
+  title: r.title,
+  description: r.description || "",
+  durationMinutes: r.duration_minutes,
+  minimumTimeMinutes: r.minimum_time_minutes ?? 1,
+  version: Number(r.version || 1),
+});
+
 export async function listChapters(courseId) {
   let sql = "SELECT * FROM chapters";
   const params = [];
@@ -30,6 +41,19 @@ export async function listChapters(courseId) {
   sql += " ORDER BY sequence ASC, created_at ASC";
   const { rows } = await query(sql, params);
   return rows.map(mapChapter);
+}
+
+export async function listChapterMetadata(courseId) {
+  if (!courseId) return [];
+  const { rows } = await query(
+    `SELECT id, course_id, sequence, title, description,
+            duration_minutes, minimum_time_minutes, version
+       FROM chapters
+      WHERE course_id = $1
+      ORDER BY sequence ASC, created_at ASC`,
+    [courseId]
+  );
+  return rows.map(mapChapterMetadata);
 }
 
 export async function findChapterById(id) {

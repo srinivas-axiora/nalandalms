@@ -78,5 +78,8 @@ mandatory staging gates, not assumed successes.
   Phase 33 adds complete relational course/assessment archives and a
   review-gated restore verifier; course authority remains disabled pending the
   remaining learning consumers and live RDS proof.
+  Phase 34 removes snapshot learning projections from local Copilot commands;
+  AWS still keeps course authority disabled until all remaining consumers and
+  multi-task staging evidence are complete.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

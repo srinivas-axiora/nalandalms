@@ -16,8 +16,37 @@ import {
   persist
 } from "../../core.js";
 import * as skillsRepository from "../../repositories/skills.repository.pg.js";
+import * as enrollmentsRepository from "../../repositories/enrollments.repository.pg.js";
+import * as chaptersRepository from "../../repositories/chapters.repository.pg.js";
+import { courseAuthorityRepository } from "../../repositories/courses-authority.repository.pg.js";
+import { assessmentAuthorityRepository } from "../../repositories/assessment-authority.repository.pg.js";
 
 const USE_PG_SKILLS = process.env.USE_PG_SKILLS === "1" || process.env.USE_PG === "1";
+const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
+
+const learningSourceFor = async (user, {
+  includeEnrollments = false,
+  includeChapters = false,
+  includeAssessments = false,
+} = {}) => {
+  if (!USE_PG_COURSES) {
+    return { courseList: courses, chapterList: chapters, assessmentList: assessments, enrollmentList: assignments };
+  }
+  const [courseList, enrollmentList, assessmentList] = await Promise.all([
+    courseAuthorityRepository.listVisible({ actor: user, status: "Active" }),
+    includeEnrollments ? enrollmentsRepository.listEnrollments({ userId: user.id }) : Promise.resolve([]),
+    includeAssessments
+      ? assessmentAuthorityRepository.listVisible({ actor: user, status: "Active" })
+      : Promise.resolve([]),
+  ]);
+  const visibleCourseIds = new Set(courseList.map((course) => course.id));
+  const chapterList = includeChapters
+    ? (await Promise.all(
+        [...visibleCourseIds].map((courseId) => chaptersRepository.listChapterMetadata(courseId))
+      )).flat()
+    : [];
+  return { courseList, chapterList, assessmentList, enrollmentList };
+};
 
 // Global general questions for fallback quiz
 const GENERAL_QUIZ_QUESTIONS = [
@@ -260,7 +289,8 @@ I am your local code-driven training assistant. Here are the categories of tasks
 
   // 4. Training / Course Commands
   if (msg === "my courses" || msg.includes("enrolled courses") || msg.includes("list courses")) {
-    const myAssignments = assignments.filter(a => a.userId === user.id);
+    const { courseList, enrollmentList } = await learningSourceFor(user, { includeEnrollments: true });
+    const myAssignments = enrollmentList.filter(a => a.userId === user.id);
     if (myAssignments.length === 0) {
       return {
         reply: `🎓 You are not currently assigned to any courses. Contact your manager (**${user.managerId || "L&D Admin"}**) to request course assignments.`,
@@ -270,7 +300,7 @@ I am your local code-driven training assistant. Here are the categories of tasks
     }
 
     const courseDetails = myAssignments.map(a => {
-      const course = courses.find(c => c.id === a.courseId);
+      const course = courseList.find(c => c.id === a.courseId);
       const prog = a.progress || 0;
       const statusIcon = prog === 100 ? "✅" : "⏳";
       return `*   **${course?.title || a.courseId}**\n` +
@@ -287,7 +317,8 @@ I am your local code-driven training assistant. Here are the categories of tasks
   }
 
   if (msg === "all courses") {
-    const list = courses.map(c => `*   **${c.title}** (\`${c.id}\`)\n` +
+    const { courseList } = await learningSourceFor(user);
+    const list = courseList.map(c => `*   **${c.title}** (\`${c.id}\`)\n` +
                                    `    - Category: \`${c.category}\` | Skill: \`${c.skill}\` | Level: \`${c.targetLevel}\`\n` +
                                    `    - Duration: ~${c.estimatedHours} hours | Difficulty: \`${c.difficulty}\``).join("\n\n");
     return {
@@ -298,6 +329,7 @@ I am your local code-driven training assistant. Here are the categories of tasks
   }
 
   if (msg === "recommend" || msg.includes("recommend courses") || msg.includes("suggest courses") || msg.includes("course recommend")) {
+    const { courseList } = await learningSourceFor(user);
     const [recommendationSkills, recommendationTargets, recommendationRatings] = USE_PG_SKILLS
       ? await Promise.all([
           skillsRepository.listSkills(),
@@ -330,7 +362,7 @@ I am your local code-driven training assistant. Here are the categories of tasks
 
       if (score < target.targetScore) {
         // Recommend course targeting this skill
-        const matchingCourse = courses.find(c => c.skillIds.includes(target.skillId));
+        const matchingCourse = courseList.find(c => (c.skillIds || []).includes(target.skillId));
         gapRecommendations.push({
           skill: skillName,
           score,
@@ -366,6 +398,7 @@ I am your local code-driven training assistant. Here are the categories of tasks
   }
 
   if (msg.startsWith("course details") || msg.startsWith("course detail")) {
+    const { courseList, chapterList } = await learningSourceFor(user, { includeChapters: true });
     const term = message.replace(/course details|course detail/i, "").trim().toLowerCase();
     if (!term) {
       return {
@@ -374,7 +407,7 @@ I am your local code-driven training assistant. Here are the categories of tasks
         source: "local"
       };
     }
-    const course = courses.find(c => c.id.toLowerCase() === term || c.title.toLowerCase().includes(term));
+    const course = courseList.find(c => c.id.toLowerCase() === term || c.title.toLowerCase().includes(term));
     if (!course) {
       return {
         reply: `❌ Course matching "${term}" was not found in the catalog. Type **\`all courses\`** to view correct list.`,
@@ -383,8 +416,8 @@ I am your local code-driven training assistant. Here are the categories of tasks
       };
     }
 
-    const courseChapters = chapters.filter(ch => ch.courseId === course.id);
-    const chapterList = courseChapters.length > 0 
+    const courseChapters = chapterList.filter(ch => ch.courseId === course.id);
+    const courseChapterLines = courseChapters.length > 0
       ? courseChapters.map(ch => `${ch.sequence}. **${ch.title}** - *${ch.description}* (${ch.durationMinutes} min)`).join("\n")
       : "*No chapters uploaded yet.*";
 
@@ -393,7 +426,7 @@ I am your local code-driven training assistant. Here are the categories of tasks
              `*   **Description:** ${course.description}\n` +
              `*   **Skill Focus:** ${course.skill}\n` +
              `*   **Category:** ${course.category} | Estimated Time: ${course.estimatedHours} hours\n\n` +
-             `#### Syllabus:\n${chapterList}`,
+             `#### Syllabus:\n${courseChapterLines}`,
       model: "Nalanda Copilot (Local)",
       source: "local"
     };
@@ -563,13 +596,22 @@ I am your local code-driven training assistant. Here are the categories of tasks
 
     // Attempt to build questions from active context chapter/assessment
     if (context.courseTitle && context.chapterTitle) {
-      const course = courses.find(c => c.title === context.courseTitle);
-      const chapter = chapters.find(ch => ch.title === context.chapterTitle && ch.courseId === course?.id);
-      const assessment = assessments.find(asm => asm.chapterId === chapter?.id);
+      const { courseList, chapterList, assessmentList } = await learningSourceFor(user, {
+        includeChapters: true,
+        includeAssessments: true,
+      });
+      const course = courseList.find(c => c.title === context.courseTitle);
+      const chapter = chapterList.find(ch => ch.title === context.chapterTitle && ch.courseId === course?.id);
+      const assessment = assessmentList.find(asm => asm.chapterId === chapter?.id);
       
       if (assessment && assessment.questions && assessment.questions.length > 0) {
         // Find MCQ questions
-        const mcqs = assessment.questions.filter(q => q.type === "MCQ");
+        const mcqs = assessment.questions.filter(q => (
+          q.type === "MCQ"
+          && Number.isInteger(q.answer)
+          && Array.isArray(q.options)
+          && q.options.length >= 2
+        ));
         if (mcqs.length > 0) {
           quizQuestions = mcqs.slice(0, 3).map(q => ({
             prompt: q.prompt,

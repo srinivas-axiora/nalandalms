@@ -226,8 +226,10 @@ For each bounded context, in roughly ascending coupling:
       `USE_PG_SETTINGS=1`; app-data ratings/feedback and local AI recommendations
       use relational skill authority behind `USE_PG_SKILLS=1` (Phase 24; live
       verifier pending)
-- [ ] remaining enrollment consumers; relational candidate-link creation uses
-      the assessment authority when both cutover flags are enabled
+- [ ] remaining enrollment consumers; Phase 34 moved local Copilot course,
+      enrollment, chapter and assessment projections to scoped relational
+      authorities, and relational candidate-link creation already uses the
+      assessment authority when both cutover flags are enabled
 - [x] attempts (+ answers/flags as JSONB; reconcile status CHECK)
 - [x] proctoring_logs  ·  certificates
 - [x] application-wide audit/security-event repository, recursive database
