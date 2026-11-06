@@ -65,7 +65,8 @@ provided; that is pending AWS staging evidence, not a passing database result.
 
 ## Remaining blockers
 
-Live PostgreSQL concurrency and rollback injection are pending. The application
-still has snapshot-backed application-wide audit/security events and archive
-projections. Production cutover remains disabled and readiness stays
-fail-closed until live evidence is available.
+Live PostgreSQL concurrency and rollback injection are pending. Phase 32 now
+provides feature-gated relational application-wide audit/security events, but
+its live verifier and business-transaction cutover gate remain pending. Archive
+projections are still incomplete. Production cutover remains disabled and
+readiness stays fail-closed until live evidence is available.

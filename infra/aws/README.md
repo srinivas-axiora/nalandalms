@@ -66,6 +66,11 @@ switch enables a PostgreSQL feature flag; review and reconcile their evidence
 before a separate cutover. The script finishes with a CloudFront readiness
 smoke gate and deployed-control attestation.
 
+The verifier set includes the Phase-32 security-evidence check for durable
+audit/security rows, idempotent event IDs and recursive credential/PII metadata
+scrubbing. `USE_PG_AUDIT` remains `0` in the task definition until that live
+proof and the related business-authority cutovers are complete.
+
 The three custom-domain parameters are optional but atomic: provide all three
 or none. The certificate must already be validated, cover the requested DNS
 name and reside in ACM `us-east-1`, as required by CloudFront. When supplied,
@@ -161,3 +166,6 @@ production PII, payment records or real candidate evidence into this stack.
   unreadable and alert delivery works before production.
 - Restore, failover, load, privacy-erasure and payment reconciliation drills
   still require evidence.
+- Application-wide relational audit/security evidence is feature-gated and
+  locally tested, but its RDS verifier, reconciliation and external append-only
+  export/tamper-resistance controls remain pending.

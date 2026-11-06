@@ -30,7 +30,8 @@
     "db:verify-analytics": "node backend/src/db/verify-analytics.mjs",
     "db:verify-reports": "node backend/src/db/verify-reports.mjs",
     "db:verify-ai-feedback": "node backend/src/db/verify-ai-feedback.mjs",
-    "db:verify-operational": "node backend/src/db/verify-operational-authority.mjs"
+    "db:verify-operational": "node backend/src/db/verify-operational-authority.mjs",
+    "db:verify-security-evidence": "node backend/src/db/verify-security-evidence.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1160.0",

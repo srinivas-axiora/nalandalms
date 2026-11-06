@@ -7,6 +7,7 @@ import { timingSafeEqual } from "./lib.js";
 import { users, sessionVersions, saveDb } from "./core.js";
 import { securityEvent } from "./domain.js";
 import { identityRepository } from "./repositories/identity.repository.pg.js";
+import { flushEvidenceWrites } from "./security/evidence-write-context.js";
 
 const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
 
@@ -109,17 +110,18 @@ export const requireStepUp = (req, res, next) => {
 // Blocking persistence gate: on a successful mutating response, flush state to
 // durable storage before the response is sent; fail closed (503) if save fails.
 export const persistResponseMiddleware = (req, res, next) => {
-  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+  const mutating = !["GET", "HEAD", "OPTIONS"].includes(req.method);
   const originalJson = res.json.bind(res);
   res.json = async (body) => {
-    if (res.statusCode >= 200 && res.statusCode < 400 && !res.headersSent) {
-      try {
+    try {
+      await flushEvidenceWrites();
+      if (mutating && res.statusCode >= 200 && res.statusCode < 400 && !res.headersSent) {
         await saveDb();
-      } catch (err) {
-        console.error("[persist] blocking response after save failure:", err?.message || err);
-        res.status(503);
-        return originalJson({ error: "Data could not be saved. Please retry shortly." });
       }
+    } catch (err) {
+      console.error("[persist] blocking response after evidence/storage failure:", err?.message || err);
+      res.status(503);
+      return originalJson({ error: "Data could not be saved. Please retry shortly." });
     }
     return originalJson(body);
   };
@@ -128,11 +130,13 @@ export const persistResponseMiddleware = (req, res, next) => {
 
 // Records authentication/authorization/rate-limit outcomes as security events.
 export const securityLoggingMiddleware = (req, res, next) => {
-  res.on("finish", () => {
+  const originalJson = res.json.bind(res);
+  res.json = (body) => {
     if (res.statusCode === 401) securityEvent(req, "AUTHENTICATION_FAILED", { statusCode: res.statusCode });
     if (res.statusCode === 403) securityEvent(req, "AUTHORIZATION_DENIED", { statusCode: res.statusCode });
     if (res.statusCode === 429) securityEvent(req, "RATE_LIMITED", { statusCode: res.statusCode });
-  });
+    return originalJson(body);
+  };
   next();
 };
 

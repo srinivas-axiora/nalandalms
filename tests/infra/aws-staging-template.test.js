@@ -99,6 +99,7 @@ describe("AWS staging release controls", () => {
       "USE_PG_COURSES",
       "USE_PG_PRIVACY",
       "USE_PG_SETTINGS",
+      "USE_PG_AUDIT",
     ];
     for (const flag of expectedFlags) {
       expect(template).toContain(`Name: ${flag}, Value: "0"`);
@@ -129,6 +130,7 @@ describe("AWS staging release controls", () => {
       "verify-reports.mjs",
       "verify-ai-feedback.mjs",
       "verify-operational-authority.mjs",
+      "verify-security-evidence.mjs",
     ];
     for (const verifier of expectedVerifiers) expect(deploymentScript).toContain(verifier);
   });

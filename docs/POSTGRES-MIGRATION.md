@@ -1,7 +1,7 @@
 # Nalanda — PostgreSQL data-layer migration
 
-Status: **in progress — skills, payment, identity, attempt, certificate, candidate, privacy and relational learning boundaries built.**
-Owner: Engineering. Updated: 2026-11-05.
+Status: **in progress — core business boundaries plus relational audit/security evidence are built and feature-gated.**
+Owner: Engineering. Updated: 2026-11-06.
 
 > ⚠️ **This code is UNVERIFIED by the author.** It was written without a live
 > PostgreSQL to execute against (per the agreed "build it blind, I'll test"
@@ -12,7 +12,9 @@ Owner: Engineering. Updated: 2026-11-05.
 > `USE_PG_IDENTITY`, `USE_PG_ATTEMPTS`, `USE_PG_CERTIFICATES` and
 > `USE_PG_CANDIDATE_ASSESSMENTS` must stay off until their live-database gates
 > pass. `USE_PG_PRIVACY` and its separate erasure-worker switch must also stay
-> off until the Phase 11 coverage audit passes.
+> off until the Phase 11 coverage audit passes. `USE_PG_AUDIT` must remain off
+> until the Phase 32 live verifier passes and the business mutations emitting
+> generic evidence no longer depend on the snapshot authority.
 > `USE_PG_COURSES` now covers the Phase-12/21 course, chapter, progress,
 > assessment, question, assignment, cohort, upload-grant and protected-content
 > authority plus analytics and report-data preparation, but
@@ -114,6 +116,7 @@ npm run db:verify-privacy
 npm run db:verify-courses
 npm run db:verify-learning
 npm run db:verify-assessments
+npm run db:verify-security-evidence
 ```
 
 If `verify-skills.mjs` prints all `ok`, the pilot pattern is sound and we proceed
@@ -223,11 +226,12 @@ For each bounded context, in roughly ascending coupling:
       the assessment authority when both cutover flags are enabled
 - [x] attempts (+ answers/flags as JSONB; reconcile status CHECK)
 - [x] proctoring_logs  ·  certificates
-- [ ] archives  ·  audit_logs / security_events (certificate/attempt audit rows
-      are durable, but application-wide audit authority remains incomplete)
-- [ ] application-wide audit/security-event authority and remaining legacy
-      app-data audit/archive projections
-      (`GROUP BY`, views); candidate analytics now reads normalized submissions
+- [x] application-wide audit/security-event repository, recursive database
+      metadata scrubbing, fail-closed request evidence draining, backfill,
+      governance/app-data projections and live verifier are implemented behind
+      `USE_PG_AUDIT=1` (Phase 32; live RDS proof pending)
+- [ ] course/assessment archive authority and remaining legacy archive
+      projections; candidate analytics now reads normalized submissions
 - [ ] remove the in-memory arrays + JSON-blob adapter; externalize rate-limit /
       session / lockout state to enable **multi-instance** horizontal scaling
 

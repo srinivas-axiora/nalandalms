@@ -6,8 +6,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { JWT_AUDIENCE, JWT_ISSUER, JWT_SECRET } from "./config.js";
 import { tokenize } from "./lib.js";
-import { redactSensitive } from "./security/redaction.js";
+import { redactAuditMetadata, redactSensitive } from "./security/redaction.js";
 import { safeRequestPath } from "./security/request-path.js";
+import { securityEvidenceRepository } from "./repositories/security-evidence.repository.pg.js";
+import { trackEvidenceWrite } from "./security/evidence-write-context.js";
 import {
   now, isAdmin, sessionVersions, auditLogs, securityEvents, users, courses,
   assessments, assignments, attempts, chapters, acharyaFeedbackMemory, learningTimeEvents,
@@ -23,13 +25,18 @@ export const publicUser = (user) => {
 
 const AUDIT_LOG_CAP = 5000;
 export const audit = (actorId, action, entityType, entityId, metadata = {}) => {
-  auditLogs.unshift({ id: uuid(), actorId, action, entityType, entityId, metadata: redactSensitive(metadata), createdAt: now() });
+  const event = { id: uuid(), actorId, action, entityType, entityId, metadata: redactAuditMetadata(metadata), createdAt: now() };
+  if (process.env.USE_PG_AUDIT === "1") {
+    return trackEvidenceWrite(securityEvidenceRepository.appendAudit(event));
+  }
+  auditLogs.unshift(event);
   if (auditLogs.length > AUDIT_LOG_CAP) auditLogs.length = AUDIT_LOG_CAP;
+  return event;
 };
 
 const SECURITY_EVENT_CAP = 10000;
 export const securityEvent = (req, type, metadata = {}) => {
-  securityEvents.unshift({
+  const event = {
     id: uuid(),
     type,
     actorId: req?.user?.id || null,
@@ -37,10 +44,16 @@ export const securityEvent = (req, type, metadata = {}) => {
     method: req?.method || null,
     path: safeRequestPath(req?.originalUrl || req?.url || ""),
     userAgent: req?.headers?.["user-agent"] || null,
-    metadata: redactSensitive(metadata),
+    requestId: req?.id || req?.headers?.["x-request-id"] || null,
+    metadata: redactAuditMetadata(metadata),
     createdAt: now(),
-  });
+  };
+  if (process.env.USE_PG_AUDIT === "1") {
+    return trackEvidenceWrite(securityEvidenceRepository.appendSecurityEvent(event));
+  }
+  securityEvents.unshift(event);
   if (securityEvents.length > SECURITY_EVENT_CAP) securityEvents.length = SECURITY_EVENT_CAP;
+  return event;
 };
 
 export const signToken = (user) => {

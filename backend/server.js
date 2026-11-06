@@ -72,6 +72,8 @@ import { reportsRepository } from "./src/repositories/reports.repository.pg.js";
 import { aiFeedbackRepository } from "./src/repositories/ai-feedback.repository.pg.js";
 import { analyticsRepository } from "./src/repositories/analytics.repository.pg.js";
 import { settingsRepository } from "./src/repositories/settings.repository.pg.js";
+import { securityEvidenceRepository } from "./src/repositories/security-evidence.repository.pg.js";
+import { evidenceWriteContextMiddleware } from "./src/security/evidence-write-context.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG = process.env.USE_PG === "1";
@@ -84,6 +86,11 @@ const USE_PG_CANDIDATE_ASSESSMENTS = process.env.USE_PG_CANDIDATE_ASSESSMENTS ==
 const USE_PG_PRIVACY = process.env.USE_PG_PRIVACY === "1";
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 const USE_PG_SETTINGS = process.env.USE_PG_SETTINGS === "1";
+const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
+const AUDIT_TRANSACTIONAL_DEPENDENCIES = USE_PG_PAYMENTS && USE_PG_SKILLS
+  && USE_PG_IDENTITY && USE_PG_ATTEMPTS && USE_PG_CERTIFICATES
+  && USE_PG_CANDIDATE_ASSESSMENTS && USE_PG_COURSES && USE_PG_PRIVACY
+  && USE_PG_SETTINGS;
 const ENABLE_PRIVACY_ERASURE_WORKER = process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1";
 const ENABLE_REPORT_EXPORT_WORKER = process.env.ENABLE_REPORT_EXPORT_WORKER === "1";
 const PRIVACY_COVERAGE_ACK = process.env.PRIVACY_COVERAGE_ACK === "normalized-v1";
@@ -103,11 +110,12 @@ app.use(express.json({
   },
 }));
 app.use(cookieParser());
-app.use(verifyCsrf);
-app.use("/api", rateLimit({ windowMs: 60_000, max: 600, scope: "ip", name: "global" }));
+app.use(evidenceWriteContextMiddleware);
 app.use(persistResponseMiddleware);
 app.use(requestCorrelationMiddleware);
 app.use(securityLoggingMiddleware);
+app.use(verifyCsrf);
+app.use("/api", rateLimit({ windowMs: 60_000, max: 600, scope: "ip", name: "global" }));
 
 // ── Feature module registration ──
 // Each module imports its own foundation dependencies directly (no shared ctx).
@@ -155,7 +163,7 @@ app.get("/api/health", (_req, res) => {
 app.get("/api/ready", async (_req, res) => {
   const [
     database, redis, objects, payments, identity, attemptRuntime,
-    certificateAuthority, candidateRuntime, privacyAuthority, reportAuthority, settingsAuthority,
+    certificateAuthority, candidateRuntime, privacyAuthority, reportAuthority, settingsAuthority, auditAuthority,
   ] = await Promise.all([
     storage.health(),
     redisHealth(),
@@ -354,6 +362,32 @@ app.get("/api/ready", async (_req, res) => {
           ok: Object.values(rows[0] || {}).every(Boolean), mode: "normalized",
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
+    USE_PG_AUDIT
+      ? Promise.resolve().then(() => relationalQuery(
+          `SELECT
+             to_regclass('public.audit_logs') IS NOT NULL AS audit_logs,
+             to_regclass('public.security_events') IS NOT NULL AS security_events,
+             to_regclass('public.uq_audit_logs_ingest_key') IS NOT NULL AS audit_idempotency,
+             to_regclass('public.uq_security_events_ingest_key') IS NOT NULL AS security_idempotency,
+             to_regclass('public.idx_security_events_created') IS NOT NULL AS security_ordering,
+             EXISTS (
+               SELECT 1 FROM pg_trigger
+               WHERE tgname = 'trg_scrub_audit_metadata' AND NOT tgisinternal
+             ) AS audit_metadata_scrub,
+             EXISTS (
+               SELECT 1 FROM pg_trigger
+               WHERE tgname = 'trg_scrub_security_metadata' AND NOT tgisinternal
+             ) AS security_metadata_scrub`
+        )).then(({ rows }) => ({
+          ok: Object.values(rows[0] || {}).every(Boolean) && AUDIT_TRANSACTIONAL_DEPENDENCIES,
+          mode: "normalized",
+          dependencies: AUDIT_TRANSACTIONAL_DEPENDENCIES ? "complete" : "incomplete",
+        })).catch(() => ({
+          ok: false,
+          mode: "normalized",
+          dependencies: AUDIT_TRANSACTIONAL_DEPENDENCIES ? "complete" : "incomplete",
+        }))
+      : Promise.resolve({ ok: true, mode: "disabled", dependencies: "disabled" }),
   ]);
   // The relational learning workflow is still a partial cutover. Course,
   // chapter, progress and assessment authority exist, but secondary consumers
@@ -364,11 +398,12 @@ app.get("/api/ready", async (_req, res) => {
   };
   const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok
     && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok && privacyAuthority.ok
-    && reportAuthority.ok && settingsAuthority.ok && courseAuthority.ok;
+    && reportAuthority.ok && settingsAuthority.ok && auditAuthority.ok && courseAuthority.ok;
   if (!ok) logger.error("READINESS_CHECK_FAILED", {
     database, redis, objects, payments, identity, attempts: attemptRuntime,
     certificates: certificateAuthority, candidateAssessments: candidateRuntime,
     privacy: privacyAuthority, reports: reportAuthority, settings: settingsAuthority,
+    audit: auditAuthority,
     courses: courseAuthority, startupReady,
   });
   res.status(ok ? 200 : 503).json({
@@ -394,6 +429,11 @@ app.get("/api/ready", async (_req, res) => {
         worker: reportAuthority.worker,
       },
       settings: { ok: settingsAuthority.ok, mode: settingsAuthority.mode },
+      audit: {
+        ok: auditAuthority.ok,
+        mode: auditAuthority.mode,
+        dependencies: auditAuthority.dependencies,
+      },
       courses: courseAuthority,
     },
   });
@@ -456,6 +496,12 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   const authoritativeSettings = admin
     ? (USE_PG_SETTINGS ? await settingsRepository.getProctoring() : settings)
     : {};
+  const authoritativeAudit = admin && USE_PG_AUDIT
+    ? await securityEvidenceRepository.listAudit({ limit: 200 })
+    : null;
+  const authoritativeSecurityEvents = admin && USE_PG_AUDIT
+    ? await securityEvidenceRepository.listSecurityEvents({ limit: 500 })
+    : null;
   const scopedCertificates = USE_PG_CERTIFICATES
     ? await certificatesPgRepository.listForUser(req.user)
     : issuedCertificates.filter((cert) => admin || visibleUserIds.has(cert.employeeId));
@@ -478,8 +524,8 @@ app.get("/api/app-data", authenticate, async (req, res) => {
     assignments: scopedAssignments,
     attempts: scopedAttempts,
     proctoringLogs: scopedProctoring,
-    auditLogs: admin ? redactSensitive(auditLogs) : [],
-    securityEvents: admin ? redactSensitive(securityEvents.slice(0, 500)) : [],
+    auditLogs: admin ? redactSensitive(authoritativeAudit?.data || auditLogs) : [],
+    securityEvents: admin ? redactSensitive(authoritativeSecurityEvents?.data || securityEvents.slice(0, 500)) : [],
     learningTimeEvents: scopedLearningTimeEvents,
     acharyaFeedbackMemory: scopedAiFeedback,
     reportExports: scopedReports,

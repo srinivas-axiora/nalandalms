@@ -72,5 +72,8 @@ mandatory staging gates, not assumed successes.
   scanned digest and attests the source revision and running service; all
   controls still require live staging evidence before production. Phase 31
   removes task public IPs and provides redundant private-subnet NAT egress.
+  Phase 32 adds feature-gated relational audit/security evidence, a fail-closed
+  response write gate and a live database verifier; AWS keeps the cutover off
+  until staging proof and the remaining transactional authority work complete.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

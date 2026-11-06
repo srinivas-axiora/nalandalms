@@ -29,10 +29,10 @@ the same PostgreSQL authorities as their write and workflow APIs.
 
 ## Remaining work in this phase
 
-The broader bootstrap payload still contains snapshot-backed audit/security
-events and selected legacy settings/skill projections. A
-production-sized bootstrap/pagination design also remains required before the
-course cutover can be declared complete.
+Phase 24 migrated settings/skill projections and Phase 32 now provides
+feature-gated relational audit/security projections. Course/assessment archive
+projections and a production-sized bootstrap/pagination design remain required
+before the course cutover can be declared complete.
 
 ## Local evidence
 

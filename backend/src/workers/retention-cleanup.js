@@ -53,7 +53,7 @@ export async function runRetentionCleanup({ retentionDays = DEFAULT_RETENTION_DA
   };
 
   logger.info("RETENTION_CLEANUP_JOB_COMPLETED", result);
-  audit("SYSTEM", "RETENTION_CLEANUP", "PROCTORING", "BATCH", result);
+  await audit("SYSTEM", "RETENTION_CLEANUP", "PROCTORING", "BATCH", result);
   if (!dryRun) await saveDb();
 
   return result;

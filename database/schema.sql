@@ -666,16 +666,108 @@ CREATE INDEX idx_report_exports_requester ON report_exports(requested_by, create
 -- ── Audit Logs ──
 CREATE TABLE audit_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  actor_id TEXT REFERENCES users(id),
+  actor_id TEXT,
   action TEXT NOT NULL,
   entity_type TEXT NOT NULL,
   entity_id TEXT NOT NULL,
   metadata JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  ingest_key TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT audit_logs_shape CHECK (
+    length(btrim(action)) BETWEEN 1 AND 200
+    AND length(btrim(entity_type)) BETWEEN 1 AND 100
+    AND length(btrim(entity_id)) BETWEEN 1 AND 300
+    AND (actor_id IS NULL OR length(actor_id) <= 200)
+    AND jsonb_typeof(metadata) = 'object'
+    AND (ingest_key IS NULL OR length(ingest_key) <= 200)
+  )
 );
 
 CREATE INDEX idx_audit_entity ON audit_logs(entity_type, entity_id, created_at DESC);
 CREATE INDEX idx_audit_actor ON audit_logs(actor_id, created_at DESC);
+CREATE UNIQUE INDEX uq_audit_logs_ingest_key ON audit_logs(ingest_key) WHERE ingest_key IS NOT NULL;
+CREATE INDEX idx_audit_logs_created ON audit_logs(created_at DESC, id DESC);
+
+-- Security telemetry is deliberately separate from business audit evidence.
+-- Actor IDs are retained as historical labels rather than foreign keys so
+-- privacy pseudonymization and account deletion cannot erase the event trail.
+CREATE TABLE security_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_type TEXT NOT NULL,
+  actor_id TEXT,
+  ip_address TEXT,
+  http_method TEXT,
+  request_path TEXT,
+  user_agent TEXT,
+  request_id TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  ingest_key TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT security_events_shape CHECK (
+    length(btrim(event_type)) BETWEEN 1 AND 200
+    AND (actor_id IS NULL OR length(actor_id) <= 200)
+    AND (ip_address IS NULL OR length(ip_address) <= 200)
+    AND (http_method IS NULL OR length(http_method) BETWEEN 1 AND 16)
+    AND (request_path IS NULL OR length(request_path) <= 2048)
+    AND (user_agent IS NULL OR length(user_agent) <= 1024)
+    AND (request_id IS NULL OR length(request_id) <= 200)
+    AND jsonb_typeof(metadata) = 'object'
+    AND (ingest_key IS NULL OR length(ingest_key) <= 200)
+  )
+);
+
+CREATE UNIQUE INDEX uq_security_events_ingest_key ON security_events(ingest_key) WHERE ingest_key IS NOT NULL;
+CREATE INDEX idx_security_events_created ON security_events(created_at DESC, id DESC);
+CREATE INDEX idx_security_events_type ON security_events(event_type, created_at DESC);
+CREATE INDEX idx_security_events_actor ON security_events(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
+
+CREATE FUNCTION nalanda_redact_evidence_metadata(payload JSONB)
+RETURNS JSONB
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+DECLARE
+  result JSONB;
+BEGIN
+  IF payload IS NULL THEN RETURN '{}'::jsonb; END IF;
+  IF jsonb_typeof(payload) = 'object' THEN
+    SELECT COALESCE(jsonb_object_agg(item.key, nalanda_redact_evidence_metadata(item.value)), '{}'::jsonb)
+      INTO result
+      FROM jsonb_each(payload) AS item
+      WHERE lower(item.key) NOT IN (
+        'password', 'passwordhash', 'currentpassword', 'newpassword',
+        'resettoken', 'accesstoken', 'refreshtoken', 'authorization',
+        'cookie', 'secret', 'apikey', 'privatekey',
+        'email', 'name', 'candidateemail', 'candidatename'
+      );
+    RETURN result;
+  END IF;
+  IF jsonb_typeof(payload) = 'array' THEN
+    SELECT COALESCE(jsonb_agg(nalanda_redact_evidence_metadata(item.value)), '[]'::jsonb)
+      INTO result FROM jsonb_array_elements(payload) AS item(value);
+    RETURN result;
+  END IF;
+  RETURN payload;
+END;
+$$;
+
+CREATE FUNCTION nalanda_scrub_evidence_metadata()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.metadata := nalanda_redact_evidence_metadata(NEW.metadata);
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_scrub_audit_metadata
+  BEFORE INSERT OR UPDATE OF metadata ON audit_logs
+  FOR EACH ROW EXECUTE FUNCTION nalanda_scrub_evidence_metadata();
+CREATE TRIGGER trg_scrub_security_metadata
+  BEFORE INSERT OR UPDATE OF metadata ON security_events
+  FOR EACH ROW EXECUTE FUNCTION nalanda_scrub_evidence_metadata();
 
 -- ── Deletion Archive ──
 -- Super Admin only: stores full entity snapshots with mandatory deletion reason

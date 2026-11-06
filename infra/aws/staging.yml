@@ -885,6 +885,7 @@ Resources:
             - { Name: USE_PG_COURSES, Value: "0" }
             - { Name: USE_PG_PRIVACY, Value: "0" }
             - { Name: USE_PG_SETTINGS, Value: "0" }
+            - { Name: USE_PG_AUDIT, Value: "0" }
             - { Name: ENABLE_PRIVACY_ERASURE_WORKER, Value: "0" }
             - { Name: ENABLE_REPORT_EXPORT_WORKER, Value: "0" }
             - { Name: PRIVACY_COVERAGE_ACK, Value: "" }

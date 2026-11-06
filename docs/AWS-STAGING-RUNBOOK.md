@@ -58,7 +58,8 @@ Run `infra/aws/deploy-staging.ps1` using the three secret ARNs. The script:
    Git revision embedded in the task definition;
 6. deploys the CloudFormation stack;
 7. optionally runs guarded schema/bootstrap/backfill and every relational live
-   verifier as isolated ECS tasks; and
+   verifier as isolated ECS tasks, including durable audit/security evidence
+   and recursive metadata-redaction proof; and
 8. requires readiness plus deployed edge, image, task and scan attestation
    before printing outputs.
 

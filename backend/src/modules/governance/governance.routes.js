@@ -6,8 +6,10 @@ import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import { identityRepository } from "../../repositories/identity.repository.pg.js";
 import { upsertIdentityProjection } from "../../identity-projection.js";
+import { securityEvidenceRepository } from "../../repositories/security-evidence.repository.pg.js";
 
 const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
+const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
 // Module: Governance (audit logs, security events, archive + restore).
 // Handlers moved verbatim from server.js; shared deps injected via ctx.
 export function registerGovernance(app) {
@@ -63,13 +65,21 @@ export function registerGovernance(app) {
     res.json({ success: true, message: `${record.entityType} restored` });
   });
 
-  app.get("/api/audit-logs", authenticate, requireRole("Admin"), (req, res) => {
-    const limit = Math.min(Number(req.query.limit || 50), 200);
-    res.json({ data: redactSensitive(auditLogs.slice(0, limit)), total: auditLogs.length });
+  app.get("/api/audit-logs", authenticate, requireRole("Admin"), async (req, res) => {
+    const limit = Number(req.query.limit || 50);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      return res.status(400).json({ error: "limit must be an integer between 1 and 200" });
+    }
+    if (USE_PG_AUDIT) return res.json(await securityEvidenceRepository.listAudit({ limit }));
+    return res.json({ data: redactSensitive(auditLogs.slice(0, limit)), total: auditLogs.length });
   });
 
-  app.get("/api/security-events", authenticate, requireRole("Admin"), (req, res) => {
-    const limit = Math.min(Number(req.query.limit || 100), 500);
-    res.json({ data: redactSensitive(securityEvents.slice(0, limit)), total: securityEvents.length });
+  app.get("/api/security-events", authenticate, requireRole("Admin"), async (req, res) => {
+    const limit = Number(req.query.limit || 100);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+      return res.status(400).json({ error: "limit must be an integer between 1 and 500" });
+    }
+    if (USE_PG_AUDIT) return res.json(await securityEvidenceRepository.listSecurityEvents({ limit }));
+    return res.json({ data: redactSensitive(securityEvents.slice(0, limit)), total: securityEvents.length });
   });
 }
