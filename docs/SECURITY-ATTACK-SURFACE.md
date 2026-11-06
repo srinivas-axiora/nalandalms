@@ -126,7 +126,7 @@ or step-up middleware disagrees with its declaration.
 | POST | `/api/proctoring/attempts/:attemptId/pause` | A/M/I | Y | Y | Y | G | Central attempt policy plus step-up |
 | POST | `/api/proctoring/attempts/:attemptId/resume` | A/M/I | Y | Y | Y | G | Central attempt policy plus step-up |
 | POST | `/api/proctoring/attempts/:attemptId/terminate` | A/M/I | Y | Y | Y | G | Central attempt policy plus step-up |
-| GET | `/api/proctoring/attempts/:attemptId/timeline` | A/M/I | N | N/A | N | G | Central attempt control policy |
+| GET | `/api/proctoring/attempts/:attemptId/timeline` | A/M/I | N | N/A | N | G | Phase-37 relational mode rechecks assigned-proctor/assessment-owner/course-owner scope while resolving minimal timeline labels |
 
 ## Certificates, payments, uploads and reports
 

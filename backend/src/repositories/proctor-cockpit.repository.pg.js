@@ -58,7 +58,30 @@ export function createProctorCockpitRepository(db = { query }) {
     return rows.map(mapActiveSession);
   };
 
-  return { listActiveForActor };
+  const findTimelineContextForActor = async (attemptId, actor) => {
+    const { rows } = await db.query(
+      `SELECT candidate.name AS candidate_name,
+              assessment.title AS assessment_title
+         FROM assessment_attempts aa
+         JOIN users candidate ON candidate.id = aa.user_id
+         JOIN assessments assessment ON assessment.id = aa.assessment_id
+         LEFT JOIN courses course ON course.id = aa.course_id
+        WHERE aa.id = $1
+          AND ($2::boolean
+            OR aa.assigned_proctor_id = $3
+            OR assessment.owner_id = $3
+            OR course.owner_id = $3)
+        LIMIT 1`,
+      [attemptId, isAdminRole(actor?.role), actor?.id || null]
+    );
+    if (!rows[0]) return null;
+    return {
+      candidateName: rows[0].candidate_name || "Unknown Candidate",
+      assessmentTitle: rows[0].assessment_title || "Exam",
+    };
+  };
+
+  return { listActiveForActor, findTimelineContextForActor };
 }
 
 export const proctorCockpitRepository = createProctorCockpitRepository();

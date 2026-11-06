@@ -87,5 +87,7 @@ mandatory staging gates, not assumed successes.
   Phase 36 moves the active proctor cockpit grid to a minimal, SQL-scoped
   projection; live concurrency and ownership-change behavior remain staging
   gates.
+  Phase 37 applies a second relational authorization check while resolving
+  timeline labels so mid-request ownership revocation fails closed.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

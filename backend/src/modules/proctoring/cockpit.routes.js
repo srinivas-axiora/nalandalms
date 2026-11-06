@@ -293,11 +293,23 @@ export function registerCockpit(app, options = {}) {
   });
 
   // ── Chronological Incident Timeline & Session Replay ──
-  app.get("/api/proctoring/attempts/:attemptId/timeline", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), (req, res) => {
+  app.get("/api/proctoring/attempts/:attemptId/timeline", authenticate, requireRole("Admin", "Manager", "Instructor"), requireAttemptPermission("control"), async (req, res, next) => {
     const attempt = req.authorizedAttempt;
-
-    const user = users.find((u) => u.id === attempt.userId);
-    const assessment = assessments.find((asm) => asm.id === attempt.assessmentId);
+    let candidateName;
+    let assessmentTitle;
+    if (usePgCourses) {
+      try {
+        const context = await cockpitAuthority.findTimelineContextForActor(attempt.id, req.user);
+        if (!context) return res.status(403).json({ error: "Timeline access was revoked" });
+        candidateName = context.candidateName;
+        assessmentTitle = context.assessmentTitle;
+      } catch (error) {
+        return next(error);
+      }
+    } else {
+      candidateName = users.find((user) => user.id === attempt.userId)?.name || "Unknown Candidate";
+      assessmentTitle = assessments.find((assessment) => assessment.id === attempt.assessmentId)?.title || "Exam";
+    }
 
     const timeline = [];
 
@@ -374,8 +386,8 @@ export function registerCockpit(app, options = {}) {
     res.json({
       data: {
         attemptId: attempt.id,
-        candidateName: user?.name || "Unknown Candidate",
-        assessmentTitle: assessment?.title || "Exam",
+        candidateName,
+        assessmentTitle,
         finalTrustScore: attempt.trustScore ?? 100,
         status: attempt.status,
         timeline,

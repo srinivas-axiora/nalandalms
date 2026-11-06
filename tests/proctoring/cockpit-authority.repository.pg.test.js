@@ -50,4 +50,40 @@ describe("relational proctor cockpit authority", () => {
 
     expect(query.mock.calls[0][1]).toEqual([["InProgress", "Paused"], true, "ADMIN-1"]);
   });
+
+  it("rechecks actor scope while resolving timeline labels", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [{
+      candidate_name: "Timeline Candidate",
+      assessment_title: "Timeline Exam",
+    }] });
+    const repository = createProctorCockpitRepository({ query });
+
+    const result = await repository.findTimelineContextForActor(
+      "ATT-TIMELINE",
+      { id: "INS-TIMELINE", role: "Instructor" }
+    );
+    const [sql, params] = query.mock.calls[0];
+
+    expect(sql).toContain("aa.id = $1");
+    expect(sql).toContain("aa.assigned_proctor_id = $3");
+    expect(sql).toContain("assessment.owner_id = $3");
+    expect(sql).toContain("course.owner_id = $3");
+    expect(sql).not.toMatch(/candidate\.email|question_map|answers/i);
+    expect(params).toEqual(["ATT-TIMELINE", false, "INS-TIMELINE"]);
+    expect(result).toEqual({
+      candidateName: "Timeline Candidate",
+      assessmentTitle: "Timeline Exam",
+    });
+  });
+
+  it("fails closed when timeline scope has been revoked", async () => {
+    const repository = createProctorCockpitRepository({
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+    });
+
+    await expect(repository.findTimelineContextForActor(
+      "ATT-REVOKED",
+      { id: "FORMER-PROCTOR", role: "Instructor" }
+    )).resolves.toBeNull();
+  });
 });
