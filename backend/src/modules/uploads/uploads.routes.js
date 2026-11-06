@@ -22,6 +22,7 @@ import {
 import {
   getPresignedUploadUrl,
   getPresignedDownloadUrl,
+  ObjectScanError,
   readLocalObject,
   uploadBuffer,
   verifyLocalGrant,
@@ -46,6 +47,7 @@ const learningErrorStatus = (error) => {
 export function registerUploads(app, options = {}) {
   const usePgCourses = options.usePgCourses ?? process.env.USE_PG_COURSES === "1";
   const authority = options.learningAuthorityRepository || learningAuthorityRepository;
+  const signDownload = options.getPresignedDownloadUrl || getPresignedDownloadUrl;
 
   app.post("/api/uploads/presign", authenticate, requireRole("Admin", "Manager"), async (req, res, next) => {
     const schema = z.object({
@@ -89,17 +91,13 @@ export function registerUploads(app, options = {}) {
         req.user.id,
         MAX_COURSE_UPLOAD_BYTES,
       );
-      const download = await getPresignedDownloadUrl(key, 900, req.user.id, {
-        filename,
-        contentType: parsed.data.contentType,
-      });
       return res.json({
         uploadUrl: presigned.uploadUrl,
         key,
-        downloadUrl: download.downloadUrl,
         mode: presigned.mode,
         expiresInSeconds: 600,
         maxBytes: MAX_COURSE_UPLOAD_BYTES,
+        scanStatus: presigned.mode === "s3" ? "PENDING" : "LOCAL_VALIDATED",
       });
     } catch (error) {
       return next(error);
@@ -130,8 +128,20 @@ export function registerUploads(app, options = {}) {
       try {
         const result = await uploadBuffer(grant.key, req.body, contentType);
         consumedLocalUploadGrants.add(grant.jti);
-        audit(req.user.id, "UPLOAD_STORED", "OBJECT", result.key, { contentType, sizeBytes: req.body.length });
-        return res.json({ ok: true, key: result.key, mode: result.mode });
+        const scanStatus = result.mode === "s3" ? "PENDING" : "LOCAL_VALIDATED";
+        audit(
+          req.user.id,
+          result.mode === "s3" ? "UPLOAD_QUARANTINED" : "UPLOAD_STORED",
+          "OBJECT",
+          result.key,
+          { contentType, sizeBytes: req.body.length, scanStatus },
+        );
+        return res.status(result.mode === "s3" ? 202 : 200).json({
+          ok: true,
+          key: result.key,
+          mode: result.mode,
+          scanStatus,
+        });
       } catch (error) {
         if (error?.code === "EEXIST") return res.status(409).json({ error: "Object already exists" });
         return res.status(500).json({ error: "Upload failed" });
@@ -198,12 +208,21 @@ export function registerUploads(app, options = {}) {
 
     const contentType = chapter.contentType === "PDF" ? "application/pdf" : "application/octet-stream";
     try {
-      const download = await getPresignedDownloadUrl(objectKey, 900, req.user.id, {
+      const download = await signDownload(objectKey, 900, req.user.id, {
         filename: chapter.fileName || `${chapter.id}.bin`,
         contentType,
       });
       return res.json({ url: download.downloadUrl, expiresInSeconds: 900 });
     } catch (error) {
+      if (
+        error instanceof ObjectScanError
+        || ["OBJECT_SCAN_PENDING", "OBJECT_QUARANTINED", "OBJECT_SCAN_REJECTED"].includes(error?.code)
+      ) {
+        return res.status(423).json({
+          error: "Content is quarantined until malware scanning completes successfully",
+          code: error.code || "OBJECT_SCAN_PENDING",
+        });
+      }
       return next(error);
     }
   });

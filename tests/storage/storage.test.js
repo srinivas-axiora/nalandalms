@@ -98,7 +98,8 @@ describe("Nalanda LMS — Cloud Storage, Media & Redis Rate Limiting", () => {
       expect(res.status).toBe(200);
       expect(res.body.uploadUrl).toBeDefined();
       expect(res.body.key).toMatch(/^chapter_pdf\/CRS-001\//);
-      expect(res.body.downloadUrl).toBeDefined();
+      expect(res.body).not.toHaveProperty("downloadUrl");
+      expect(res.body.scanStatus).toBe("LOCAL_VALIDATED");
     });
   });
 

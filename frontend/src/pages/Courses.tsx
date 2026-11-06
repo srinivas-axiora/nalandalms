@@ -830,7 +830,7 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
     try {
       const result = await uploadCourseFile(editCourse.id, file, "chapter_pdf");
       setChapterForm((current) => ({ ...current, fileName: file.name, url: result.key }));
-      toast("PDF uploaded securely");
+      toast(result.scanStatus === "PENDING" ? "PDF uploaded and queued for malware scanning" : "PDF uploaded securely");
     } catch {
       toast("PDF upload failed");
     }

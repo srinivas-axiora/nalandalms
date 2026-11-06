@@ -4,7 +4,8 @@ This stack is intentionally a **single-writer staging environment**, not a
 production approval. It provides CloudFront HTTPS, an ALB, one ARM64 ECS Fargate
 task, private RDS PostgreSQL, private TLS-enabled ElastiCache Redis, private S3,
 Secrets Manager, ALB access logs, a regional AWS WAF and CloudWatch/SNS alarms
-encrypted with a rotating customer-managed KMS key.
+encrypted with a rotating customer-managed KMS key. GuardDuty Malware
+Protection scans course media, chapter PDFs and proctoring objects.
 
 The ECS deployment configuration never overlaps old and new tasks. This avoids
 two application processes writing the current whole-state JSONB snapshot at the
@@ -19,7 +20,9 @@ is complete and multi-instance concurrency tests pass.
 - Three existing Secrets Manager secrets containing the Razorpay key ID, key
   secret and webhook secret. Use test-mode Razorpay credentials in staging.
 - Permission to create VPC, ECS, ECR, RDS, ElastiCache, CloudFront, S3, IAM,
-  KMS, Secrets Manager, WAF, SNS and CloudWatch resources.
+  KMS, GuardDuty Malware Protection, EventBridge, Secrets Manager, WAF, SNS and
+  CloudWatch resources, including permission to pass the generated scan role to
+  `malware-protection-plan.guardduty.amazonaws.com`.
 
 ## Deploy
 
@@ -55,6 +58,13 @@ known-bad inputs and forwarded-client floods; the AWS common rule set starts in
 count mode so staging evidence can identify legitimate large HTML, JSON and
 upload payloads before selected rules are promoted to block.
 
+Protected media is unavailable by default. GuardDuty writes the
+`GuardDutyMalwareScanStatus` tag after scanning; both the API and S3 bucket
+policy permit reads only for `NO_THREATS_FOUND`. Threats, skipped scans,
+permission failures, internal failures and objects without a verdict remain
+quarantined. EventBridge sends non-clean results and protection-health failures
+to the encrypted alert topic.
+
 ## First-login and validation
 
 Retrieve the generated bootstrap password without printing it into shared logs,
@@ -81,7 +91,8 @@ production PII, payment records or real candidate evidence into this stack.
 - A custom domain and ACM certificate are not yet configured. The regional WAF
   protects the ALB origin; a separately managed `CLOUDFRONT`-scope web ACL in
   `us-east-1` is still recommended when the custom distribution is promoted.
-- Malware scanning/quarantine must be added before untrusted file uploads are
-  enabled for production.
+- GuardDuty malware scanning/quarantine is declared, but staging must prove the
+  plan becomes active, clean media becomes readable, non-clean media remains
+  unreadable and alert delivery works before production.
 - Restore, failover, load, privacy-erasure and payment reconciliation drills
   still require evidence.

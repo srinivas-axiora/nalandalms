@@ -87,5 +87,5 @@ export async function uploadCourseFile(courseId: string, file: File, category: "
     body: file,
   });
   if (!uploadResponse.ok) throw new Error("Upload failed");
-  return { key: String(grant.key), downloadUrl: String(grant.downloadUrl || "") };
+  return { key: String(grant.key), scanStatus: String(grant.scanStatus || "PENDING") };
 }

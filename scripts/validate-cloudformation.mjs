@@ -57,6 +57,8 @@ const requiredResources = [
   "AlertTopic",
   "Distribution",
   "LoadBalancer",
+  "MalwareProtectionPlan",
+  "MalwareProtectionRole",
   "RegionalWebAcl",
   "RegionalWebAclAssociation",
 ];
@@ -64,8 +66,13 @@ for (const logicalId of requiredResources) {
   if (!resources[logicalId]) throw new Error(`Required resource is missing: ${logicalId}`);
 }
 
-if (!outputs?.ApplicationUrl || !outputs?.RegionalWebAclArn || !outputs?.AccessLogBucketName) {
-  throw new Error("Required application, WAF or access-log outputs are missing.");
+if (
+  !outputs?.ApplicationUrl
+  || !outputs?.RegionalWebAclArn
+  || !outputs?.AccessLogBucketName
+  || !outputs?.MalwareProtectionPlanArn
+) {
+  throw new Error("Required application, WAF, access-log or malware-protection outputs are missing.");
 }
 
 console.log(

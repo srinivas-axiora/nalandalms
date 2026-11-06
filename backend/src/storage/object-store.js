@@ -3,7 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import jwt from "jsonwebtoken";
 import { v4 as uuid } from "uuid";
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  GetObjectTaggingCommand,
+  DeleteObjectCommand,
+  HeadBucketCommand,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { JWT_SECRET } from "../config.js";
 
@@ -31,6 +38,44 @@ if (isS3Configured) {
 }
 
 export const storageMode = isS3Configured ? "s3" : "local";
+
+export const MALWARE_SCAN_TAG = "GuardDutyMalwareScanStatus";
+export const CLEAN_MALWARE_SCAN_STATUS = "NO_THREATS_FOUND";
+const malwareProtectedPrefixes = ["course_media/", "chapter_pdf/", "proctoring/"];
+
+export class ObjectScanError extends Error {
+  constructor(status = "PENDING") {
+    super("Object is unavailable until malware scanning completes successfully");
+    this.name = "ObjectScanError";
+    this.code = status === "PENDING"
+      ? "OBJECT_SCAN_PENDING"
+      : status === "THREATS_FOUND"
+        ? "OBJECT_QUARANTINED"
+        : "OBJECT_SCAN_REJECTED";
+    this.scanStatus = status;
+  }
+}
+
+export const objectRequiresMalwareScan = (keyValue) => {
+  const key = normalizeObjectKey(keyValue);
+  return malwareProtectedPrefixes.some((prefix) => key.startsWith(prefix));
+};
+
+export const malwareScanStatusFromTags = (tagSet = []) => {
+  const tag = Array.isArray(tagSet) ? tagSet.find((item) => item?.Key === MALWARE_SCAN_TAG) : null;
+  return typeof tag?.Value === "string" && tag.Value ? tag.Value : "PENDING";
+};
+
+export async function requireCleanObject(keyValue) {
+  const key = normalizeObjectKey(keyValue);
+  if (!objectRequiresMalwareScan(key) || !isS3Configured || !s3Client) {
+    return { required: objectRequiresMalwareScan(key), status: "LOCAL_VALIDATED" };
+  }
+  const result = await s3Client.send(new GetObjectTaggingCommand({ Bucket: bucketName, Key: key }));
+  const status = malwareScanStatusFromTags(result.TagSet);
+  if (status !== CLEAN_MALWARE_SCAN_STATUS) throw new ObjectScanError(status);
+  return { required: true, status };
+}
 
 export async function objectStoreHealth() {
   if (!isS3Configured || !s3Client) {
@@ -129,6 +174,7 @@ export async function getPresignedDownloadUrl(keyValue, expiresInSeconds = 900, 
   const filename = String(options.filename || path.posix.basename(key)).replace(/[\r\n"\\]/g, "_");
   const contentType = String(options.contentType || "application/octet-stream");
   if (isS3Configured && s3Client) {
+    await requireCleanObject(key);
     const command = new GetObjectCommand({
       Bucket: bucketName,
       Key: key,

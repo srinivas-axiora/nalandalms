@@ -107,4 +107,33 @@ describe("relational upload and content authorization routes", () => {
       actor: expect.objectContaining({ id: testUsers.employee.id }),
     });
   });
+
+  it("keeps content quarantined when malware scanning is not clean", async () => {
+    authority.authorizeContentDownload.mockResolvedValue({
+      courseId: "CRS-1",
+      chapter: {
+        id: "CH-2",
+        contentType: "PDF",
+        url: "chapter_pdf/CRS-1/pending.pdf",
+        fileName: "pending.pdf",
+      },
+    });
+    const scanError = Object.assign(new Error("pending"), { code: "OBJECT_SCAN_PENDING" });
+    const isolatedApp = express();
+    isolatedApp.use(express.json());
+    isolatedApp.use(cookieParser());
+    registerUploads(isolatedApp, {
+      usePgCourses: true,
+      learningAuthorityRepository: authority,
+      getPresignedDownloadUrl: vi.fn().mockRejectedValue(scanError),
+    });
+
+    const response = await request(isolatedApp)
+      .get("/api/content/CRS-1/CH-2/url")
+      .set("Cookie", authCookieFor(testUsers.employee));
+
+    expect(response.status).toBe(423);
+    expect(response.body).toMatchObject({ code: "OBJECT_SCAN_PENDING" });
+    expect(response.body).not.toHaveProperty("url");
+  });
 });

@@ -42,6 +42,21 @@ describe("AWS staging release controls", () => {
     expect((template.match(/Type: AWS::CloudWatch::Alarm/g) ?? []).length).toBeGreaterThanOrEqual(9);
   });
 
+  it("quarantines protected media until GuardDuty reports a clean scan", () => {
+    expect(template).toContain("Type: AWS::GuardDuty::MalwareProtectionPlan");
+    expect(template).toContain("Service: malware-protection-plan.guardduty.amazonaws.com");
+    expect(template).toContain("GuardDutyMalwareScanStatus: NO_THREATS_FOUND");
+    expect(template).toContain("ObjectPrefixes:");
+    expect(template).toContain("- course_media/");
+    expect(template).toContain("- chapter_pdf/");
+    expect(template).toContain("- proctoring/");
+    expect(template).toContain("Status: ENABLED");
+    expect(template).toContain("GuardDuty Malware Protection Object Scan Result");
+    expect(template).toContain("THREATS_FOUND");
+    expect(template).toContain("GuardDuty Malware Protection Post Scan Action Failed");
+    expect(template).toContain("Action: [s3:GetObject, s3:GetObjectTagging, s3:PutObject, s3:DeleteObject]");
+  });
+
   it("keeps relational authority flags disabled until live verification", () => {
     const expectedFlags = [
       "USE_PG_PAYMENTS",

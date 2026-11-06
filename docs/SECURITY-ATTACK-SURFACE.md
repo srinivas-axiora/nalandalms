@@ -34,7 +34,7 @@ or step-up middleware disagrees with its declaration.
 | GET | `/api/csrf-token` | Public | Cookie | N/A | N | G | Token returned in body intentionally |
 | GET | `/api/app-data` | Any | N | N/A | N | G | Phases 23-24 relational identity scope plus canonical learning events, reports, AI feedback, settings, ratings and chapter feedback when cutovers are enabled; large response and remaining legacy projections require decomposition |
 | GET | `*splat` | Public | N | N/A | N | None | Frontend fallback; API paths return JSON 404 |
-| POST | `/api/auth/register` | Public | Y | Y | N | G + login map | Allows public Instructor self-assignment |
+| POST | `/api/auth/register` | Public | Y | Y | N | G + registration limiter | Strict schema ignores/rejects role input and assigns Learner only |
 | POST | `/api/auth/login` | Public | Y | Y | N | G + login map | Identifier lockout enables victim DoS |
 | POST | `/api/auth/logout` | Any | Cookie | Y | N | G | Authenticated logout rotates session version and revokes the presented JWT |
 | POST | `/api/auth/forgot-password` | Public | Y | Y | N | G | No production delivery implementation shown |
@@ -44,9 +44,9 @@ or step-up middleware disagrees with its declaration.
 | PATCH | `/api/users/me/preferences` | Any | Y | Y | N | G | Self-scoped |
 | GET | `/api/users` | A/M | N | N/A | N | G | Manager direct-report scope implemented |
 | POST | `/api/users` | A | Y | Y | Y | G | Privileged account creation requires recent re-authentication |
-| PATCH | `/api/users/:id` | A | Y | Y | Y | G | Password hash copied into audit metadata |
+| PATCH | `/api/users/:id` | A | Y | Y | Y | G | Step-up protected; credential/role/status changes revoke sessions; centralized audit redaction removes credential derivatives |
 | PATCH | `/api/users/:id/status` | A | Y | Y | Y | G | Deactivation revokes; activation does not rotate |
-| DELETE | `/api/users/:id` | SA | Y | Y | Y | G | Archive retains full user including hash |
+| DELETE | `/api/users/:id` | SA | Y | Y | Y | G | Step-up protected; sessions revoked; archived identity is redacted before persistence |
 
 ## Courses, chapters, enrollment and cohorts
 
@@ -141,9 +141,9 @@ or step-up middleware disagrees with its declaration.
 | POST | `/api/payments/create-order` | Any | Y | Y | N | G | Server-priced order ledger binds user/course/amount/currency and expires |
 | POST | `/api/payments/verify` | Any | Y | Y | N | G | Mandatory HMAC, order ownership/binding and payment-level idempotency |
 | POST | `/api/payments/webhook` | Public | Y | Exempt | N | G | Mandatory raw-body HMAC and provider event-ID replay protection |
-| POST | `/api/uploads/presign` | A/M | Y | Y | N | G | Explicit course scope; owner/admin authority; short-lived grant; extension/MIME allowlist and course-rooted randomized key |
-| PUT | `/api/uploads/direct` | A/M | Y | Y | N | G | Subject-bound one-use grant, 15MB cap and magic-byte validation |
-| GET | `/api/uploads/download` | Any | N | N/A | N | G | Subject-bound grant; attachment, no-store, nosniff and sandbox headers |
+| POST | `/api/uploads/presign` | A/M | Y | Y | N | G | Explicit course scope; owner/admin authority; short-lived grant; extension/MIME allowlist and course-rooted randomized key; no pre-scan download grant |
+| PUT | `/api/uploads/direct` | A/M | Y | Y | N | G | Subject-bound one-use grant, 15MB cap and magic-byte validation; S3 objects enter GuardDuty quarantine |
+| GET | `/api/uploads/download` | Any | N | N/A | N | G | Subject-bound grant; attachment, no-store, nosniff and sandbox headers; S3 protected prefixes require a clean malware-scan tag |
 | GET | `/api/content/:courseId/:chapterId/url` | Any | N | N/A | N | G | Relational owner/admin or published enrollment authority; prerequisite gate; object key must remain inside the requested course prefix |
 | POST | `/api/proctoring/captures` | Any | Y | Y | N | G | Attempt-scoped; strict JPEG decoding and 5MB cap |
 | GET | `/uploads/*` | Public | N | N/A | N | None | Explicit 404; local object directory is not published |

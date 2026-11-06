@@ -329,6 +329,121 @@ Resources:
             Condition:
               Bool:
                 aws:SecureTransport: "false"
+          - Sid: NoReadOfProtectedObjectsUnlessClean
+            Effect: Deny
+            NotPrincipal:
+              AWS:
+                - !GetAtt MalwareProtectionRole.Arn
+                - !Sub arn:${AWS::Partition}:sts::${AWS::AccountId}:assumed-role/${MalwareProtectionRole}/GuardDutyMalwareProtection
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+            Resource:
+              - !Sub ${MediaBucket.Arn}/course_media/*
+              - !Sub ${MediaBucket.Arn}/chapter_pdf/*
+              - !Sub ${MediaBucket.Arn}/proctoring/*
+            Condition:
+              StringNotEquals:
+                s3:ExistingObjectTag/GuardDutyMalwareScanStatus: NO_THREATS_FOUND
+          - Sid: OnlyGuardDutyCanSetMalwareScanStatus
+            Effect: Deny
+            NotPrincipal:
+              AWS:
+                - !GetAtt MalwareProtectionRole.Arn
+                - !Sub arn:${AWS::Partition}:sts::${AWS::AccountId}:assumed-role/${MalwareProtectionRole}/GuardDutyMalwareProtection
+            Action:
+              - s3:PutObjectTagging
+              - s3:PutObjectVersionTagging
+            Resource:
+              - !Sub ${MediaBucket.Arn}/course_media/*
+              - !Sub ${MediaBucket.Arn}/chapter_pdf/*
+              - !Sub ${MediaBucket.Arn}/proctoring/*
+            Condition:
+              ForAnyValue:StringEquals:
+                s3:RequestObjectTagKeys: GuardDutyMalwareScanStatus
+
+  MalwareProtectionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: malware-protection-plan.guardduty.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ScanPrivateMedia
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowManagedRuleToSendS3EventsToGuardDuty
+                Effect: Allow
+                Action:
+                  - events:PutRule
+                  - events:DeleteRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*
+                Condition:
+                  StringLike:
+                    events:ManagedBy: malware-protection-plan.guardduty.amazonaws.com
+              - Sid: AllowGuardDutyToMonitorEventBridgeManagedRule
+                Effect: Allow
+                Action:
+                  - events:DescribeRule
+                  - events:ListTargetsByRule
+                Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/DO-NOT-DELETE-AmazonGuardDutyMalwareProtectionS3*
+              - Sid: AllowPostScanTag
+                Effect: Allow
+                Action:
+                  - s3:PutObjectTagging
+                  - s3:GetObjectTagging
+                  - s3:PutObjectVersionTagging
+                  - s3:GetObjectVersionTagging
+                Resource:
+                  - !Sub ${MediaBucket.Arn}/course_media/*
+                  - !Sub ${MediaBucket.Arn}/chapter_pdf/*
+                  - !Sub ${MediaBucket.Arn}/proctoring/*
+              - Sid: AllowEnableS3EventBridgeEvents
+                Effect: Allow
+                Action:
+                  - s3:PutBucketNotification
+                  - s3:GetBucketNotification
+                Resource: !GetAtt MediaBucket.Arn
+              - Sid: AllowPutValidationObject
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub ${MediaBucket.Arn}/malware-protection-resource-validation-object
+              - Sid: AllowCheckBucketOwnership
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt MediaBucket.Arn
+              - Sid: AllowMalwareScan
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource:
+                  - !Sub ${MediaBucket.Arn}/course_media/*
+                  - !Sub ${MediaBucket.Arn}/chapter_pdf/*
+                  - !Sub ${MediaBucket.Arn}/proctoring/*
+
+  MalwareProtectionPlan:
+    Type: AWS::GuardDuty::MalwareProtectionPlan
+    DependsOn: MediaBucketPolicy
+    Properties:
+      Role: !GetAtt MalwareProtectionRole.Arn
+      ProtectedResource:
+        S3Bucket:
+          BucketName: !Ref MediaBucket
+          ObjectPrefixes:
+            - course_media/
+            - chapter_pdf/
+            - proctoring/
+      Actions:
+        Tagging:
+          Status: ENABLED
 
   JwtSecret:
     Type: AWS::SecretsManager::Secret
@@ -418,6 +533,19 @@ Resources:
                 aws:SourceAccount: !Ref AWS::AccountId
               ArnLike:
                 aws:SourceArn: !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${EnvironmentName}-*
+          - Sid: AllowEventBridgeMalwareAlerts
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${EnvironmentName}-malware-*
 
   AlertKeyAlias:
     Type: AWS::KMS::Alias
@@ -438,6 +566,65 @@ Resources:
       Protocol: email
       Endpoint: !Ref AlertEmail
       TopicArn: !Ref AlertTopic
+
+  AlertTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref AlertTopic]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridgeMalwareAlerts
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref AlertTopic
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${EnvironmentName}-malware-*
+
+  MalwareScanResultAlert:
+    Type: AWS::Events::Rule
+    DependsOn: AlertTopicPolicy
+    Properties:
+      Name: !Sub ${EnvironmentName}-malware-scan-result
+      Description: Alert when a protected object is unsafe or cannot be scanned
+      State: ENABLED
+      EventPattern:
+        source: [aws.guardduty]
+        detail-type: [GuardDuty Malware Protection Object Scan Result]
+        resources: [!GetAtt MalwareProtectionPlan.Arn]
+        detail:
+          scanResultDetails:
+            scanResultStatus:
+              - THREATS_FOUND
+              - UNSUPPORTED
+              - ACCESS_DENIED
+              - FAILED
+      Targets:
+        - Arn: !Ref AlertTopic
+          Id: MalwareScanResultAlertTopic
+
+  MalwareProtectionHealthAlert:
+    Type: AWS::Events::Rule
+    DependsOn: AlertTopicPolicy
+    Properties:
+      Name: !Sub ${EnvironmentName}-malware-protection-health
+      Description: Alert when malware protection or post-scan tagging is unhealthy
+      State: ENABLED
+      EventPattern:
+        source: [aws.guardduty]
+        resources: [!GetAtt MalwareProtectionPlan.Arn]
+        detail-type:
+          - GuardDuty Malware Protection Resource Status Warning
+          - GuardDuty Malware Protection Resource Status Error
+          - GuardDuty Malware Protection Post Scan Action Failed
+      Targets:
+        - Arn: !Ref AlertTopic
+          Id: MalwareProtectionHealthAlertTopic
 
   TaskExecutionRole:
     Type: AWS::IAM::Role
@@ -485,7 +672,7 @@ Resources:
                 Action: s3:ListBucket
                 Resource: !GetAtt MediaBucket.Arn
               - Effect: Allow
-                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Action: [s3:GetObject, s3:GetObjectTagging, s3:PutObject, s3:DeleteObject]
                 Resource: !Sub ${MediaBucket.Arn}/*
 
   Cluster:
@@ -960,6 +1147,8 @@ Outputs:
     Value: !Ref AlertTopic
   RegionalWebAclArn:
     Value: !GetAtt RegionalWebAcl.Arn
+  MalwareProtectionPlanArn:
+    Value: !GetAtt MalwareProtectionPlan.Arn
   BootstrapAdminSecretArn:
     Value: !Ref BootstrapAdminSecret
   DatabaseSecretArn:

@@ -106,6 +106,13 @@ Do not use real learner/candidate PII or real payments in this staging stack.
   rules emit count metrics without breaking valid large requests.
 - Confirm the alert SNS subscription and exercise unhealthy-target, readiness
   failure and application-error alarm delivery/recovery in staging.
+- Confirm the GuardDuty Malware Protection plan reaches `ACTIVE`. Upload clean
+  synthetic media through the application and verify it is unreadable before
+  the scan tag, then downloadable only after `NO_THREATS_FOUND`.
+- In the isolated staging account, upload an approved antivirus test artifact
+  and verify the object remains unreadable, the scan result is
+  `THREATS_FOUND`, and the EventBridge-to-SNS alert is delivered. Never use a
+  real malicious file or production data for this exercise.
 - Retrieve the generated bootstrap administrator secret, log in once, change
   the account password and rotate/remove bootstrap access.
 - Review CloudWatch errors and ALB target health for at least one normal user

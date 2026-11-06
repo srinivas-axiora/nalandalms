@@ -20,6 +20,7 @@ process.env.RAZORPAY_WEBHOOK_SECRET = "security-regression-webhook-secret";
 const { app } = await import("../backend/server.js");
 const core = await import("../backend/src/core.js");
 const { signToken, signStepUpToken } = await import("../backend/src/domain.js");
+const { getPresignedDownloadUrl } = await import("../backend/src/storage/object-store.js");
 
 const unique = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const cookieFor = (user) => `token=${signToken(user)}`;
@@ -345,10 +346,15 @@ describe("Nalanda release-blocking security regressions", () => {
       .set("Content-Type", "application/pdf")
       .send(Buffer.from("%PDF-1.7\n%%EOF"));
     expect(uploaded.status).toBe(200);
+    expect(grant.body).not.toHaveProperty("downloadUrl");
+    const download = await getPresignedDownloadUrl(grant.body.key, 900, admin.id, {
+      filename: "safe.pdf",
+      contentType: "application/pdf",
+    });
 
-    const anonymous = await request(app).get(grant.body.downloadUrl);
+    const anonymous = await request(app).get(download.downloadUrl);
     const authorized = await request(app)
-      .get(grant.body.downloadUrl)
+      .get(download.downloadUrl)
       .set("Cookie", cookieFor(admin));
 
     expect(anonymous.status).toBe(401);

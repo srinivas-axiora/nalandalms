@@ -84,6 +84,7 @@ deploys anything.
 6. Tune common-rule false positives using only synthetic requests, then promote
    reviewed rules from count to block.
 
-Production remains blocked on this live evidence, malware scanning/quarantine,
-custom-domain/ACM configuration, restore/failover/load/privacy/payment drills and
-completion of the relational multi-writer cutover.
+Production remains blocked on this live evidence, live verification of the
+Phase-26 malware quarantine, custom-domain/ACM configuration,
+restore/failover/load/privacy/payment drills and completion of the relational
+multi-writer cutover.

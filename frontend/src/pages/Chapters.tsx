@@ -21,7 +21,7 @@ export default function Chapters({ data, currentUser, setData }: { data: AppData
     try {
       const result = await uploadCourseFile(form.courseId, file, "chapter_pdf");
       setForm((current) => ({ ...current, fileName: file.name, url: result.key }));
-      toast("PDF uploaded securely");
+      toast(result.scanStatus === "PENDING" ? "PDF uploaded and queued for malware scanning" : "PDF uploaded securely");
     } catch {
       toast("PDF upload failed");
     }
