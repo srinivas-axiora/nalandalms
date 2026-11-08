@@ -8,7 +8,7 @@ import bcrypt from "bcryptjs";
 import { fileURLToPath } from "node:url";
 import { createStorage } from "../db.js";
 import { USER_ROLES, ADMIN_ROLES } from "./roles.js";
-import { relationalIdentityEnabled } from "./runtime-modes.js";
+import { relationalAuditEnabled, relationalIdentityEnabled } from "./runtime-modes.js";
 import {
   pythonFullStackCourse,
   pythonFullStackSkills,
@@ -510,7 +510,7 @@ const videoProgress = {}; // { "userId-courseId-chapterId": { currentTime, updat
 // ── Durable persistence (PostgreSQL when DATABASE_URL is set, else JSON file) ──
 const dbPath = path.resolve(__dirname, "..", "..", "database", "db.json");
 const storage = createStorage({ filePath: dbPath, databaseUrl: process.env.DATABASE_URL });
-const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
+const USE_RELATIONAL_AUDIT = relationalAuditEnabled();
 const USE_PG_ARCHIVES = relationalIdentityEnabled() && process.env.USE_PG_COURSES === "1";
 
 const snapshot = () => ({
@@ -526,7 +526,7 @@ const snapshot = () => ({
   cohorts,
   attempts,
   proctoringLogs,
-  ...(USE_PG_AUDIT ? {} : { auditLogs, securityEvents }),
+  ...(USE_RELATIONAL_AUDIT ? {} : { auditLogs, securityEvents }),
   learningTimeEvents,
   acharyaFeedbackMemory,
   reportExports,
@@ -581,8 +581,8 @@ const loadDb = async () => {
     if (data.cohorts) { cohorts.length = 0; cohorts.push(...data.cohorts); }
     if (data.attempts) { attempts.length = 0; attempts.push(...data.attempts); }
     if (data.proctoringLogs) { proctoringLogs.length = 0; proctoringLogs.push(...data.proctoringLogs); }
-    if (!USE_PG_AUDIT && data.auditLogs) { auditLogs.length = 0; auditLogs.push(...data.auditLogs); }
-    if (!USE_PG_AUDIT && data.securityEvents) { securityEvents.length = 0; securityEvents.push(...data.securityEvents); }
+    if (!USE_RELATIONAL_AUDIT && data.auditLogs) { auditLogs.length = 0; auditLogs.push(...data.auditLogs); }
+    if (!USE_RELATIONAL_AUDIT && data.securityEvents) { securityEvents.length = 0; securityEvents.push(...data.securityEvents); }
     if (data.learningTimeEvents) { learningTimeEvents.length = 0; learningTimeEvents.push(...data.learningTimeEvents); }
     if (data.acharyaFeedbackMemory) { acharyaFeedbackMemory.length = 0; acharyaFeedbackMemory.push(...data.acharyaFeedbackMemory); }
     if (data.reportExports) { reportExports.length = 0; reportExports.push(...data.reportExports); }

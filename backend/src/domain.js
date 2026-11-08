@@ -10,6 +10,7 @@ import { redactAuditMetadata, redactSensitive } from "./security/redaction.js";
 import { safeRequestPath } from "./security/request-path.js";
 import { securityEvidenceRepository } from "./repositories/security-evidence.repository.pg.js";
 import { trackEvidenceWrite } from "./security/evidence-write-context.js";
+import { relationalAuditEnabled } from "./runtime-modes.js";
 import {
   now, isAdmin, sessionVersions, auditLogs, securityEvents, users, courses,
   assessments, assignments, attempts, chapters, acharyaFeedbackMemory, learningTimeEvents,
@@ -26,7 +27,7 @@ export const publicUser = (user) => {
 const AUDIT_LOG_CAP = 5000;
 export const audit = (actorId, action, entityType, entityId, metadata = {}) => {
   const event = { id: uuid(), actorId, action, entityType, entityId, metadata: redactAuditMetadata(metadata), createdAt: now() };
-  if (process.env.USE_PG_AUDIT === "1") {
+  if (relationalAuditEnabled()) {
     return trackEvidenceWrite(securityEvidenceRepository.appendAudit(event));
   }
   auditLogs.unshift(event);
@@ -48,7 +49,7 @@ export const securityEvent = (req, type, metadata = {}) => {
     metadata: redactAuditMetadata(metadata),
     createdAt: now(),
   };
-  if (process.env.USE_PG_AUDIT === "1") {
+  if (relationalAuditEnabled()) {
     return trackEvidenceWrite(securityEvidenceRepository.appendSecurityEvent(event));
   }
   securityEvents.unshift(event);

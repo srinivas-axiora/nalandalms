@@ -26,6 +26,7 @@ describe("experimental course authority readiness interlock", () => {
         privacy: { mode: "normalized" },
         payments: { mode: "normalized" },
         settings: { mode: "normalized" },
+        audit: { mode: "normalized", dependencies: "complete" },
         attempts: { mode: "normalized" },
         certificates: { mode: "normalized" },
         candidateAssessments: { mode: "normalized" },

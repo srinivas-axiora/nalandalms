@@ -84,11 +84,11 @@ import {
   relationalSkillsEnabled,
   relationalIdentityEnabled,
   relationalPrivacyEnabled,
+  relationalAuditEnabled,
 } from "./src/runtime-modes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
-const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
 const USE_RELATIONAL_ATTEMPTS = relationalAttemptsEnabled();
 const USE_RELATIONAL_CERTIFICATES = relationalCertificatesEnabled();
 const USE_RELATIONAL_CANDIDATE_ASSESSMENTS = relationalCandidateAssessmentsEnabled();
@@ -97,6 +97,7 @@ const USE_RELATIONAL_SETTINGS = relationalSettingsEnabled();
 const USE_RELATIONAL_SKILLS = relationalSkillsEnabled();
 const USE_RELATIONAL_IDENTITY = relationalIdentityEnabled();
 const USE_RELATIONAL_PRIVACY = relationalPrivacyEnabled();
+const USE_RELATIONAL_AUDIT = relationalAuditEnabled();
 const AUDIT_TRANSACTIONAL_DEPENDENCIES = USE_RELATIONAL_PAYMENTS && USE_RELATIONAL_SKILLS
   && USE_RELATIONAL_IDENTITY && USE_RELATIONAL_ATTEMPTS && USE_RELATIONAL_CERTIFICATES
   && USE_RELATIONAL_CANDIDATE_ASSESSMENTS && USE_PG_COURSES && USE_RELATIONAL_PRIVACY
@@ -387,7 +388,7 @@ app.get("/api/ready", async (_req, res) => {
           ok: Object.values(rows[0] || {}).every(Boolean), mode: "normalized",
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
-    USE_PG_AUDIT
+    USE_RELATIONAL_AUDIT
       ? Promise.resolve().then(() => relationalQuery(
           `SELECT
              to_regclass('public.audit_logs') IS NOT NULL AS audit_logs,
@@ -540,10 +541,10 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   const authoritativeSettings = admin
     ? (USE_RELATIONAL_SETTINGS ? await settingsRepository.getProctoring() : settings)
     : {};
-  const authoritativeAudit = admin && USE_PG_AUDIT
+  const authoritativeAudit = admin && USE_RELATIONAL_AUDIT
     ? await securityEvidenceRepository.listAudit({ limit: 200 })
     : null;
-  const authoritativeSecurityEvents = admin && USE_PG_AUDIT
+  const authoritativeSecurityEvents = admin && USE_RELATIONAL_AUDIT
     ? await securityEvidenceRepository.listSecurityEvents({ limit: 500 })
     : null;
   const relationalArchiveTypes = [

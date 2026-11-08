@@ -11,11 +11,11 @@ import {
   archiveAuthorityRepository,
   ArchiveAuthorityError,
 } from "../../repositories/archive-authority.repository.pg.js";
-import { relationalIdentityEnabled } from "../../runtime-modes.js";
+import { relationalAuditEnabled, relationalIdentityEnabled } from "../../runtime-modes.js";
 
 const USE_RELATIONAL_IDENTITY = relationalIdentityEnabled();
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
-const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
+const USE_RELATIONAL_AUDIT = relationalAuditEnabled();
 // Module: Governance (audit logs, security events, archive + restore).
 // Handlers moved verbatim from server.js; shared deps injected via ctx.
 export function registerGovernance(app) {
@@ -104,7 +104,7 @@ export function registerGovernance(app) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
       return res.status(400).json({ error: "limit must be an integer between 1 and 200" });
     }
-    if (USE_PG_AUDIT) return res.json(await securityEvidenceRepository.listAudit({ limit }));
+    if (USE_RELATIONAL_AUDIT) return res.json(await securityEvidenceRepository.listAudit({ limit }));
     return res.json({ data: redactSensitive(auditLogs.slice(0, limit)), total: auditLogs.length });
   });
 
@@ -113,7 +113,7 @@ export function registerGovernance(app) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
       return res.status(400).json({ error: "limit must be an integer between 1 and 500" });
     }
-    if (USE_PG_AUDIT) return res.json(await securityEvidenceRepository.listSecurityEvents({ limit }));
+    if (USE_RELATIONAL_AUDIT) return res.json(await securityEvidenceRepository.listSecurityEvents({ limit }));
     return res.json({ data: redactSensitive(securityEvents.slice(0, limit)), total: securityEvents.length });
   });
 }

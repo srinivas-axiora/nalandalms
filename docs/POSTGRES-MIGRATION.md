@@ -13,8 +13,8 @@ Owner: Engineering. Updated: 2026-11-06.
 > `USE_PG_CANDIDATE_ASSESSMENTS` must stay off until their live-database gates
 > pass. `USE_PG_PRIVACY` and its separate erasure-worker switch must also stay
 > off until the Phase 11 coverage audit passes. `USE_PG_AUDIT` must remain off
-> until the Phase 32 live verifier passes and the business mutations emitting
-> generic evidence no longer depend on the snapshot authority.
+> until the Phase 32 live verifier passes. Course cutover now implies relational
+> audit/security evidence, so it must not be enabled before that same live gate.
 > `USE_PG_COURSES` now covers the Phase-12/21 course, chapter, progress,
 > assessment, question, assignment, cohort, upload-grant and protected-content
 > authority plus analytics and report-data preparation, but
@@ -244,7 +244,8 @@ For each bounded context, in roughly ascending coupling:
 - [x] application-wide audit/security-event repository, recursive database
       metadata scrubbing, fail-closed request evidence draining, backfill,
       governance/app-data projections and live verifier are implemented behind
-      `USE_PG_AUDIT=1` (Phase 32; live RDS proof pending)
+      `USE_PG_AUDIT=1` and implied by course cutover (Phases 32 and 46; live RDS
+      and multi-task proof pending)
 - [x] course/assessment archive authority captures complete question state,
       restores atomically as inactive draft content, backfills legacy archives
       idempotently and serves governance projections behind `USE_PG_COURSES=1`

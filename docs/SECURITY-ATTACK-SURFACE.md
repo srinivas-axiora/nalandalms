@@ -207,6 +207,10 @@ feedback and the competency evidence used by local course recommendations.
 Phase 45 applies it to privacy export, deletion intake, review, legal hold and
 erasure state. The erasure worker and normalized coverage acknowledgement remain
 explicit readiness requirements rather than being silently enabled.
+Phase 46 applies it to append-only audit and security evidence writes, governance
+reads and application-data projections. Evidence-write failure remains a
+response-blocking error, and the snapshot no longer loads or saves competing
+evidence arrays on the course-cutover path.
 
 Attempt permission middleware uses only relational attempt principals and
 relational assessment/course ownership when `USE_PG_COURSES=1`; stale snapshot

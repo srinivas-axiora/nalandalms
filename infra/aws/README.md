@@ -70,7 +70,8 @@ The verifier set includes the Phase-32 security-evidence check for durable
 audit/security rows, idempotent event IDs and recursive credential/PII metadata
 scrubbing, plus the Phase-33 complete course/assessment archive and
 review-gated restore drill. `USE_PG_AUDIT` remains `0` in the task definition
-until that live proof and the related business-authority cutovers are complete.
+until that live proof is complete. `USE_PG_COURSES` also remains `0`: course
+cutover now implies relational audit authority and cannot bypass the same gate.
 
 The three custom-domain parameters are optional but atomic: provide all three
 or none. The certificate must already be validated, cover the requested DNS

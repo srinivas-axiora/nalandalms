@@ -38,3 +38,8 @@ export const relationalPrivacyEnabled = () => (
   process.env.USE_PG_PRIVACY === "1"
   || process.env.USE_PG_COURSES === "1"
 );
+
+export const relationalAuditEnabled = () => (
+  process.env.USE_PG_AUDIT === "1"
+  || process.env.USE_PG_COURSES === "1"
+);

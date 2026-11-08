@@ -9,6 +9,7 @@ import {
   relationalSkillsEnabled,
   relationalIdentityEnabled,
   relationalPrivacyEnabled,
+  relationalAuditEnabled,
 } from "../../backend/src/runtime-modes.js";
 
 describe("relational runtime invariants", () => {
@@ -22,6 +23,7 @@ describe("relational runtime invariants", () => {
   const previousGlobalPg = process.env.USE_PG;
   const previousIdentity = process.env.USE_PG_IDENTITY;
   const previousPrivacy = process.env.USE_PG_PRIVACY;
+  const previousAudit = process.env.USE_PG_AUDIT;
 
   afterEach(() => {
     if (previousAttempts === undefined) delete process.env.USE_PG_ATTEMPTS;
@@ -44,6 +46,19 @@ describe("relational runtime invariants", () => {
     else process.env.USE_PG_IDENTITY = previousIdentity;
     if (previousPrivacy === undefined) delete process.env.USE_PG_PRIVACY;
     else process.env.USE_PG_PRIVACY = previousPrivacy;
+    if (previousAudit === undefined) delete process.env.USE_PG_AUDIT;
+    else process.env.USE_PG_AUDIT = previousAudit;
+  });
+
+  it.each([
+    ["0", "0", false],
+    ["1", "0", true],
+    ["0", "1", true],
+    ["1", "1", true],
+  ])("maps audit=%s courses=%s to relational audit=%s", (audit, courses, expected) => {
+    process.env.USE_PG_AUDIT = audit;
+    process.env.USE_PG_COURSES = courses;
+    expect(relationalAuditEnabled()).toBe(expected);
   });
 
   it.each([
@@ -179,6 +194,12 @@ describe("relational runtime invariants", () => {
       "backend/server.js",
       "backend/src/modules/governance/privacy.routes.js",
     ];
+    const auditFiles = [
+      "backend/server.js",
+      "backend/src/domain.js",
+      "backend/src/core.js",
+      "backend/src/modules/governance/governance.routes.js",
+    ];
     expect(server).toContain("relationalCertificatesEnabled");
     expect(certificateRoutes).toContain("relationalCertificatesEnabled");
     expect(server).not.toContain("process.env.USE_PG_CERTIFICATES");
@@ -210,6 +231,11 @@ describe("relational runtime invariants", () => {
       const source = readFileSync(file, "utf8");
       expect(source, file).toContain("relationalPrivacyEnabled");
       expect(source, file).not.toContain("process.env.USE_PG_PRIVACY");
+    }
+    for (const file of auditFiles) {
+      const source = readFileSync(file, "utf8");
+      expect(source, file).toContain("relationalAuditEnabled");
+      expect(source, file).not.toContain("process.env.USE_PG_AUDIT");
     }
   });
 });
