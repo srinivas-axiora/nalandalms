@@ -211,6 +211,10 @@ Phase 46 applies it to append-only audit and security evidence writes, governanc
 reads and application-data projections. Evidence-write failure remains a
 response-blocking error, and the snapshot no longer loads or saves competing
 evidence arrays on the course-cutover path.
+Phase 47 moves proctoring-media retention off the process-local attempt array.
+Relational deployments now claim expired objects with row locks, delete private
+objects, redact stored keys, update the attempt projection and audit completion
+atomically, with bounded retry and stale-claim recovery.
 
 Attempt permission middleware uses only relational attempt principals and
 relational assessment/course ownership when `USE_PG_COURSES=1`; stale snapshot

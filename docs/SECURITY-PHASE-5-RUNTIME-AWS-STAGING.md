@@ -108,5 +108,7 @@ mandatory staging gates, not assumed successes.
   retaining explicit worker and coverage-acknowledgement release gates.
   Phase 46 extends it to durable audit/security evidence writes and reads while
   preserving the fail-closed response gate and schema/dependency readiness checks.
+  Phase 47 replaces process-local proctoring-media retention with a normalized,
+  retryable and multi-worker-safe RDS/S3 deletion workflow.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

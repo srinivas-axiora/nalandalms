@@ -241,6 +241,9 @@ For each bounded context, in roughly ascending coupling:
       across assessment, proctoring, cockpit, companion and startup paths
 - [x] attempts (+ answers/flags as JSONB; reconcile status CHECK)
 - [x] proctoring_logs  ·  certificates
+- [x] proctoring media retention uses a normalized object manifest, bounded
+      retry state and `FOR UPDATE SKIP LOCKED` claims under relational attempt
+      authority (Phase 47; live S3/RDS and multi-task proof pending)
 - [x] application-wide audit/security-event repository, recursive database
       metadata scrubbing, fail-closed request evidence draining, backfill,
       governance/app-data projections and live verifier are implemented behind

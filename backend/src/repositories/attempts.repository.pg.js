@@ -277,6 +277,15 @@ export function createAttemptsRepository(db = { query, withTransaction }) {
         [attemptId, JSON.stringify([chunk])]
       );
       if (!rows[0]) fail("ATTEMPT_NOT_FOUND", "Assessment attempt not found");
+      await client.query(
+        `INSERT INTO proctor_media_objects (
+           attempt_id, object_key, object_key_sha256, chunk_index, stream_role,
+           size_bytes, content_type
+         ) VALUES ($1, $2, encode(digest($2, 'sha256'), 'hex'), $3, $4, $5, $6)
+         ON CONFLICT (attempt_id, object_key_sha256) DO NOTHING`,
+        [attemptId, chunk.key, chunk.chunkIndex ?? null, chunk.streamRole || null,
+          chunk.sizeBytes ?? null, chunk.contentType || null],
+      );
       await audit(client, actorId, "STORE_PROCTORING_CHUNK", attemptId, {
         chunkIndex: chunk.chunkIndex,
         streamRole: chunk.streamRole,

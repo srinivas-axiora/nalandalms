@@ -233,6 +233,8 @@ app.get("/api/ready", async (_req, res) => {
           `SELECT
              to_regclass('public.assessment_attempts') IS NOT NULL AS attempts,
              to_regclass('public.proctoring_logs') IS NOT NULL AS proctoring,
+             to_regclass('public.proctor_media_objects') IS NOT NULL AS media_retention,
+             to_regclass('public.idx_proctor_media_retention_due') IS NOT NULL AS media_retention_due,
              to_regclass('public.enrollments') IS NOT NULL AS enrollments,
              EXISTS (
                SELECT 1 FROM information_schema.columns

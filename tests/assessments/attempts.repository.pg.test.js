@@ -202,5 +202,6 @@ describe("PostgreSQL assessment-attempt repository", () => {
     const updateSql = client.query.mock.calls.find(([sql]) => sql.includes("UPDATE assessment_attempts"))[0];
     expect(updateSql).toContain("video_chunks = video_chunks ||");
     expect(updateSql).toContain("version = version + 1");
+    expect(client.query.mock.calls.some(([sql]) => sql.includes("INSERT INTO proctor_media_objects"))).toBe(true);
   });
 });
