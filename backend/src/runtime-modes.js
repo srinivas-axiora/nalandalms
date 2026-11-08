@@ -33,3 +33,8 @@ export const relationalIdentityEnabled = () => (
   process.env.USE_PG_IDENTITY === "1"
   || process.env.USE_PG_COURSES === "1"
 );
+
+export const relationalPrivacyEnabled = () => (
+  process.env.USE_PG_PRIVACY === "1"
+  || process.env.USE_PG_COURSES === "1"
+);

@@ -185,8 +185,9 @@ For each bounded context, in roughly ascending coupling:
       and 40; live-DB/cross-task gate still pending)
 - [x] Durable privacy intake, review, legal hold, object retry, pseudonymization
       and completion evidence are implemented behind `USE_PG_PRIVACY=1` and
-      `ENABLE_PRIVACY_ERASURE_WORKER=1` (Phase 11; live-DB, coverage and AWS
-      restore/erasure gates still pending)
+      implied by course cutover, with `ENABLE_PRIVACY_ERASURE_WORKER=1` still
+      explicit (Phases 11 and 45; live-DB, coverage and AWS restore/erasure
+      gates still pending)
 - [x] transactional course catalog/lifecycle authority implemented behind
       `USE_PG_COURSES=1` with versioning, durable audit, race-safe free
       enrollment and history-protected deletion (Phase 12 foundation; readiness

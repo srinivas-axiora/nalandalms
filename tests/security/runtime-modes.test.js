@@ -8,6 +8,7 @@ import {
   relationalSettingsEnabled,
   relationalSkillsEnabled,
   relationalIdentityEnabled,
+  relationalPrivacyEnabled,
 } from "../../backend/src/runtime-modes.js";
 
 describe("relational runtime invariants", () => {
@@ -20,6 +21,7 @@ describe("relational runtime invariants", () => {
   const previousSkills = process.env.USE_PG_SKILLS;
   const previousGlobalPg = process.env.USE_PG;
   const previousIdentity = process.env.USE_PG_IDENTITY;
+  const previousPrivacy = process.env.USE_PG_PRIVACY;
 
   afterEach(() => {
     if (previousAttempts === undefined) delete process.env.USE_PG_ATTEMPTS;
@@ -40,6 +42,19 @@ describe("relational runtime invariants", () => {
     else process.env.USE_PG = previousGlobalPg;
     if (previousIdentity === undefined) delete process.env.USE_PG_IDENTITY;
     else process.env.USE_PG_IDENTITY = previousIdentity;
+    if (previousPrivacy === undefined) delete process.env.USE_PG_PRIVACY;
+    else process.env.USE_PG_PRIVACY = previousPrivacy;
+  });
+
+  it.each([
+    ["0", "0", false],
+    ["1", "0", true],
+    ["0", "1", true],
+    ["1", "1", true],
+  ])("maps privacy=%s courses=%s to relational privacy=%s", (privacy, courses, expected) => {
+    process.env.USE_PG_PRIVACY = privacy;
+    process.env.USE_PG_COURSES = courses;
+    expect(relationalPrivacyEnabled()).toBe(expected);
   });
 
   it.each([
@@ -160,6 +175,10 @@ describe("relational runtime invariants", () => {
       "backend/src/modules/governance/governance.routes.js",
       "backend/src/core.js",
     ];
+    const privacyFiles = [
+      "backend/server.js",
+      "backend/src/modules/governance/privacy.routes.js",
+    ];
     expect(server).toContain("relationalCertificatesEnabled");
     expect(certificateRoutes).toContain("relationalCertificatesEnabled");
     expect(server).not.toContain("process.env.USE_PG_CERTIFICATES");
@@ -186,6 +205,11 @@ describe("relational runtime invariants", () => {
       const source = readFileSync(file, "utf8");
       expect(source, file).toContain("relationalIdentityEnabled");
       expect(source, file).not.toContain("process.env.USE_PG_IDENTITY");
+    }
+    for (const file of privacyFiles) {
+      const source = readFileSync(file, "utf8");
+      expect(source, file).toContain("relationalPrivacyEnabled");
+      expect(source, file).not.toContain("process.env.USE_PG_PRIVACY");
     }
   });
 });

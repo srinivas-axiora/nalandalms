@@ -83,10 +83,10 @@ import {
   relationalSettingsEnabled,
   relationalSkillsEnabled,
   relationalIdentityEnabled,
+  relationalPrivacyEnabled,
 } from "./src/runtime-modes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const USE_PG_PRIVACY = process.env.USE_PG_PRIVACY === "1";
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
 const USE_RELATIONAL_ATTEMPTS = relationalAttemptsEnabled();
@@ -96,9 +96,10 @@ const USE_RELATIONAL_PAYMENTS = relationalPaymentsEnabled();
 const USE_RELATIONAL_SETTINGS = relationalSettingsEnabled();
 const USE_RELATIONAL_SKILLS = relationalSkillsEnabled();
 const USE_RELATIONAL_IDENTITY = relationalIdentityEnabled();
+const USE_RELATIONAL_PRIVACY = relationalPrivacyEnabled();
 const AUDIT_TRANSACTIONAL_DEPENDENCIES = USE_RELATIONAL_PAYMENTS && USE_RELATIONAL_SKILLS
   && USE_RELATIONAL_IDENTITY && USE_RELATIONAL_ATTEMPTS && USE_RELATIONAL_CERTIFICATES
-  && USE_RELATIONAL_CANDIDATE_ASSESSMENTS && USE_PG_COURSES && USE_PG_PRIVACY
+  && USE_RELATIONAL_CANDIDATE_ASSESSMENTS && USE_PG_COURSES && USE_RELATIONAL_PRIVACY
   && USE_RELATIONAL_SETTINGS;
 const ENABLE_PRIVACY_ERASURE_WORKER = process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1";
 const ENABLE_REPORT_EXPORT_WORKER = process.env.ENABLE_REPORT_EXPORT_WORKER === "1";
@@ -328,7 +329,7 @@ app.get("/api/ready", async (_req, res) => {
           mode: "normalized",
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
-    USE_PG_PRIVACY
+    USE_RELATIONAL_PRIVACY
       ? readinessQuery(
           `SELECT
              to_regclass('public.privacy_requests') IS NOT NULL AS requests,
@@ -631,7 +632,7 @@ const start = async () => {
     const objects = await objectStoreHealth();
     if (!objects.ok) throw new Error(`Object storage is unavailable: ${objects.error || objects.mode}`);
     retentionTimer = startRetentionDaemon();
-    if (USE_PG_PRIVACY && ENABLE_PRIVACY_ERASURE_WORKER) {
+    if (USE_RELATIONAL_PRIVACY && ENABLE_PRIVACY_ERASURE_WORKER) {
       privacyErasureTimer = startPrivacyErasureDaemon();
     }
     if (USE_PG_COURSES && ENABLE_REPORT_EXPORT_WORKER) {

@@ -15,12 +15,13 @@ import {
 import { audit } from "../../domain.js";
 import { authenticate, requireStepUp } from "../../middleware.js";
 import { registerPrivacyPgRoutes } from "./privacy.pg.routes.js";
+import { relationalPrivacyEnabled } from "../../runtime-modes.js";
 
 const deletionQueue = new Map(); // userId -> { requestedAt, gracePeriodEndsAt, email, reason }
-const USE_PG_PRIVACY = process.env.USE_PG_PRIVACY === "1";
+const USE_RELATIONAL_PRIVACY = relationalPrivacyEnabled();
 
 export function registerPrivacyCompliance(app) {
-  if (USE_PG_PRIVACY) return registerPrivacyPgRoutes(app);
+  if (USE_RELATIONAL_PRIVACY) return registerPrivacyPgRoutes(app);
   // ── GDPR Article 20: Data Portability (Complete Personal Data Archive) ──
   app.get("/api/users/me/data-export", authenticate, requireStepUp, (req, res) => {
     const userId = req.user.id;

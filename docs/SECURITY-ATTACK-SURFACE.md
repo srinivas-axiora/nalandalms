@@ -194,7 +194,6 @@ The runtime-data ignore is anchored to `/uploads/`, so source modules under an
 | POST | `/api/privacy/requests/:requestId/review` | A | Y | Y | Y | G | Administrator step-up; explicit approve or legal hold reason |
 | GET | `/api/settings` | A | N | N/A | N | G | Admin-only; Phase-24 relational mode reads constrained operational settings |
 | PATCH | `/api/settings` | A | Y | Y | Y | G | Strict bounded patch, step-up, row lock and atomic audit in Phase-24 relational mode |
-
 | GET | `/api/ai/generation-feedback` | A/M | N | N/A | N | G | Phase-21 relational mode gives Managers creator-only scope and Admins organization review scope; expired feedback is excluded |
 | POST | `/api/ai/generation-feedback` | A/M | Y | Y | N | G | Phase-21 relational mode validates bounded fields and commits feedback plus audit atomically with 180-day retention |
 | POST | `/api/ai/chat` | Any | Y | Y | N | G+AI | Phase-34 local learning commands use scoped relational course/enrollment/chapter/assessment projections when enabled; user/context enters provider prompt; 4k message cap |
@@ -205,6 +204,9 @@ Phase 42 makes `USE_PG_COURSES=1` select relational settings for administration,
 attempt start and proctor-event enforcement, preventing task-local exam policy.
 Phase 43 applies the same invariant to skills, targets, ratings, chapter
 feedback and the competency evidence used by local course recommendations.
+Phase 45 applies it to privacy export, deletion intake, review, legal hold and
+erasure state. The erasure worker and normalized coverage acknowledgement remain
+explicit readiness requirements rather than being silently enabled.
 
 Attempt permission middleware uses only relational attempt principals and
 relational assessment/course ownership when `USE_PG_COURSES=1`; stale snapshot

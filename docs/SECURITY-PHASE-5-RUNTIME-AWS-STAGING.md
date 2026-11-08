@@ -104,5 +104,7 @@ mandatory staging gates, not assumed successes.
   and the evidence used by local learning recommendations.
   Phase 44 extends it to authentication, session revocation, user lifecycle,
   companion identity validation and user archive authority.
+  Phase 45 extends it to durable privacy export/deletion workflows while
+  retaining explicit worker and coverage-acknowledgement release gates.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.
