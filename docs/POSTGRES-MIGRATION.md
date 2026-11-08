@@ -177,8 +177,8 @@ For each bounded context, in roughly ascending coupling:
       live-DB/cross-task gate still pending)
 - [x] Public candidate links, anonymous sessions, proctor evidence, database
       deadlines and grading are implemented behind
-      `USE_PG_CANDIDATE_ASSESSMENTS=1` (Phase 10; live-DB/cross-task gate still
-      pending)
+      `USE_PG_CANDIDATE_ASSESSMENTS=1` and implied by course cutover (Phases 10
+      and 40; live-DB/cross-task gate still pending)
 - [x] Durable privacy intake, review, legal hold, object retry, pseudonymization
       and completion evidence are implemented behind `USE_PG_PRIVACY=1` and
       `ENABLE_PRIVACY_ERASURE_WORKER=1` (Phase 11; live-DB, coverage and AWS

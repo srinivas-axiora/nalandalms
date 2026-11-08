@@ -7,3 +7,8 @@ export const relationalCertificatesEnabled = () => (
   process.env.USE_PG_CERTIFICATES === "1"
   || process.env.USE_PG_COURSES === "1"
 );
+
+export const relationalCandidateAssessmentsEnabled = () => (
+  process.env.USE_PG_CANDIDATE_ASSESSMENTS === "1"
+  || process.env.USE_PG_COURSES === "1"
+);

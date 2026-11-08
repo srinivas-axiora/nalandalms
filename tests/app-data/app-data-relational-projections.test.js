@@ -11,6 +11,7 @@ import { aiFeedbackRepository } from "../../backend/src/repositories/ai-feedback
 import { analyticsRepository } from "../../backend/src/repositories/analytics.repository.pg.js";
 import * as skillsRepository from "../../backend/src/repositories/skills.repository.pg.js";
 import { certificatesPgRepository } from "../../backend/src/repositories/certificates.repository.pg.js";
+import { candidateAssessmentsPgRepository } from "../../backend/src/repositories/candidate-assessments.repository.pg.js";
 
 describe("relational app-data secondary projections", () => {
   const previous = process.env.USE_PG_COURSES;
@@ -47,6 +48,9 @@ describe("relational app-data secondary projections", () => {
     const certificateList = vi.spyOn(certificatesPgRepository, "listForUser").mockResolvedValue([
       { id: "CERT-PG", employeeId: testUsers.manager.id, courseId: "CRS-PG", status: "Active" },
     ]);
+    const candidateList = vi.spyOn(candidateAssessmentsPgRepository, "listForUser").mockResolvedValue([
+      { id: "CAL-PG", createdBy: testUsers.manager.id, assessmentId: "ASM-PG", submissions: [] },
+    ]);
     vi.spyOn(skillsRepository, "listSkills").mockResolvedValue([]);
     vi.spyOn(skillsRepository, "listTargetSkills").mockResolvedValue([]);
     vi.spyOn(skillsRepository, "listSkillRatings").mockResolvedValue([
@@ -69,8 +73,10 @@ describe("relational app-data secondary projections", () => {
     expect(response.body.skillRatings).toEqual([expect.objectContaining({ id: "RATE-PG" })]);
     expect(response.body.chapterFeedbacks).toEqual([expect.objectContaining({ id: "CF-PG" })]);
     expect(response.body.issuedCertificates).toEqual([expect.objectContaining({ id: "CERT-PG" })]);
+    expect(response.body.candidateAssessments).toEqual([expect.objectContaining({ id: "CAL-PG" })]);
     expect(reportList).toHaveBeenCalledWith({ actor: expect.objectContaining({ id: testUsers.manager.id }) });
     expect(feedbackList).toHaveBeenCalledWith(expect.objectContaining({ id: testUsers.manager.id }), 25);
     expect(certificateList).toHaveBeenCalledWith(expect.objectContaining({ id: testUsers.manager.id }));
+    expect(candidateList).toHaveBeenCalledWith(expect.objectContaining({ id: testUsers.manager.id }));
   });
 });

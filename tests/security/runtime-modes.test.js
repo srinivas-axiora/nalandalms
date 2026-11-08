@@ -3,12 +3,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   relationalAttemptsEnabled,
   relationalCertificatesEnabled,
+  relationalCandidateAssessmentsEnabled,
 } from "../../backend/src/runtime-modes.js";
 
 describe("relational runtime invariants", () => {
   const previousAttempts = process.env.USE_PG_ATTEMPTS;
   const previousCourses = process.env.USE_PG_COURSES;
   const previousCertificates = process.env.USE_PG_CERTIFICATES;
+  const previousCandidateAssessments = process.env.USE_PG_CANDIDATE_ASSESSMENTS;
 
   afterEach(() => {
     if (previousAttempts === undefined) delete process.env.USE_PG_ATTEMPTS;
@@ -17,6 +19,19 @@ describe("relational runtime invariants", () => {
     else process.env.USE_PG_COURSES = previousCourses;
     if (previousCertificates === undefined) delete process.env.USE_PG_CERTIFICATES;
     else process.env.USE_PG_CERTIFICATES = previousCertificates;
+    if (previousCandidateAssessments === undefined) delete process.env.USE_PG_CANDIDATE_ASSESSMENTS;
+    else process.env.USE_PG_CANDIDATE_ASSESSMENTS = previousCandidateAssessments;
+  });
+
+  it.each([
+    ["0", "0", false],
+    ["1", "0", true],
+    ["0", "1", true],
+    ["1", "1", true],
+  ])("maps candidate assessments=%s courses=%s to relational candidates=%s", (candidates, courses, expected) => {
+    process.env.USE_PG_CANDIDATE_ASSESSMENTS = candidates;
+    process.env.USE_PG_COURSES = courses;
+    expect(relationalCandidateAssessmentsEnabled()).toBe(expected);
   });
 
   it.each([
@@ -58,9 +73,14 @@ describe("relational runtime invariants", () => {
     }
     const server = readFileSync("backend/server.js", "utf8");
     const certificateRoutes = readFileSync("backend/src/modules/certificates/certificates.routes.js", "utf8");
+    const candidateRoutes = readFileSync("backend/src/modules/assessments/candidate-assessments.routes.js", "utf8");
     expect(server).toContain("relationalCertificatesEnabled");
     expect(certificateRoutes).toContain("relationalCertificatesEnabled");
     expect(server).not.toContain("process.env.USE_PG_CERTIFICATES");
     expect(certificateRoutes).not.toContain("process.env.USE_PG_CERTIFICATES");
+    expect(server).toContain("relationalCandidateAssessmentsEnabled");
+    expect(candidateRoutes).toContain("relationalCandidateAssessmentsEnabled");
+    expect(server).not.toContain("process.env.USE_PG_CANDIDATE_ASSESSMENTS");
+    expect(candidateRoutes).not.toContain("process.env.USE_PG_CANDIDATE_ASSESSMENTS");
   });
 });

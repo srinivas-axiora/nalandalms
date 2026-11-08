@@ -54,6 +54,10 @@ describe("relational app-data identity scope", () => {
     vi.spyOn(certificatesPgRepository, "listForUser").mockResolvedValue([
       { id: "CERT-IN", employeeId: subordinate.id, courseId: "CRS-REL", status: "Active" },
     ]);
+    const { candidateAssessmentsPgRepository } = await import("../../backend/src/repositories/candidate-assessments.repository.pg.js");
+    vi.spyOn(candidateAssessmentsPgRepository, "listForUser").mockResolvedValue([
+      { id: "CAL-IN", createdBy: manager.id, assessmentId: "ASM-REL", submissions: [] },
+    ]);
 
     const { signToken } = await import("../../backend/src/domain.js");
     authCookie = `token=${signToken(manager)}`;
@@ -76,6 +80,7 @@ describe("relational app-data identity scope", () => {
     expect(response.body.assignments.map((item) => item.id)).toEqual(["ENR-IN"]);
     expect(response.body.attempts.map((item) => item.id)).toEqual(["ATT-IN"]);
     expect(response.body.issuedCertificates.map((item) => item.id)).toEqual(["CERT-IN"]);
+    expect(response.body.candidateAssessments.map((item) => item.id)).toEqual(["CAL-IN"]);
     expect(response.body.users.every((user) => !Object.hasOwn(user, "passwordHash"))).toBe(true);
   });
 });

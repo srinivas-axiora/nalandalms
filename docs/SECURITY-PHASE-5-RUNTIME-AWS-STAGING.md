@@ -94,5 +94,7 @@ mandatory staging gates, not assumed successes.
   proctoring and companion mutation path and for startup/readiness.
   Phase 39 extends the invariant to certificate eligibility, issuance,
   revocation, readiness and application projections.
+  Phase 40 extends it to public candidate links, anonymous sessions,
+  proctor evidence, deadline/grading writes, readiness and privacy coverage.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

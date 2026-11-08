@@ -23,6 +23,7 @@ describe("experimental course authority readiness interlock", () => {
       checks: {
         attempts: { mode: "normalized" },
         certificates: { mode: "normalized" },
+        candidateAssessments: { mode: "normalized" },
         courses: { ok: false, mode: "experimental-learning-secondary-consumers" },
       },
     });

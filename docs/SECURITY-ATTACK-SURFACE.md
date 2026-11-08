@@ -104,6 +104,10 @@ or step-up middleware disagrees with its declaration.
 | POST | `/api/public/candidate-assessments/:token/event` | Public attempt token | Y | Exempt | N | G | Deadline enforced; relational mode derives severity server-side, deduplicates client event IDs and commits evidence atomically |
 | POST | `/api/public/candidate-assessments/:token/submit` | Public attempt token | Y | Exempt | N | G | Server deadline enforced; prose requires manual review; relational mode locks and commits once |
 
+Phase 40 makes `USE_PG_COURSES=1` select the relational candidate-assessment
+engine for every authenticated and public route, including token hashing,
+deadline enforcement, idempotent proctor evidence and atomic submission.
+
 ## Proctoring and signaling
 
 | Method | Route | Auth | State | CSRF | Step | Rate | Scope / concern |

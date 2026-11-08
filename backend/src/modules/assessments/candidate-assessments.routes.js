@@ -25,8 +25,9 @@ import {
   candidateSubmissionExpiresAt,
 } from "./exam-deadline.js";
 import { registerCandidateAssessmentsPg } from "./candidate-assessments.pg.routes.js";
+import { relationalCandidateAssessmentsEnabled } from "../../runtime-modes.js";
 
-const USE_PG_CANDIDATE_ASSESSMENTS = process.env.USE_PG_CANDIDATE_ASSESSMENTS === "1";
+const USE_RELATIONAL_CANDIDATE_ASSESSMENTS = relationalCandidateAssessmentsEnabled();
 
 function expireCandidateSubmission(submission, link) {
   const clock = candidateSubmissionClock(submission, link);
@@ -100,7 +101,7 @@ export function registerCandidateAssessments(app) {
     });
   });
 
-  if (USE_PG_CANDIDATE_ASSESSMENTS) return registerCandidateAssessmentsPg(app);
+  if (USE_RELATIONAL_CANDIDATE_ASSESSMENTS) return registerCandidateAssessmentsPg(app);
 
   // ── 2. Authenticated: Create a shareable assessment link ──
   app.post("/api/candidate-assessments", authenticate, requireRole("Admin", "Manager", "Instructor"), (req, res) => {

@@ -75,23 +75,27 @@ import { settingsRepository } from "./src/repositories/settings.repository.pg.js
 import { securityEvidenceRepository } from "./src/repositories/security-evidence.repository.pg.js";
 import { archiveAuthorityRepository } from "./src/repositories/archive-authority.repository.pg.js";
 import { evidenceWriteContextMiddleware } from "./src/security/evidence-write-context.js";
-import { relationalAttemptsEnabled, relationalCertificatesEnabled } from "./src/runtime-modes.js";
+import {
+  relationalAttemptsEnabled,
+  relationalCertificatesEnabled,
+  relationalCandidateAssessmentsEnabled,
+} from "./src/runtime-modes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG = process.env.USE_PG === "1";
 const USE_PG_SKILLS = USE_PG || process.env.USE_PG_SKILLS === "1";
 const USE_PG_PAYMENTS = process.env.USE_PG_PAYMENTS === "1";
 const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
-const USE_PG_CANDIDATE_ASSESSMENTS = process.env.USE_PG_CANDIDATE_ASSESSMENTS === "1";
 const USE_PG_PRIVACY = process.env.USE_PG_PRIVACY === "1";
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 const USE_PG_SETTINGS = process.env.USE_PG_SETTINGS === "1";
 const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
 const USE_RELATIONAL_ATTEMPTS = relationalAttemptsEnabled();
 const USE_RELATIONAL_CERTIFICATES = relationalCertificatesEnabled();
+const USE_RELATIONAL_CANDIDATE_ASSESSMENTS = relationalCandidateAssessmentsEnabled();
 const AUDIT_TRANSACTIONAL_DEPENDENCIES = USE_PG_PAYMENTS && USE_PG_SKILLS
   && USE_PG_IDENTITY && USE_RELATIONAL_ATTEMPTS && USE_RELATIONAL_CERTIFICATES
-  && USE_PG_CANDIDATE_ASSESSMENTS && USE_PG_COURSES && USE_PG_PRIVACY
+  && USE_RELATIONAL_CANDIDATE_ASSESSMENTS && USE_PG_COURSES && USE_PG_PRIVACY
   && USE_PG_SETTINGS;
 const ENABLE_PRIVACY_ERASURE_WORKER = process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1";
 const ENABLE_REPORT_EXPORT_WORKER = process.env.ENABLE_REPORT_EXPORT_WORKER === "1";
@@ -285,7 +289,7 @@ app.get("/api/ready", async (_req, res) => {
           mode: "normalized",
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
-    USE_PG_CANDIDATE_ASSESSMENTS
+    USE_RELATIONAL_CANDIDATE_ASSESSMENTS
       ? readinessQuery(
           `SELECT
              to_regclass('public.candidate_assessment_links') IS NOT NULL AS links,
@@ -333,7 +337,7 @@ app.get("/api/ready", async (_req, res) => {
             && USE_PG_IDENTITY
             && USE_RELATIONAL_ATTEMPTS
             && USE_RELATIONAL_CERTIFICATES
-            && USE_PG_CANDIDATE_ASSESSMENTS,
+            && USE_RELATIONAL_CANDIDATE_ASSESSMENTS,
           mode: "normalized",
           worker: ENABLE_PRIVACY_ERASURE_WORKER ? "enabled" : "disabled",
         })).catch(() => ({ ok: false, mode: "normalized", worker: "unknown" }))
@@ -536,7 +540,7 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   const scopedCertificates = USE_RELATIONAL_CERTIFICATES
     ? await certificatesPgRepository.listForUser(req.user)
     : issuedCertificates.filter((cert) => admin || visibleUserIds.has(cert.employeeId));
-  const scopedCandidateAssessments = USE_PG_CANDIDATE_ASSESSMENTS
+  const scopedCandidateAssessments = USE_RELATIONAL_CANDIDATE_ASSESSMENTS
     ? await candidateAssessmentsPgRepository.listForUser(req.user)
     : (admin ? candidateAssessments : candidateAssessments.filter((item) => item.createdBy === req.user.id));
   const authoritativeChapters = USE_PG_COURSES
