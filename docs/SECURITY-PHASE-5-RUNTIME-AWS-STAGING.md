@@ -100,5 +100,7 @@ mandatory staging gates, not assumed successes.
   and the enrolled-course entitlement written in the settlement transaction.
   Phase 42 extends it to the proctor policy used by settings administration,
   attempt start and live proctor-event enforcement.
+  Phase 43 extends it to skills, competency targets, ratings, chapter feedback
+  and the evidence used by local learning recommendations.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

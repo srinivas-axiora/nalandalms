@@ -20,8 +20,9 @@ import * as enrollmentsRepository from "../../repositories/enrollments.repositor
 import * as chaptersRepository from "../../repositories/chapters.repository.pg.js";
 import { courseAuthorityRepository } from "../../repositories/courses-authority.repository.pg.js";
 import { assessmentAuthorityRepository } from "../../repositories/assessment-authority.repository.pg.js";
+import { relationalSkillsEnabled } from "../../runtime-modes.js";
 
-const USE_PG_SKILLS = process.env.USE_PG_SKILLS === "1" || process.env.USE_PG === "1";
+const USE_RELATIONAL_SKILLS = relationalSkillsEnabled();
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 
 const learningSourceFor = async (user, {
@@ -330,7 +331,7 @@ I am your local code-driven training assistant. Here are the categories of tasks
 
   if (msg === "recommend" || msg.includes("recommend courses") || msg.includes("suggest courses") || msg.includes("course recommend")) {
     const { courseList } = await learningSourceFor(user);
-    const [recommendationSkills, recommendationTargets, recommendationRatings] = USE_PG_SKILLS
+    const [recommendationSkills, recommendationTargets, recommendationRatings] = USE_RELATIONAL_SKILLS
       ? await Promise.all([
           skillsRepository.listSkills(),
           skillsRepository.listTargetSkills(),

@@ -3,6 +3,7 @@ import * as enrollmentsRepository from "../../backend/src/repositories/enrollmen
 import * as chaptersRepository from "../../backend/src/repositories/chapters.repository.pg.js";
 import { courseAuthorityRepository } from "../../backend/src/repositories/courses-authority.repository.pg.js";
 import { assessmentAuthorityRepository } from "../../backend/src/repositories/assessment-authority.repository.pg.js";
+import * as skillsRepository from "../../backend/src/repositories/skills.repository.pg.js";
 
 describe("local Copilot relational learning projection", () => {
   const previous = process.env.USE_PG_COURSES;
@@ -30,6 +31,16 @@ describe("local Copilot relational learning projection", () => {
     vi.spyOn(assessmentAuthorityRepository, "listVisible").mockResolvedValue([{
       id: "ASM-PG", courseId: "CRS-PG", chapterId: "CH-PG", title: "Secure quiz",
       questions: [{ type: "MCQ", prompt: "Hidden answer question", options: ["A", "B"] }],
+    }]);
+    vi.spyOn(skillsRepository, "listSkills").mockResolvedValue([{
+      id: "SK-SEC", name: "Security", category: "Technical", status: "Active",
+    }]);
+    vi.spyOn(skillsRepository, "listTargetSkills").mockResolvedValue([{
+      id: "TS-SEC", skillId: "SK-SEC", scope: "Employee", userId: user.id,
+      targetLevel: "Advanced", targetScore: 90, priority: "High",
+    }]);
+    vi.spyOn(skillsRepository, "listSkillRatings").mockResolvedValue([{
+      id: "SR-SEC", userId: user.id, skill: "Security", score: 50,
     }]);
     ({ handleLocalChat } = await import("../../backend/src/modules/ai/localAgent.js?phase34-relational-learning"));
   });
@@ -63,5 +74,13 @@ describe("local Copilot relational learning projection", () => {
     expect(result.reply).toContain("Course Outline: Relational Security");
     expect(result.reply).toContain("Threat Modeling");
     expect(chaptersRepository.listChapterMetadata).toHaveBeenCalledWith("CRS-PG");
+  });
+
+  it("builds course recommendations from relational competency evidence", async () => {
+    const result = await handleLocalChat(user, "recommend courses");
+    expect(result.reply).toContain("Relational Security");
+    expect(skillsRepository.listSkills).toHaveBeenCalled();
+    expect(skillsRepository.listTargetSkills).toHaveBeenCalled();
+    expect(skillsRepository.listSkillRatings).toHaveBeenCalledWith(user);
   });
 });

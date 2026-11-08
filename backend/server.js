@@ -81,11 +81,10 @@ import {
   relationalCandidateAssessmentsEnabled,
   relationalPaymentsEnabled,
   relationalSettingsEnabled,
+  relationalSkillsEnabled,
 } from "./src/runtime-modes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const USE_PG = process.env.USE_PG === "1";
-const USE_PG_SKILLS = USE_PG || process.env.USE_PG_SKILLS === "1";
 const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
 const USE_PG_PRIVACY = process.env.USE_PG_PRIVACY === "1";
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
@@ -95,7 +94,8 @@ const USE_RELATIONAL_CERTIFICATES = relationalCertificatesEnabled();
 const USE_RELATIONAL_CANDIDATE_ASSESSMENTS = relationalCandidateAssessmentsEnabled();
 const USE_RELATIONAL_PAYMENTS = relationalPaymentsEnabled();
 const USE_RELATIONAL_SETTINGS = relationalSettingsEnabled();
-const AUDIT_TRANSACTIONAL_DEPENDENCIES = USE_RELATIONAL_PAYMENTS && USE_PG_SKILLS
+const USE_RELATIONAL_SKILLS = relationalSkillsEnabled();
+const AUDIT_TRANSACTIONAL_DEPENDENCIES = USE_RELATIONAL_PAYMENTS && USE_RELATIONAL_SKILLS
   && USE_PG_IDENTITY && USE_RELATIONAL_ATTEMPTS && USE_RELATIONAL_CERTIFICATES
   && USE_RELATIONAL_CANDIDATE_ASSESSMENTS && USE_PG_COURSES && USE_PG_PRIVACY
   && USE_RELATIONAL_SETTINGS;
@@ -171,13 +171,25 @@ app.get("/api/health", (_req, res) => {
 app.get("/api/ready", async (_req, res) => {
   const readinessQuery = (...args) => Promise.resolve().then(() => relationalQuery(...args));
   const [
-    database, redis, objects, payments, identity, attemptRuntime,
+    database, redis, objects, skillsAuthority, payments, identity, attemptRuntime,
     certificateAuthority, candidateRuntime, privacyAuthority, reportAuthority, settingsAuthority, auditAuthority,
     archiveAuthority,
   ] = await Promise.all([
     storage.health(),
     redisHealth(),
     objectStoreHealth(),
+    USE_RELATIONAL_SKILLS
+      ? readinessQuery(
+          `SELECT
+             to_regclass('public.skills') IS NOT NULL AS skills,
+             to_regclass('public.target_skills') IS NOT NULL AS targets,
+             to_regclass('public.skill_ratings') IS NOT NULL AS ratings,
+             to_regclass('public.chapter_feedbacks') IS NOT NULL AS feedback`
+        ).then(({ rows }) => ({
+          ok: Object.values(rows[0] || {}).every(Boolean),
+          mode: "normalized",
+        })).catch(() => ({ ok: false, mode: "normalized" }))
+      : Promise.resolve({ ok: true, mode: "disabled" }),
     USE_RELATIONAL_PAYMENTS
       ? readinessQuery(
           `SELECT
@@ -336,6 +348,7 @@ app.get("/api/ready", async (_req, res) => {
             && ENABLE_PRIVACY_ERASURE_WORKER
             && PRIVACY_COVERAGE_ACK
             && USE_RELATIONAL_PAYMENTS
+            && USE_RELATIONAL_SKILLS
             && USE_PG_IDENTITY
             && USE_RELATIONAL_ATTEMPTS
             && USE_RELATIONAL_CERTIFICATES
@@ -420,12 +433,13 @@ app.get("/api/ready", async (_req, res) => {
     ok: !USE_PG_COURSES,
     mode: USE_PG_COURSES ? "experimental-learning-secondary-consumers" : "disabled",
   };
-  const ok = startupReady && database.ok && redis.ok && objects.ok && payments.ok && identity.ok
+  const ok = startupReady && database.ok && redis.ok && objects.ok && skillsAuthority.ok
+    && payments.ok && identity.ok
     && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok && privacyAuthority.ok
     && reportAuthority.ok && settingsAuthority.ok && auditAuthority.ok && archiveAuthority.ok
     && courseAuthority.ok;
   if (!ok) logger.error("READINESS_CHECK_FAILED", {
-    database, redis, objects, payments, identity, attempts: attemptRuntime,
+    database, redis, objects, skills: skillsAuthority, payments, identity, attempts: attemptRuntime,
     certificates: certificateAuthority, candidateAssessments: candidateRuntime,
     privacy: privacyAuthority, reports: reportAuthority, settings: settingsAuthority,
     audit: auditAuthority,
@@ -439,6 +453,7 @@ app.get("/api/ready", async (_req, res) => {
       database: { ok: database.ok, mode: database.mode },
       redis: { ok: redis.ok, mode: redis.mode },
       objects: { ok: objects.ok, mode: objects.mode },
+      skills: { ok: skillsAuthority.ok, mode: skillsAuthority.mode },
       payments: { ok: payments.ok, mode: payments.mode },
       identity: { ok: identity.ok, mode: identity.mode },
       attempts: { ok: attemptRuntime.ok, mode: attemptRuntime.mode },
@@ -488,8 +503,8 @@ app.get("/api/app-data", authenticate, async (req, res) => {
           : [await identityRepository.findUserById(req.user.id)].filter(Boolean))
     : users.filter((user) => visibleUserIdsFor(req.user).includes(user.id));
   const visibleUserIds = new Set(authoritativeVisibleUsers.map((user) => user.id));
-  const allSkills = USE_PG_SKILLS ? await skillsRepo.listSkills() : skills;
-  const allTargetSkills = USE_PG_SKILLS ? await skillsRepo.listTargetSkills() : targetSkills;
+  const allSkills = USE_RELATIONAL_SKILLS ? await skillsRepo.listSkills() : skills;
+  const allTargetSkills = USE_RELATIONAL_SKILLS ? await skillsRepo.listTargetSkills() : targetSkills;
   const visibleCourses = USE_PG_COURSES
     ? await courseAuthorityRepository.listVisible({ actor: req.user, status: "Active" })
     : coursesVisibleTo(req.user);
@@ -514,10 +529,10 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   const scopedLearningTimeEvents = USE_PG_COURSES
     ? await analyticsRepository.listTimeEvents({ actor: req.user, limit: 500 })
     : learningTimeEvents.filter((event) => admin || visibleUserIds.has(event.userId));
-  const scopedSkillRatings = USE_PG_SKILLS
+  const scopedSkillRatings = USE_RELATIONAL_SKILLS
     ? await skillsRepo.listSkillRatings(req.user)
     : skillRatings.filter((rating) => admin || visibleUserIds.has(rating.userId));
-  const scopedChapterFeedbacks = USE_PG_SKILLS
+  const scopedChapterFeedbacks = USE_RELATIONAL_SKILLS
     ? await skillsRepo.listChapterFeedback(req.user)
     : chapterFeedbacks.filter((feedback) => admin || feedback.userId === req.user.id || (req.user.role === "Manager" && visibleUserIds.has(feedback.userId)));
   const authoritativeSettings = admin

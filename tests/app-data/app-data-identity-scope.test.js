@@ -58,6 +58,17 @@ describe("relational app-data identity scope", () => {
     vi.spyOn(candidateAssessmentsPgRepository, "listForUser").mockResolvedValue([
       { id: "CAL-IN", createdBy: manager.id, assessmentId: "ASM-REL", submissions: [] },
     ]);
+    const skills = await import("../../backend/src/repositories/skills.repository.pg.js");
+    vi.spyOn(skills, "listSkills").mockResolvedValue([
+      { id: "SKILL-REL", name: "Relational Security", status: "Active" },
+    ]);
+    vi.spyOn(skills, "listTargetSkills").mockResolvedValue([]);
+    vi.spyOn(skills, "listSkillRatings").mockResolvedValue([
+      { id: "RATING-IN", userId: subordinate.id, skill: "Relational Security", score: 80 },
+    ]);
+    vi.spyOn(skills, "listChapterFeedback").mockResolvedValue([
+      { id: "FEEDBACK-IN", userId: subordinate.id, courseId: "CRS-REL" },
+    ]);
 
     const { signToken } = await import("../../backend/src/domain.js");
     authCookie = `token=${signToken(manager)}`;
@@ -81,6 +92,9 @@ describe("relational app-data identity scope", () => {
     expect(response.body.attempts.map((item) => item.id)).toEqual(["ATT-IN"]);
     expect(response.body.issuedCertificates.map((item) => item.id)).toEqual(["CERT-IN"]);
     expect(response.body.candidateAssessments.map((item) => item.id)).toEqual(["CAL-IN"]);
+    expect(response.body.skills.map((item) => item.id)).toEqual(["SKILL-REL"]);
+    expect(response.body.skillRatings.map((item) => item.id)).toEqual(["RATING-IN"]);
+    expect(response.body.chapterFeedbacks.map((item) => item.id)).toEqual(["FEEDBACK-IN"]);
     expect(response.body.users.every((user) => !Object.hasOwn(user, "passwordHash"))).toBe(true);
   });
 });

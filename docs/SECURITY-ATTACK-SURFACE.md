@@ -190,13 +190,16 @@ The runtime-data ignore is anchored to `/uploads/`, so source modules under an
 | GET | `/api/settings` | A | N | N/A | N | G | Admin-only; Phase-24 relational mode reads constrained operational settings |
 | PATCH | `/api/settings` | A | Y | Y | Y | G | Strict bounded patch, step-up, row lock and atomic audit in Phase-24 relational mode |
 
-Phase 42 makes `USE_PG_COURSES=1` select relational settings for administration,
-attempt start and proctor-event enforcement, preventing task-local exam policy.
 | GET | `/api/ai/generation-feedback` | A/M | N | N/A | N | G | Phase-21 relational mode gives Managers creator-only scope and Admins organization review scope; expired feedback is excluded |
 | POST | `/api/ai/generation-feedback` | A/M | Y | Y | N | G | Phase-21 relational mode validates bounded fields and commits feedback plus audit atomically with 180-day retention |
 | POST | `/api/ai/chat` | Any | Y | Y | N | G+AI | Phase-34 local learning commands use scoped relational course/enrollment/chapter/assessment projections when enabled; user/context enters provider prompt; 4k message cap |
 | POST | `/api/ai/generate-course-stream` | A/M | Y | Y | N | G+AI | Phase-20 strict 50-50,000 character input, 1-20 chapters and explicit provider opt-in; NDJSON errors can occur after HTTP 200 |
 | POST | `/api/ai/generate-course` | A/M | Y | Y | N | G+AI | Phase-20 single draft-only handler; strict shared input schema and no direct content-authority mutation |
+
+Phase 42 makes `USE_PG_COURSES=1` select relational settings for administration,
+attempt start and proctor-event enforcement, preventing task-local exam policy.
+Phase 43 applies the same invariant to skills, targets, ratings, chapter
+feedback and the competency evidence used by local course recommendations.
 
 Attempt permission middleware uses only relational attempt principals and
 relational assessment/course ownership when `USE_PG_COURSES=1`; stale snapshot

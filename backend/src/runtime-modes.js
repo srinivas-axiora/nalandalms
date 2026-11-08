@@ -22,3 +22,9 @@ export const relationalSettingsEnabled = () => (
   process.env.USE_PG_SETTINGS === "1"
   || process.env.USE_PG_COURSES === "1"
 );
+
+export const relationalSkillsEnabled = () => (
+  process.env.USE_PG === "1"
+  || process.env.USE_PG_SKILLS === "1"
+  || process.env.USE_PG_COURSES === "1"
+);

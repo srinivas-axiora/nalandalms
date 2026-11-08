@@ -1,7 +1,7 @@
 // Module: Skills, Target Skills, Chapter Feedbacks.
 //
-// Phase-2 cutover (gated): when USE_PG_SKILLS=1, skills + target-skills use the
-// PostgreSQL repository; otherwise the original in-memory behavior runs verbatim.
+// Phase-2/43 cutover (gated): the skills flag, legacy global PostgreSQL flag or
+// relational course cutover selects the PostgreSQL competency authority.
 // The OFF path (default) is unchanged and verified; the ON path is the migration
 // target and chapter-feedback authority (verify against a real DB per
 // docs/POSTGRES-MIGRATION.md).
@@ -11,8 +11,9 @@ import { now, skills, targetSkills, chapterFeedbacks } from "../../core.js";
 import { audit } from "../../domain.js";
 import { authenticate, requireRole } from "../../middleware.js";
 import * as skillsRepo from "../../repositories/skills.repository.pg.js";
+import { relationalSkillsEnabled } from "../../runtime-modes.js";
 
-const USE_PG_SKILLS = process.env.USE_PG_SKILLS === "1";
+const USE_RELATIONAL_SKILLS = relationalSkillsEnabled();
 
 export function registerSkills(app) {
   app.post("/api/skills", authenticate, requireRole("Admin"), async (req, res) => {
@@ -33,7 +34,7 @@ export function registerSkills(app) {
       createdAt: now()
     };
 
-    if (USE_PG_SKILLS) {
+    if (USE_RELATIONAL_SKILLS) {
       if (await skillsRepo.findSkillByName(skill.name)) {
         return res.status(409).json({ error: "Skill name already exists" });
       }
@@ -55,7 +56,7 @@ export function registerSkills(app) {
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    if (USE_PG_SKILLS) {
+    if (USE_RELATIONAL_SKILLS) {
       const updated = await skillsRepo.setSkillStatus(req.params.id, parsed.data.status);
       if (!updated) return res.status(404).json({ error: "Skill not found" });
       audit(req.user.id, "SKILL_STATUS", "SKILL", updated.id, parsed.data);
@@ -96,7 +97,7 @@ export function registerSkills(app) {
       createdAt: now()
     };
 
-    if (USE_PG_SKILLS) {
+    if (USE_RELATIONAL_SKILLS) {
       const saved = await skillsRepo.insertTargetSkill(target);
       audit(req.user.id, "CREATE_TARGET_SKILL", "TARGET_SKILL", saved.id);
       return res.status(201).json({ data: saved });
@@ -108,7 +109,7 @@ export function registerSkills(app) {
   });
 
   app.patch("/api/skills/:id", authenticate, requireRole("Admin"), async (req, res) => {
-    if (USE_PG_SKILLS) {
+    if (USE_RELATIONAL_SKILLS) {
       let skill = await skillsRepo.findSkillById(req.params.id);
       if (!skill) return res.status(404).json({ error: "Skill not found" });
       if (req.body.status) skill = await skillsRepo.setSkillStatus(skill.id, req.body.status);
@@ -142,7 +143,7 @@ export function registerSkills(app) {
       ...parsed.data
     };
 
-    if (USE_PG_SKILLS) {
+    if (USE_RELATIONAL_SKILLS) {
       const saved = await skillsRepo.insertTargetSkill(target);
       audit(req.user.id, "CREATE_TARGET_SKILL", "TARGET_SKILL", saved.id);
       return res.status(201).json({ data: saved });
@@ -171,7 +172,7 @@ export function registerSkills(app) {
       userId: req.user.id,
       submittedAt: now()
     };
-    if (USE_PG_SKILLS) {
+    if (USE_RELATIONAL_SKILLS) {
       try {
         const saved = await skillsRepo.upsertChapterFeedback({ actor: req.user, feedback: fb });
         return res.status(201).json({ data: saved });

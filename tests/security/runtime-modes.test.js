@@ -6,6 +6,7 @@ import {
   relationalCandidateAssessmentsEnabled,
   relationalPaymentsEnabled,
   relationalSettingsEnabled,
+  relationalSkillsEnabled,
 } from "../../backend/src/runtime-modes.js";
 
 describe("relational runtime invariants", () => {
@@ -15,6 +16,8 @@ describe("relational runtime invariants", () => {
   const previousCandidateAssessments = process.env.USE_PG_CANDIDATE_ASSESSMENTS;
   const previousPayments = process.env.USE_PG_PAYMENTS;
   const previousSettings = process.env.USE_PG_SETTINGS;
+  const previousSkills = process.env.USE_PG_SKILLS;
+  const previousGlobalPg = process.env.USE_PG;
 
   afterEach(() => {
     if (previousAttempts === undefined) delete process.env.USE_PG_ATTEMPTS;
@@ -29,6 +32,23 @@ describe("relational runtime invariants", () => {
     else process.env.USE_PG_PAYMENTS = previousPayments;
     if (previousSettings === undefined) delete process.env.USE_PG_SETTINGS;
     else process.env.USE_PG_SETTINGS = previousSettings;
+    if (previousSkills === undefined) delete process.env.USE_PG_SKILLS;
+    else process.env.USE_PG_SKILLS = previousSkills;
+    if (previousGlobalPg === undefined) delete process.env.USE_PG;
+    else process.env.USE_PG = previousGlobalPg;
+  });
+
+  it.each([
+    ["0", "0", "0", false],
+    ["1", "0", "0", true],
+    ["0", "1", "0", true],
+    ["0", "0", "1", true],
+    ["1", "1", "1", true],
+  ])("maps global=%s skills=%s courses=%s to relational skills=%s", (globalPg, skills, courses, expected) => {
+    process.env.USE_PG = globalPg;
+    process.env.USE_PG_SKILLS = skills;
+    process.env.USE_PG_COURSES = courses;
+    expect(relationalSkillsEnabled()).toBe(expected);
   });
 
   it.each([
@@ -111,6 +131,11 @@ describe("relational runtime invariants", () => {
       "backend/src/modules/assessments/assessments.routes.js",
       "backend/src/modules/proctoring/proctoring.routes.js",
     ];
+    const skillFiles = [
+      "backend/server.js",
+      "backend/src/modules/skills/skills.routes.js",
+      "backend/src/modules/ai/localAgent.js",
+    ];
     expect(server).toContain("relationalCertificatesEnabled");
     expect(certificateRoutes).toContain("relationalCertificatesEnabled");
     expect(server).not.toContain("process.env.USE_PG_CERTIFICATES");
@@ -127,6 +152,11 @@ describe("relational runtime invariants", () => {
       const source = readFileSync(file, "utf8");
       expect(source, file).toContain("relationalSettingsEnabled");
       expect(source, file).not.toContain("process.env.USE_PG_SETTINGS");
+    }
+    for (const file of skillFiles) {
+      const source = readFileSync(file, "utf8");
+      expect(source, file).toContain("relationalSkillsEnabled");
+      expect(source, file).not.toContain("process.env.USE_PG_SKILLS");
     }
   });
 });
