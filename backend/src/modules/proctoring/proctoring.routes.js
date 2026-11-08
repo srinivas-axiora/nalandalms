@@ -12,10 +12,10 @@ import { authorizeCompanionToken, createPairingToken, verifyAndPairCompanion, up
 import { attemptsRepository, AttemptRepositoryError } from "../../repositories/attempts.repository.pg.js";
 import { upsertAttemptProjection } from "../../attempt-projection.js";
 import { settingsRepository } from "../../repositories/settings.repository.pg.js";
-import { relationalAttemptsEnabled } from "../../runtime-modes.js";
+import { relationalAttemptsEnabled, relationalSettingsEnabled } from "../../runtime-modes.js";
 
 const USE_RELATIONAL_ATTEMPTS = relationalAttemptsEnabled();
-const USE_PG_SETTINGS = process.env.USE_PG_SETTINGS === "1";
+const USE_RELATIONAL_SETTINGS = relationalSettingsEnabled();
 const attemptErrorStatus = (error) => {
   if (!(error instanceof AttemptRepositoryError)) return error.status || 400;
   if (error.code === "ATTEMPT_NOT_FOUND") return 404;
@@ -77,7 +77,7 @@ export function registerProctoring(app) {
     const attempt = req.authorizedAttempt;
     // Resolve policy before mutating the attempt projection so an authority
     // outage cannot leave an uncommitted flag/trust-score side effect behind.
-    const proctoringSettings = USE_PG_SETTINGS
+    const proctoringSettings = USE_RELATIONAL_SETTINGS
       ? await settingsRepository.getProctoring()
       : settings;
 

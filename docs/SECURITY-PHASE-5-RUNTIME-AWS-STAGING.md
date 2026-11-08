@@ -98,5 +98,7 @@ mandatory staging gates, not assumed successes.
   proctor evidence, deadline/grading writes, readiness and privacy coverage.
   Phase 41 extends it to payment orders, provider webhooks, settlement records
   and the enrolled-course entitlement written in the settlement transaction.
+  Phase 42 extends it to the proctor policy used by settings administration,
+  attempt start and live proctor-event enforcement.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

@@ -80,6 +80,7 @@ import {
   relationalCertificatesEnabled,
   relationalCandidateAssessmentsEnabled,
   relationalPaymentsEnabled,
+  relationalSettingsEnabled,
 } from "./src/runtime-modes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -88,16 +89,16 @@ const USE_PG_SKILLS = USE_PG || process.env.USE_PG_SKILLS === "1";
 const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
 const USE_PG_PRIVACY = process.env.USE_PG_PRIVACY === "1";
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
-const USE_PG_SETTINGS = process.env.USE_PG_SETTINGS === "1";
 const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
 const USE_RELATIONAL_ATTEMPTS = relationalAttemptsEnabled();
 const USE_RELATIONAL_CERTIFICATES = relationalCertificatesEnabled();
 const USE_RELATIONAL_CANDIDATE_ASSESSMENTS = relationalCandidateAssessmentsEnabled();
 const USE_RELATIONAL_PAYMENTS = relationalPaymentsEnabled();
+const USE_RELATIONAL_SETTINGS = relationalSettingsEnabled();
 const AUDIT_TRANSACTIONAL_DEPENDENCIES = USE_RELATIONAL_PAYMENTS && USE_PG_SKILLS
   && USE_PG_IDENTITY && USE_RELATIONAL_ATTEMPTS && USE_RELATIONAL_CERTIFICATES
   && USE_RELATIONAL_CANDIDATE_ASSESSMENTS && USE_PG_COURSES && USE_PG_PRIVACY
-  && USE_PG_SETTINGS;
+  && USE_RELATIONAL_SETTINGS;
 const ENABLE_PRIVACY_ERASURE_WORKER = process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1";
 const ENABLE_REPORT_EXPORT_WORKER = process.env.ENABLE_REPORT_EXPORT_WORKER === "1";
 const PRIVACY_COVERAGE_ACK = process.env.PRIVACY_COVERAGE_ACK === "normalized-v1";
@@ -359,7 +360,7 @@ app.get("/api/ready", async (_req, res) => {
           worker: ENABLE_REPORT_EXPORT_WORKER ? "enabled" : "disabled",
         })).catch(() => ({ ok: false, mode: "normalized", worker: "unknown" }))
       : Promise.resolve({ ok: true, mode: "disabled", worker: "disabled" }),
-    USE_PG_SETTINGS
+    USE_RELATIONAL_SETTINGS
       ? Promise.resolve().then(() => relationalQuery(
           `SELECT
              to_regclass('public.system_settings') IS NOT NULL AS settings_table,
@@ -520,7 +521,7 @@ app.get("/api/app-data", authenticate, async (req, res) => {
     ? await skillsRepo.listChapterFeedback(req.user)
     : chapterFeedbacks.filter((feedback) => admin || feedback.userId === req.user.id || (req.user.role === "Manager" && visibleUserIds.has(feedback.userId)));
   const authoritativeSettings = admin
-    ? (USE_PG_SETTINGS ? await settingsRepository.getProctoring() : settings)
+    ? (USE_RELATIONAL_SETTINGS ? await settingsRepository.getProctoring() : settings)
     : {};
   const authoritativeAudit = admin && USE_PG_AUDIT
     ? await securityEvidenceRepository.listAudit({ limit: 200 })

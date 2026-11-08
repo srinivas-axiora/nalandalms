@@ -225,9 +225,9 @@ For each bounded context, in roughly ascending coupling:
       learning events, report metadata and AI feedback when their cutovers are
       enabled (Phase 23)
 - [x] operational proctor settings use constrained relational state behind
-      `USE_PG_SETTINGS=1`; app-data ratings/feedback and local AI recommendations
-      use relational skill authority behind `USE_PG_SKILLS=1` (Phase 24; live
-      verifier pending)
+      `USE_PG_SETTINGS=1` and are implied by course cutover (Phases 24 and 42);
+      app-data ratings/feedback and local AI recommendations use relational
+      skill authority behind `USE_PG_SKILLS=1` (live verifier pending)
 - [ ] remaining enrollment consumers; Phase 34 moved local Copilot course,
       enrollment, chapter and assessment projections to scoped relational
       authorities, and relational candidate-link creation already uses the

@@ -17,3 +17,8 @@ export const relationalPaymentsEnabled = () => (
   process.env.USE_PG_PAYMENTS === "1"
   || process.env.USE_PG_COURSES === "1"
 );
+
+export const relationalSettingsEnabled = () => (
+  process.env.USE_PG_SETTINGS === "1"
+  || process.env.USE_PG_COURSES === "1"
+);

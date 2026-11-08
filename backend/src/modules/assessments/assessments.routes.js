@@ -14,10 +14,10 @@ import { upsertAttemptProjection } from "../../attempt-projection.js";
 import { registerAssessmentAuthoringPgRoutes, sendAssessmentAuthorityError } from "./assessments.pg.routes.js";
 import { assessmentAuthorityRepository, AssessmentAuthorityError } from "../../repositories/assessment-authority.repository.pg.js";
 import { settingsRepository } from "../../repositories/settings.repository.pg.js";
-import { relationalAttemptsEnabled } from "../../runtime-modes.js";
+import { relationalAttemptsEnabled, relationalSettingsEnabled } from "../../runtime-modes.js";
 
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
-const USE_PG_SETTINGS = process.env.USE_PG_SETTINGS === "1";
+const USE_RELATIONAL_SETTINGS = relationalSettingsEnabled();
 const USE_RELATIONAL_ATTEMPTS = relationalAttemptsEnabled();
 const findAssessmentRuntime = (id) => USE_PG_COURSES
   ? assessmentAuthorityRepository.findRuntimeById(id)
@@ -161,7 +161,7 @@ export function registerAssessments(app) {
     try {
       // Resolve operational policy before creating an attempt so a settings
       // authority outage cannot return failure after durable state changed.
-      const authoritativeSettings = USE_PG_SETTINGS
+      const authoritativeSettings = USE_RELATIONAL_SETTINGS
         ? await settingsRepository.getProctoring()
         : settings;
       let assessment;

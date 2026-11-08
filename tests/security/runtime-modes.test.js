@@ -5,6 +5,7 @@ import {
   relationalCertificatesEnabled,
   relationalCandidateAssessmentsEnabled,
   relationalPaymentsEnabled,
+  relationalSettingsEnabled,
 } from "../../backend/src/runtime-modes.js";
 
 describe("relational runtime invariants", () => {
@@ -13,6 +14,7 @@ describe("relational runtime invariants", () => {
   const previousCertificates = process.env.USE_PG_CERTIFICATES;
   const previousCandidateAssessments = process.env.USE_PG_CANDIDATE_ASSESSMENTS;
   const previousPayments = process.env.USE_PG_PAYMENTS;
+  const previousSettings = process.env.USE_PG_SETTINGS;
 
   afterEach(() => {
     if (previousAttempts === undefined) delete process.env.USE_PG_ATTEMPTS;
@@ -25,6 +27,19 @@ describe("relational runtime invariants", () => {
     else process.env.USE_PG_CANDIDATE_ASSESSMENTS = previousCandidateAssessments;
     if (previousPayments === undefined) delete process.env.USE_PG_PAYMENTS;
     else process.env.USE_PG_PAYMENTS = previousPayments;
+    if (previousSettings === undefined) delete process.env.USE_PG_SETTINGS;
+    else process.env.USE_PG_SETTINGS = previousSettings;
+  });
+
+  it.each([
+    ["0", "0", false],
+    ["1", "0", true],
+    ["0", "1", true],
+    ["1", "1", true],
+  ])("maps settings=%s courses=%s to relational settings=%s", (settings, courses, expected) => {
+    process.env.USE_PG_SETTINGS = settings;
+    process.env.USE_PG_COURSES = courses;
+    expect(relationalSettingsEnabled()).toBe(expected);
   });
 
   it.each([
@@ -90,6 +105,12 @@ describe("relational runtime invariants", () => {
     const certificateRoutes = readFileSync("backend/src/modules/certificates/certificates.routes.js", "utf8");
     const candidateRoutes = readFileSync("backend/src/modules/assessments/candidate-assessments.routes.js", "utf8");
     const paymentService = readFileSync("backend/src/modules/payments/payments.service.js", "utf8");
+    const settingsFiles = [
+      "backend/server.js",
+      "backend/src/modules/settings/settings.routes.js",
+      "backend/src/modules/assessments/assessments.routes.js",
+      "backend/src/modules/proctoring/proctoring.routes.js",
+    ];
     expect(server).toContain("relationalCertificatesEnabled");
     expect(certificateRoutes).toContain("relationalCertificatesEnabled");
     expect(server).not.toContain("process.env.USE_PG_CERTIFICATES");
@@ -102,5 +123,10 @@ describe("relational runtime invariants", () => {
     expect(paymentService).toContain("relationalPaymentsEnabled");
     expect(server).not.toContain("process.env.USE_PG_PAYMENTS");
     expect(paymentService).not.toContain("process.env.USE_PG_PAYMENTS");
+    for (const file of settingsFiles) {
+      const source = readFileSync(file, "utf8");
+      expect(source, file).toContain("relationalSettingsEnabled");
+      expect(source, file).not.toContain("process.env.USE_PG_SETTINGS");
+    }
   });
 });
