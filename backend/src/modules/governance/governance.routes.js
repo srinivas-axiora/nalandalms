@@ -11,8 +11,9 @@ import {
   archiveAuthorityRepository,
   ArchiveAuthorityError,
 } from "../../repositories/archive-authority.repository.pg.js";
+import { relationalIdentityEnabled } from "../../runtime-modes.js";
 
-const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
+const USE_RELATIONAL_IDENTITY = relationalIdentityEnabled();
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
 // Module: Governance (audit logs, security events, archive + restore).
@@ -20,7 +21,7 @@ const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
 export function registerGovernance(app) {
   app.get("/api/archive", authenticate, requireRole("Super Admin"), async (req, res) => {
     const relationalTypes = [
-      ...(USE_PG_IDENTITY ? ["User"] : []),
+      ...(USE_RELATIONAL_IDENTITY ? ["User"] : []),
       ...(USE_PG_COURSES ? ["Course", "Assessment"] : []),
     ];
     if (relationalTypes.length) {
@@ -34,9 +35,9 @@ export function registerGovernance(app) {
   });
 
   app.post("/api/archive/:id/restore", authenticate, requireRole("Super Admin"), requireStepUp, async (req, res) => {
-    if (USE_PG_IDENTITY || USE_PG_COURSES) {
+    if (USE_RELATIONAL_IDENTITY || USE_PG_COURSES) {
       const archive = await archiveAuthorityRepository.findArchiveById(req.params.id);
-      if (archive?.entityType === "User" && USE_PG_IDENTITY) {
+      if (archive?.entityType === "User" && USE_RELATIONAL_IDENTITY) {
         const restored = await identityRepository.restoreUserArchive({
           archiveId: req.params.id,
           actorId: req.user.id,

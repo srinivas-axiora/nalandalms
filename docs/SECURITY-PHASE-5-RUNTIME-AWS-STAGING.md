@@ -102,5 +102,7 @@ mandatory staging gates, not assumed successes.
   attempt start and live proctor-event enforcement.
   Phase 43 extends it to skills, competency targets, ratings, chapter feedback
   and the evidence used by local learning recommendations.
+  Phase 44 extends it to authentication, session revocation, user lifecycle,
+  companion identity validation and user archive authority.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

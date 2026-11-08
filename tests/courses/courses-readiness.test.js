@@ -22,6 +22,7 @@ describe("experimental course authority readiness interlock", () => {
       ok: false,
       checks: {
         skills: { mode: "normalized" },
+        identity: { mode: "normalized" },
         payments: { mode: "normalized" },
         settings: { mode: "normalized" },
         attempts: { mode: "normalized" },

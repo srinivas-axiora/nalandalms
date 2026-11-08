@@ -8,6 +8,7 @@ import bcrypt from "bcryptjs";
 import { fileURLToPath } from "node:url";
 import { createStorage } from "../db.js";
 import { USER_ROLES, ADMIN_ROLES } from "./roles.js";
+import { relationalIdentityEnabled } from "./runtime-modes.js";
 import {
   pythonFullStackCourse,
   pythonFullStackSkills,
@@ -510,7 +511,7 @@ const videoProgress = {}; // { "userId-courseId-chapterId": { currentTime, updat
 const dbPath = path.resolve(__dirname, "..", "..", "database", "db.json");
 const storage = createStorage({ filePath: dbPath, databaseUrl: process.env.DATABASE_URL });
 const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
-const USE_PG_ARCHIVES = process.env.USE_PG_IDENTITY === "1" && process.env.USE_PG_COURSES === "1";
+const USE_PG_ARCHIVES = relationalIdentityEnabled() && process.env.USE_PG_COURSES === "1";
 
 const snapshot = () => ({
   users,

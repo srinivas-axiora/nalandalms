@@ -82,10 +82,10 @@ import {
   relationalPaymentsEnabled,
   relationalSettingsEnabled,
   relationalSkillsEnabled,
+  relationalIdentityEnabled,
 } from "./src/runtime-modes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
 const USE_PG_PRIVACY = process.env.USE_PG_PRIVACY === "1";
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
 const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
@@ -95,8 +95,9 @@ const USE_RELATIONAL_CANDIDATE_ASSESSMENTS = relationalCandidateAssessmentsEnabl
 const USE_RELATIONAL_PAYMENTS = relationalPaymentsEnabled();
 const USE_RELATIONAL_SETTINGS = relationalSettingsEnabled();
 const USE_RELATIONAL_SKILLS = relationalSkillsEnabled();
+const USE_RELATIONAL_IDENTITY = relationalIdentityEnabled();
 const AUDIT_TRANSACTIONAL_DEPENDENCIES = USE_RELATIONAL_PAYMENTS && USE_RELATIONAL_SKILLS
-  && USE_PG_IDENTITY && USE_RELATIONAL_ATTEMPTS && USE_RELATIONAL_CERTIFICATES
+  && USE_RELATIONAL_IDENTITY && USE_RELATIONAL_ATTEMPTS && USE_RELATIONAL_CERTIFICATES
   && USE_RELATIONAL_CANDIDATE_ASSESSMENTS && USE_PG_COURSES && USE_PG_PRIVACY
   && USE_RELATIONAL_SETTINGS;
 const ENABLE_PRIVACY_ERASURE_WORKER = process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1";
@@ -202,7 +203,7 @@ app.get("/api/ready", async (_req, res) => {
           mode: "normalized",
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
-    USE_PG_IDENTITY
+    USE_RELATIONAL_IDENTITY
       ? readinessQuery(
           `SELECT
              to_regclass('public.users') IS NOT NULL AS users,
@@ -349,7 +350,7 @@ app.get("/api/ready", async (_req, res) => {
             && PRIVACY_COVERAGE_ACK
             && USE_RELATIONAL_PAYMENTS
             && USE_RELATIONAL_SKILLS
-            && USE_PG_IDENTITY
+            && USE_RELATIONAL_IDENTITY
             && USE_RELATIONAL_ATTEMPTS
             && USE_RELATIONAL_CERTIFICATES
             && USE_RELATIONAL_CANDIDATE_ASSESSMENTS,
@@ -411,7 +412,7 @@ app.get("/api/ready", async (_req, res) => {
           dependencies: AUDIT_TRANSACTIONAL_DEPENDENCIES ? "complete" : "incomplete",
         }))
       : Promise.resolve({ ok: true, mode: "disabled", dependencies: "disabled" }),
-    (USE_PG_IDENTITY || USE_PG_COURSES)
+    (USE_RELATIONAL_IDENTITY || USE_PG_COURSES)
       ? Promise.resolve().then(() => relationalQuery(
           `SELECT
              to_regclass('public.deleted_archives') IS NOT NULL AS archives,
@@ -495,7 +496,7 @@ app.get("/api/csrf-token", (req, res) => {
 app.get("/api/app-data", authenticate, async (req, res) => {
   const admin = isAdmin(req.user.role);
   const superAdmin = req.user.role === "Super Admin";
-  const authoritativeVisibleUsers = USE_PG_IDENTITY
+  const authoritativeVisibleUsers = USE_RELATIONAL_IDENTITY
     ? (admin
         ? await identityRepository.listUsers({ status: "All" })
         : req.user.role === "Manager"
@@ -545,7 +546,7 @@ app.get("/api/app-data", authenticate, async (req, res) => {
     ? await securityEvidenceRepository.listSecurityEvents({ limit: 500 })
     : null;
   const relationalArchiveTypes = [
-    ...(USE_PG_IDENTITY ? ["User"] : []),
+    ...(USE_RELATIONAL_IDENTITY ? ["User"] : []),
     ...(USE_PG_COURSES ? ["Course", "Assessment"] : []),
   ];
   const authoritativeArchives = superAdmin && relationalArchiveTypes.length
@@ -620,7 +621,7 @@ const start = async () => {
   try {
     await storage.init();
     await loadDb();
-    if (USE_PG_IDENTITY) {
+    if (USE_RELATIONAL_IDENTITY) {
       replaceIdentityProjection(await identityRepository.listUsers({ status: "All" }));
     }
     if (USE_RELATIONAL_ATTEMPTS) {

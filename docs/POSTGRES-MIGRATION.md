@@ -170,7 +170,8 @@ For each bounded context, in roughly ascending coupling:
       enrollment and commit audit evidence behind `USE_PG_SKILLS=1` (Phase 24;
       live verifier pending)
 - [x] users/session authority repository, audit and Redis login lockouts behind
-      `USE_PG_IDENTITY=1` (live-DB and failover gate still pending)
+      `USE_PG_IDENTITY=1` and implied by course cutover (Phases 6 and 44;
+      live-DB and failover gate still pending)
 - [x] Authenticated assessment attempts, grading/enrollment transitions and
       proctor evidence are implemented behind `USE_PG_ATTEMPTS=1` (Phase 8;
       live-DB concurrency and cross-task gate still pending)

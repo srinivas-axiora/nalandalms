@@ -11,13 +11,13 @@ import {
 } from "../../cache/redis.js";
 import { attemptsRepository } from "../../repositories/attempts.repository.pg.js";
 import { upsertAttemptProjection } from "../../attempt-projection.js";
-import { relationalAttemptsEnabled } from "../../runtime-modes.js";
+import { relationalAttemptsEnabled, relationalIdentityEnabled } from "../../runtime-modes.js";
 
-const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
+const USE_RELATIONAL_IDENTITY = relationalIdentityEnabled();
 const USE_RELATIONAL_ATTEMPTS = relationalAttemptsEnabled();
 const tokenDigest = (token) => crypto.createHash("sha256").update(token).digest("hex");
 
-const getCandidate = (id) => USE_PG_IDENTITY
+const getCandidate = (id) => USE_RELATIONAL_IDENTITY
   ? identityRepository.findUserById(id)
   : Promise.resolve(users.find((user) => user.id === id));
 

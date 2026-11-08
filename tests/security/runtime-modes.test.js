@@ -7,6 +7,7 @@ import {
   relationalPaymentsEnabled,
   relationalSettingsEnabled,
   relationalSkillsEnabled,
+  relationalIdentityEnabled,
 } from "../../backend/src/runtime-modes.js";
 
 describe("relational runtime invariants", () => {
@@ -18,6 +19,7 @@ describe("relational runtime invariants", () => {
   const previousSettings = process.env.USE_PG_SETTINGS;
   const previousSkills = process.env.USE_PG_SKILLS;
   const previousGlobalPg = process.env.USE_PG;
+  const previousIdentity = process.env.USE_PG_IDENTITY;
 
   afterEach(() => {
     if (previousAttempts === undefined) delete process.env.USE_PG_ATTEMPTS;
@@ -36,6 +38,19 @@ describe("relational runtime invariants", () => {
     else process.env.USE_PG_SKILLS = previousSkills;
     if (previousGlobalPg === undefined) delete process.env.USE_PG;
     else process.env.USE_PG = previousGlobalPg;
+    if (previousIdentity === undefined) delete process.env.USE_PG_IDENTITY;
+    else process.env.USE_PG_IDENTITY = previousIdentity;
+  });
+
+  it.each([
+    ["0", "0", false],
+    ["1", "0", true],
+    ["0", "1", true],
+    ["1", "1", true],
+  ])("maps identity=%s courses=%s to relational identity=%s", (identity, courses, expected) => {
+    process.env.USE_PG_IDENTITY = identity;
+    process.env.USE_PG_COURSES = courses;
+    expect(relationalIdentityEnabled()).toBe(expected);
   });
 
   it.each([
@@ -136,6 +151,15 @@ describe("relational runtime invariants", () => {
       "backend/src/modules/skills/skills.routes.js",
       "backend/src/modules/ai/localAgent.js",
     ];
+    const identityFiles = [
+      "backend/server.js",
+      "backend/src/middleware.js",
+      "backend/src/modules/auth/auth.routes.js",
+      "backend/src/modules/users/users.routes.js",
+      "backend/src/modules/proctoring/pairing.js",
+      "backend/src/modules/governance/governance.routes.js",
+      "backend/src/core.js",
+    ];
     expect(server).toContain("relationalCertificatesEnabled");
     expect(certificateRoutes).toContain("relationalCertificatesEnabled");
     expect(server).not.toContain("process.env.USE_PG_CERTIFICATES");
@@ -157,6 +181,11 @@ describe("relational runtime invariants", () => {
       const source = readFileSync(file, "utf8");
       expect(source, file).toContain("relationalSkillsEnabled");
       expect(source, file).not.toContain("process.env.USE_PG_SKILLS");
+    }
+    for (const file of identityFiles) {
+      const source = readFileSync(file, "utf8");
+      expect(source, file).toContain("relationalIdentityEnabled");
+      expect(source, file).not.toContain("process.env.USE_PG_IDENTITY");
     }
   });
 });

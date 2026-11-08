@@ -12,6 +12,7 @@ import { analyticsRepository } from "../../backend/src/repositories/analytics.re
 import * as skillsRepository from "../../backend/src/repositories/skills.repository.pg.js";
 import { certificatesPgRepository } from "../../backend/src/repositories/certificates.repository.pg.js";
 import { candidateAssessmentsPgRepository } from "../../backend/src/repositories/candidate-assessments.repository.pg.js";
+import { identityRepository } from "../../backend/src/repositories/identity.repository.pg.js";
 
 describe("relational app-data secondary projections", () => {
   const previous = process.env.USE_PG_COURSES;
@@ -32,6 +33,8 @@ describe("relational app-data secondary projections", () => {
   });
 
   it("uses scoped relational reports and AI feedback instead of snapshot arrays", async () => {
+    vi.spyOn(identityRepository, "findUserById").mockResolvedValue(testUsers.manager);
+    vi.spyOn(identityRepository, "listUsers").mockResolvedValue([testUsers.manager]);
     vi.spyOn(courseAuthorityRepository, "listVisible").mockResolvedValue([]);
     vi.spyOn(enrollmentsRepository, "listEnrollments").mockResolvedValue([]);
     vi.spyOn(chaptersRepository, "listChapters").mockResolvedValue([]);

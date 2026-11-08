@@ -18,8 +18,9 @@ import { authenticate, rateLimit } from "../../middleware.js";
 import { identityRepository } from "../../repositories/identity.repository.pg.js";
 import { clearLoginFailures, getLoginSecurity, recordLoginFailure } from "../../cache/redis.js";
 import { setProjectedSessionVersion, upsertIdentityProjection } from "../../identity-projection.js";
+import { relationalIdentityEnabled } from "../../runtime-modes.js";
 
-const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
+const USE_RELATIONAL_IDENTITY = relationalIdentityEnabled();
 
 export function registerAuth(app) {
   const throttleIdentity = (identifier) => crypto
@@ -47,7 +48,7 @@ export function registerAuth(app) {
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     const normalizedEmail = parsed.data.email.trim().toLowerCase();
-    const existingUser = USE_PG_IDENTITY
+    const existingUser = USE_RELATIONAL_IDENTITY
       ? await identityRepository.findUserByIdentifier(normalizedEmail)
       : users.find((u) => u.email.toLowerCase() === normalizedEmail);
     if (existingUser) {
@@ -84,7 +85,7 @@ export function registerAuth(app) {
     };
 
     let createdUser = newUser;
-    if (USE_PG_IDENTITY) {
+    if (USE_RELATIONAL_IDENTITY) {
       try {
         createdUser = await identityRepository.insertUser(newUser, {
           actorId: newUser.id,
@@ -132,7 +133,7 @@ export function registerAuth(app) {
       return res.status(403).json({ error: "Account locked due to too many failed attempts", lockedUntil: security.lockedUntil });
     }
 
-    const candidate = USE_PG_IDENTITY
+    const candidate = USE_RELATIONAL_IDENTITY
       ? await identityRepository.findUserByIdentifier(normalizedIdentifier)
       : users.find((item) => (
           item.email.toLowerCase() === normalizedIdentifier
@@ -146,7 +147,7 @@ export function registerAuth(app) {
     }
 
     await clearLoginFailures(securityKey);
-    if (USE_PG_IDENTITY) await identityRepository.recordLogin(user.id);
+    if (USE_RELATIONAL_IDENTITY) await identityRepository.recordLogin(user.id);
     else audit(user.id, "LOGIN", "USER", user.id);
     res.cookie("token", signToken(user), { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE, maxAge: 30 * 60 * 1000 });
     return res.json({ user: publicUser(user) });
@@ -154,7 +155,7 @@ export function registerAuth(app) {
 
   // ── Logout ──
   app.post("/api/auth/logout", authenticate, async (req, res) => {
-    if (USE_PG_IDENTITY) {
+    if (USE_RELATIONAL_IDENTITY) {
       const version = await identityRepository.revokeSessions(req.user.id);
       setProjectedSessionVersion(req.user.id, version);
     } else {
@@ -174,7 +175,7 @@ export function registerAuth(app) {
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     const normalizedEmail = parsed.data.email.trim().toLowerCase();
-    const candidate = USE_PG_IDENTITY
+    const candidate = USE_RELATIONAL_IDENTITY
       ? await identityRepository.findUserByIdentifier(normalizedEmail)
       : users.find((u) => u.email.toLowerCase() === normalizedEmail);
     const user = candidate?.status === "Active" ? candidate : null;
@@ -193,7 +194,7 @@ export function registerAuth(app) {
       { expiresIn: "15m", issuer: JWT_ISSUER, audience: JWT_AUDIENCE }
     );
 
-    if (USE_PG_IDENTITY) {
+    if (USE_RELATIONAL_IDENTITY) {
       await identityRepository.recordUserAudit({
         actorId: user.id,
         action: "REQUEST_PASSWORD_RESET",
@@ -229,7 +230,7 @@ export function registerAuth(app) {
       return res.status(400).json({ error: "Invalid reset token" });
     }
 
-    const candidate = USE_PG_IDENTITY
+    const candidate = USE_RELATIONAL_IDENTITY
       ? await identityRepository.findUserById(payload.sub)
       : users.find((u) => u.id === payload.sub);
     const user = candidate?.status === "Active" ? candidate : null;
@@ -241,7 +242,7 @@ export function registerAuth(app) {
     }
 
     const passwordHash = bcrypt.hashSync(parsed.data.newPassword, 10);
-    if (USE_PG_IDENTITY) {
+    if (USE_RELATIONAL_IDENTITY) {
       const nextVersion = await identityRepository.resetPassword({
         id: user.id,
         expectedSessionVersion: currentSv,

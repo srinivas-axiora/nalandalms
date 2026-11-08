@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { users } from "../../backend/src/core.js";
 import { signToken } from "../../backend/src/domain.js";
 import { assessmentAuthorityRepository } from "../../backend/src/repositories/assessment-authority.repository.pg.js";
+import { identityRepository } from "../../backend/src/repositories/identity.repository.pg.js";
 
 describe("assessment relational cutover selection", () => {
   const previous = process.env.USE_PG_COURSES;
@@ -30,6 +31,7 @@ describe("assessment relational cutover selection", () => {
 
   it("registers the relational assessment listing instead of the process-local handler", async () => {
     const employee = users.find((user) => user.role === "Employee");
+    vi.spyOn(identityRepository, "findUserById").mockResolvedValue(employee);
     vi.spyOn(assessmentAuthorityRepository, "listVisible").mockResolvedValue([
       { id: "ASM-RELATIONAL", title: "Relational assessment", questions: [] },
     ]);

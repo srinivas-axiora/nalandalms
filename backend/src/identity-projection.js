@@ -1,6 +1,6 @@
 // Compatibility projection for bounded contexts that have not yet migrated
 // user joins to PostgreSQL. PostgreSQL remains the authority when
-// USE_PG_IDENTITY=1; this mirror must never be used for authentication or
+// relational identity mode is enabled; this mirror must never be used for authentication or
 // session-version decisions.
 import { users, sessionVersions } from "./core.js";
 

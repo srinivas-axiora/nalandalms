@@ -8,8 +8,9 @@ import { users, sessionVersions, saveDb } from "./core.js";
 import { securityEvent } from "./domain.js";
 import { identityRepository } from "./repositories/identity.repository.pg.js";
 import { flushEvidenceWrites } from "./security/evidence-write-context.js";
+import { relationalIdentityEnabled } from "./runtime-modes.js";
 
-const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
+const USE_RELATIONAL_IDENTITY = relationalIdentityEnabled();
 
 // ── CSRF protection (double-submit cookie) ──
 export const verifyCsrf = (req, res, next) => {
@@ -63,7 +64,7 @@ export const authenticate = async (req, res, next) => {
     return res.status(401).json({ error: "Invalid or expired token" });
   }
   try {
-    const user = USE_PG_IDENTITY
+    const user = USE_RELATIONAL_IDENTITY
       ? await identityRepository.findUserById(payload.sub)
       : users.find((item) => item.id === payload.sub);
     if (!user) return res.status(401).json({ error: "Unknown user" });

@@ -9,8 +9,9 @@ import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
 import { redactSensitive } from "../../security/redaction.js";
 import { identityRepository } from "../../repositories/identity.repository.pg.js";
 import { upsertIdentityProjection } from "../../identity-projection.js";
+import { relationalIdentityEnabled } from "../../runtime-modes.js";
 
-const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
+const USE_RELATIONAL_IDENTITY = relationalIdentityEnabled();
 
 export function registerUsers(app) {
   app.patch("/api/users/me/preferences", authenticate, async (req, res) => {
@@ -28,13 +29,13 @@ export function registerUsers(app) {
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const user = USE_PG_IDENTITY
+    const user = USE_RELATIONAL_IDENTITY
       ? await identityRepository.findUserById(req.user.id)
       : users.find((item) => item.id === req.user.id);
     if (!user) return res.status(404).json({ error: "User not found" });
 
     const preferences = { ...(user.preferences || {}), ...parsed.data };
-    if (USE_PG_IDENTITY) {
+    if (USE_RELATIONAL_IDENTITY) {
       const updated = await identityRepository.updateUser(user.id, { preferences }, {
         actorId: req.user.id,
         action: "UPDATE_PREFERENCES",
@@ -49,7 +50,7 @@ export function registerUsers(app) {
 
   app.get("/api/users", authenticate, requireRole("Admin", "Manager"), async (req, res) => {
     const { department, role, status = "Active" } = req.query;
-    if (USE_PG_IDENTITY) {
+    if (USE_RELATIONAL_IDENTITY) {
       const visible = await identityRepository.listUsers({
         ...(!isAdmin(req.user.role) ? { managerId: req.user.id } : {}),
         department,
@@ -85,7 +86,7 @@ export function registerUsers(app) {
       return res.status(403).json({ error: "Only a Super Admin can assign the Super Admin role" });
     }
     const requestedId = parsed.data.id || `EMP-${Math.floor(1000 + Math.random() * 9000)}`;
-    const existing = USE_PG_IDENTITY
+    const existing = USE_RELATIONAL_IDENTITY
       ? (await identityRepository.findUserById(requestedId))
         || (await identityRepository.findUserByIdentifier(parsed.data.email))
       : users.find((item) => item.id === requestedId || item.email === parsed.data.email);
@@ -94,7 +95,7 @@ export function registerUsers(app) {
     }
     const user = { id: requestedId, ...parsed.data, status: parsed.data.status || "Active", passwordHash: bcrypt.hashSync(parsed.data.password, 10), createdAt: now() };
     delete user.password;
-    if (USE_PG_IDENTITY) {
+    if (USE_RELATIONAL_IDENTITY) {
       try {
         const created = await identityRepository.insertUser(user, { actorId: req.user.id });
         upsertIdentityProjection(created);
@@ -125,7 +126,7 @@ export function registerUsers(app) {
     });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    const user = USE_PG_IDENTITY
+    const user = USE_RELATIONAL_IDENTITY
       ? await identityRepository.findUserById(req.params.id)
       : users.find((item) => item.id === req.params.id);
     if (!user) return res.status(404).json({ error: "User not found" });
@@ -148,7 +149,7 @@ export function registerUsers(app) {
       patch.passwordHash = bcrypt.hashSync(patch.password, 10);
       delete patch.password;
     }
-    if (USE_PG_IDENTITY) {
+    if (USE_RELATIONAL_IDENTITY) {
       const updated = await identityRepository.updateUser(user.id, patch, { actorId: req.user.id });
       upsertIdentityProjection(updated);
       return res.json({ data: publicUser(updated) });
@@ -168,7 +169,7 @@ export function registerUsers(app) {
     const schema = z.object({ status: z.enum(["Active", "Inactive"]) });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    const user = USE_PG_IDENTITY
+    const user = USE_RELATIONAL_IDENTITY
       ? await identityRepository.findUserById(req.params.id)
       : users.find((item) => item.id === req.params.id);
     if (!user) return res.status(404).json({ error: "User not found" });
@@ -180,7 +181,7 @@ export function registerUsers(app) {
       return res.status(403).json({ error: "You cannot deactivate your own account" });
     }
 
-    if (USE_PG_IDENTITY) {
+    if (USE_RELATIONAL_IDENTITY) {
       const updated = await identityRepository.updateUser(user.id, { status: parsed.data.status }, {
         actorId: req.user.id,
         action: "CHANGE_USER_STATUS",
@@ -205,7 +206,7 @@ export function registerUsers(app) {
     if (req.params.id === req.user.id) {
       return res.status(403).json({ error: "You cannot archive your own account" });
     }
-    if (USE_PG_IDENTITY) {
+    if (USE_RELATIONAL_IDENTITY) {
       const archived = await identityRepository.archiveAndDeactivateUser({
         id: req.params.id,
         actor: req.user,

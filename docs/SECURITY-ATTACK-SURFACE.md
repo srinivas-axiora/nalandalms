@@ -48,6 +48,11 @@ or step-up middleware disagrees with its declaration.
 | PATCH | `/api/users/:id/status` | A | Y | Y | Y | G | Deactivation revokes; activation does not rotate |
 | DELETE | `/api/users/:id` | SA | Y | Y | Y | G | Step-up protected; sessions revoked; archived identity is redacted before persistence |
 
+Phase 44 makes `USE_PG_COURSES=1` select relational identity and session
+authority across authentication, user administration, companion validation,
+application projections and user archives. Course tasks therefore cannot trust
+stale process-local roles, account status or session versions.
+
 ## Courses, chapters, enrollment and cohorts
 
 | Method | Route | Auth | State | CSRF | Step | Rate | Scope / concern |

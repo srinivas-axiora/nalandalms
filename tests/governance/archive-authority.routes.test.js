@@ -27,7 +27,7 @@ describe("relational governance archive routes", () => {
     else process.env.USE_PG_IDENTITY = previousIdentity;
   });
 
-  it("lists course and assessment archives through the relational authority", async () => {
+  it("lists identity and learning archives through the relational authority", async () => {
     const list = vi.spyOn(archiveAuthorityRepository, "listArchives").mockResolvedValue([
       { id: "ARCH-1", entityType: "Course", entityId: "CRS-1", deletedAt: "2026-11-06T00:00:00.000Z" },
     ]);
@@ -37,7 +37,7 @@ describe("relational governance archive routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.total).toBe(1);
-    expect(list).toHaveBeenCalledWith({ entityTypes: ["Course", "Assessment"] });
+    expect(list).toHaveBeenCalledWith({ entityTypes: ["User", "Course", "Assessment"] });
   });
 
   it("restores relational authoring content only with step-up and review-gates it", async () => {
