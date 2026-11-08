@@ -10,6 +10,7 @@ import { reportsRepository } from "../../backend/src/repositories/reports.reposi
 import { aiFeedbackRepository } from "../../backend/src/repositories/ai-feedback.repository.pg.js";
 import { analyticsRepository } from "../../backend/src/repositories/analytics.repository.pg.js";
 import * as skillsRepository from "../../backend/src/repositories/skills.repository.pg.js";
+import { certificatesPgRepository } from "../../backend/src/repositories/certificates.repository.pg.js";
 
 describe("relational app-data secondary projections", () => {
   const previous = process.env.USE_PG_COURSES;
@@ -43,6 +44,9 @@ describe("relational app-data secondary projections", () => {
       { id: "FB-PG", createdBy: testUsers.manager.id, comment: "Scoped feedback" },
     ]);
     vi.spyOn(analyticsRepository, "listTimeEvents").mockResolvedValue([]);
+    const certificateList = vi.spyOn(certificatesPgRepository, "listForUser").mockResolvedValue([
+      { id: "CERT-PG", employeeId: testUsers.manager.id, courseId: "CRS-PG", status: "Active" },
+    ]);
     vi.spyOn(skillsRepository, "listSkills").mockResolvedValue([]);
     vi.spyOn(skillsRepository, "listTargetSkills").mockResolvedValue([]);
     vi.spyOn(skillsRepository, "listSkillRatings").mockResolvedValue([
@@ -64,7 +68,9 @@ describe("relational app-data secondary projections", () => {
     ]);
     expect(response.body.skillRatings).toEqual([expect.objectContaining({ id: "RATE-PG" })]);
     expect(response.body.chapterFeedbacks).toEqual([expect.objectContaining({ id: "CF-PG" })]);
+    expect(response.body.issuedCertificates).toEqual([expect.objectContaining({ id: "CERT-PG" })]);
     expect(reportList).toHaveBeenCalledWith({ actor: expect.objectContaining({ id: testUsers.manager.id }) });
     expect(feedbackList).toHaveBeenCalledWith(expect.objectContaining({ id: testUsers.manager.id }), 25);
+    expect(certificateList).toHaveBeenCalledWith(expect.objectContaining({ id: testUsers.manager.id }));
   });
 });

@@ -173,7 +173,8 @@ For each bounded context, in roughly ascending coupling:
       live-DB concurrency and cross-task gate still pending)
 - [x] Signed certificate issuance, active-credential uniqueness, enrollment
       certification, public verification and revocation are implemented behind
-      `USE_PG_CERTIFICATES=1` (Phase 9; live-DB/cross-task gate still pending)
+      `USE_PG_CERTIFICATES=1` and implied by course cutover (Phases 9 and 39;
+      live-DB/cross-task gate still pending)
 - [x] Public candidate links, anonymous sessions, proctor evidence, database
       deadlines and grading are implemented behind
       `USE_PG_CANDIDATE_ASSESSMENTS=1` (Phase 10; live-DB/cross-task gate still

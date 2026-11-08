@@ -1,16 +1,33 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
-import { relationalAttemptsEnabled } from "../../backend/src/runtime-modes.js";
+import {
+  relationalAttemptsEnabled,
+  relationalCertificatesEnabled,
+} from "../../backend/src/runtime-modes.js";
 
 describe("relational runtime invariants", () => {
   const previousAttempts = process.env.USE_PG_ATTEMPTS;
   const previousCourses = process.env.USE_PG_COURSES;
+  const previousCertificates = process.env.USE_PG_CERTIFICATES;
 
   afterEach(() => {
     if (previousAttempts === undefined) delete process.env.USE_PG_ATTEMPTS;
     else process.env.USE_PG_ATTEMPTS = previousAttempts;
     if (previousCourses === undefined) delete process.env.USE_PG_COURSES;
     else process.env.USE_PG_COURSES = previousCourses;
+    if (previousCertificates === undefined) delete process.env.USE_PG_CERTIFICATES;
+    else process.env.USE_PG_CERTIFICATES = previousCertificates;
+  });
+
+  it.each([
+    ["0", "0", false],
+    ["1", "0", true],
+    ["0", "1", true],
+    ["1", "1", true],
+  ])("maps certificates=%s courses=%s to relational certificates=%s", (certificates, courses, expected) => {
+    process.env.USE_PG_CERTIFICATES = certificates;
+    process.env.USE_PG_COURSES = courses;
+    expect(relationalCertificatesEnabled()).toBe(expected);
   });
 
   it.each([
@@ -39,5 +56,11 @@ describe("relational runtime invariants", () => {
       expect(source, file).toContain("relationalAttemptsEnabled");
       expect(source, file).not.toContain("process.env.USE_PG_ATTEMPTS");
     }
+    const server = readFileSync("backend/server.js", "utf8");
+    const certificateRoutes = readFileSync("backend/src/modules/certificates/certificates.routes.js", "utf8");
+    expect(server).toContain("relationalCertificatesEnabled");
+    expect(certificateRoutes).toContain("relationalCertificatesEnabled");
+    expect(server).not.toContain("process.env.USE_PG_CERTIFICATES");
+    expect(certificateRoutes).not.toContain("process.env.USE_PG_CERTIFICATES");
   });
 });

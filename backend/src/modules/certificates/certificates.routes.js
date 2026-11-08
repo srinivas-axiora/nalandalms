@@ -6,12 +6,13 @@ import { issuedCertificates, users, courses, now } from "../../core.js";
 import { audit } from "../../domain.js";
 import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
 import { certificatesPgRepository } from "../../repositories/certificates.repository.pg.js";
+import { relationalCertificatesEnabled } from "../../runtime-modes.js";
 
-const USE_PG_CERTIFICATES = process.env.USE_PG_CERTIFICATES === "1";
+const USE_RELATIONAL_CERTIFICATES = relationalCertificatesEnabled();
 
 export function registerCertificates(app) {
   const store = { issuedCertificates, users, courses };
-  const repo = USE_PG_CERTIFICATES ? certificatesPgRepository : createCertificatesRepository(store);
+  const repo = USE_RELATIONAL_CERTIFICATES ? certificatesPgRepository : createCertificatesRepository(store);
   const service = createCertificatesService({ repo, audit, now });
   const controller = createCertificatesController(service);
 

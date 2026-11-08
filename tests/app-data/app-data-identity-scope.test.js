@@ -50,6 +50,10 @@ describe("relational app-data identity scope", () => {
     vi.spyOn(aiFeedbackRepository, "list").mockResolvedValue([]);
     const { analyticsRepository } = await import("../../backend/src/repositories/analytics.repository.pg.js");
     vi.spyOn(analyticsRepository, "listTimeEvents").mockResolvedValue([]);
+    const { certificatesPgRepository } = await import("../../backend/src/repositories/certificates.repository.pg.js");
+    vi.spyOn(certificatesPgRepository, "listForUser").mockResolvedValue([
+      { id: "CERT-IN", employeeId: subordinate.id, courseId: "CRS-REL", status: "Active" },
+    ]);
 
     const { signToken } = await import("../../backend/src/domain.js");
     authCookie = `token=${signToken(manager)}`;
@@ -71,6 +75,7 @@ describe("relational app-data identity scope", () => {
     expect(response.body.users.map((user) => user.id)).toEqual(["MGR-REL", "USR-REL"]);
     expect(response.body.assignments.map((item) => item.id)).toEqual(["ENR-IN"]);
     expect(response.body.attempts.map((item) => item.id)).toEqual(["ATT-IN"]);
+    expect(response.body.issuedCertificates.map((item) => item.id)).toEqual(["CERT-IN"]);
     expect(response.body.users.every((user) => !Object.hasOwn(user, "passwordHash"))).toBe(true);
   });
 });

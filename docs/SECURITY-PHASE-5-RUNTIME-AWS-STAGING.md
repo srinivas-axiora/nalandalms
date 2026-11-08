@@ -92,5 +92,7 @@ mandatory staging gates, not assumed successes.
   Phase 38 establishes one runtime invariant: enabling relational course
   authority also enables relational attempt authority for every exam,
   proctoring and companion mutation path and for startup/readiness.
+  Phase 39 extends the invariant to certificate eligibility, issuance,
+  revocation, readiness and application projections.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.
