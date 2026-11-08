@@ -21,6 +21,7 @@ describe("experimental course authority readiness interlock", () => {
     expect(response.body).toMatchObject({
       ok: false,
       checks: {
+        payments: { mode: "normalized" },
         attempts: { mode: "normalized" },
         certificates: { mode: "normalized" },
         candidateAssessments: { mode: "normalized" },

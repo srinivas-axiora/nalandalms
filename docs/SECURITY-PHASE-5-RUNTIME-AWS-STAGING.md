@@ -96,5 +96,7 @@ mandatory staging gates, not assumed successes.
   revocation, readiness and application projections.
   Phase 40 extends it to public candidate links, anonymous sessions,
   proctor evidence, deadline/grading writes, readiness and privacy coverage.
+  Phase 41 extends it to payment orders, provider webhooks, settlement records
+  and the enrolled-course entitlement written in the settlement transaction.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

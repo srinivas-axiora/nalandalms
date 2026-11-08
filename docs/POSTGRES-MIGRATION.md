@@ -162,7 +162,8 @@ For each bounded context, in roughly ascending coupling:
 - [x] skills/target_skills **module cutover wired behind `USE_PG_SKILLS=1`** —
       default-off path verified unchanged; on-path uses Postgres (verify against a real DB)
 - [x] payment order/transaction/webhook repository and atomic entitlement/audit
-      settlement built behind `USE_PG_PAYMENTS=1` (live-DB gate still pending)
+      settlement built behind `USE_PG_PAYMENTS=1` and implied by course cutover
+      (Phases 3 and 41; live-DB gate still pending)
 - [x] chapter feedback writes and projections enforce matching active
       enrollment and commit audit evidence behind `USE_PG_SKILLS=1` (Phase 24;
       live verifier pending)

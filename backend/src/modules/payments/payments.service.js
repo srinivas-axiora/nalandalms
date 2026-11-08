@@ -20,9 +20,10 @@ import {
   PaymentRepositoryError,
   paymentsRepository,
 } from "../../repositories/payments.repository.pg.js";
+import { relationalPaymentsEnabled } from "../../runtime-modes.js";
 
 const RAZORPAY_API_ORIGIN = "https://api.razorpay.com";
-const USE_PG_PAYMENTS = process.env.USE_PG_PAYMENTS === "1";
+const USE_RELATIONAL_PAYMENTS = relationalPaymentsEnabled();
 
 export class PaymentError extends Error {
   constructor(status, message) {
@@ -183,7 +184,7 @@ const settleOrder = (order, paymentId, source, actorId) => {
 };
 
 export const createCheckoutOrder = async ({ user, courseId }) => {
-  if (USE_PG_PAYMENTS) return createCheckoutOrderPg({ user, courseId });
+  if (USE_RELATIONAL_PAYMENTS) return createCheckoutOrderPg({ user, courseId });
   const course = courses.find((item) => item.id === courseId && item.status === "Active" && item.approval === "Approved");
   if (!course) fail(404, "Course not found");
   if (enrollmentFor(user.id, course.id)) fail(409, "You are already enrolled in this course");
@@ -313,7 +314,7 @@ const createCheckoutOrderPg = async ({ user, courseId }) => {
 };
 
 export const verifyCheckoutPayment = async ({ actor, orderId, paymentId, signature, courseId }) => {
-  if (USE_PG_PAYMENTS) {
+  if (USE_RELATIONAL_PAYMENTS) {
     return verifyCheckoutPaymentPg({ actor, orderId, paymentId, signature, courseId });
   }
   const order = paymentOrders.find((item) => item.orderId === orderId);
@@ -393,7 +394,7 @@ export const processWebhook = async ({ rawBody, body, signature, eventId }) => {
 
   const eventType = String(body?.event || "");
   const bodySha256 = crypto.createHash("sha256").update(rawBody).digest("hex");
-  if (USE_PG_PAYMENTS) {
+  if (USE_RELATIONAL_PAYMENTS) {
     try {
       if (!["payment.captured", "order.paid"].includes(eventType)) {
         const result = await paymentsRepository.recordIgnoredWebhook({

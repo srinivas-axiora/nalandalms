@@ -108,6 +108,10 @@ Phase 40 makes `USE_PG_COURSES=1` select the relational candidate-assessment
 engine for every authenticated and public route, including token hashing,
 deadline enforcement, idempotent proctor evidence and atomic submission.
 
+Phase 41 also makes the course cutover select the relational payment ledger.
+Checkout, signature verification and provider webhooks therefore create the
+same transactional enrollment records consumed by relational course access.
+
 ## Proctoring and signaling
 
 | Method | Route | Auth | State | CSRF | Step | Rate | Scope / concern |

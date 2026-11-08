@@ -79,12 +79,12 @@ import {
   relationalAttemptsEnabled,
   relationalCertificatesEnabled,
   relationalCandidateAssessmentsEnabled,
+  relationalPaymentsEnabled,
 } from "./src/runtime-modes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USE_PG = process.env.USE_PG === "1";
 const USE_PG_SKILLS = USE_PG || process.env.USE_PG_SKILLS === "1";
-const USE_PG_PAYMENTS = process.env.USE_PG_PAYMENTS === "1";
 const USE_PG_IDENTITY = process.env.USE_PG_IDENTITY === "1";
 const USE_PG_PRIVACY = process.env.USE_PG_PRIVACY === "1";
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
@@ -93,7 +93,8 @@ const USE_PG_AUDIT = process.env.USE_PG_AUDIT === "1";
 const USE_RELATIONAL_ATTEMPTS = relationalAttemptsEnabled();
 const USE_RELATIONAL_CERTIFICATES = relationalCertificatesEnabled();
 const USE_RELATIONAL_CANDIDATE_ASSESSMENTS = relationalCandidateAssessmentsEnabled();
-const AUDIT_TRANSACTIONAL_DEPENDENCIES = USE_PG_PAYMENTS && USE_PG_SKILLS
+const USE_RELATIONAL_PAYMENTS = relationalPaymentsEnabled();
+const AUDIT_TRANSACTIONAL_DEPENDENCIES = USE_RELATIONAL_PAYMENTS && USE_PG_SKILLS
   && USE_PG_IDENTITY && USE_RELATIONAL_ATTEMPTS && USE_RELATIONAL_CERTIFICATES
   && USE_RELATIONAL_CANDIDATE_ASSESSMENTS && USE_PG_COURSES && USE_PG_PRIVACY
   && USE_PG_SETTINGS;
@@ -176,7 +177,7 @@ app.get("/api/ready", async (_req, res) => {
     storage.health(),
     redisHealth(),
     objectStoreHealth(),
-    USE_PG_PAYMENTS
+    USE_RELATIONAL_PAYMENTS
       ? readinessQuery(
           `SELECT
              to_regclass('public.payment_orders') IS NOT NULL AS orders,
@@ -333,7 +334,7 @@ app.get("/api/ready", async (_req, res) => {
           ok: Object.values(rows[0] || {}).every(Boolean)
             && ENABLE_PRIVACY_ERASURE_WORKER
             && PRIVACY_COVERAGE_ACK
-            && USE_PG_PAYMENTS
+            && USE_RELATIONAL_PAYMENTS
             && USE_PG_IDENTITY
             && USE_RELATIONAL_ATTEMPTS
             && USE_RELATIONAL_CERTIFICATES
