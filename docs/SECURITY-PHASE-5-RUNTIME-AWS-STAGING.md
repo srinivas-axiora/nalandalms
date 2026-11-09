@@ -117,5 +117,9 @@ mandatory staging gates, not assumed successes.
   or rollback evidence.
   Phase 49 removes the pending-review queue's last process-local identity join;
   learner labels now come from a bounded, credential-free PostgreSQL projection.
+  Phase 50 moves Copilot attendance, performance reviews, announcements,
+  inbox/direct messages and self-appraisals to normalized PostgreSQL authority;
+  privacy coverage advances to `normalized-v2`. AWS retains a default-off
+  `USE_PG_WORKPLACE` flag until live RDS, multi-task and erasure evidence exists.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

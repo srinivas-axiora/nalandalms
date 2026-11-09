@@ -21,9 +21,26 @@ import * as chaptersRepository from "../../repositories/chapters.repository.pg.j
 import { courseAuthorityRepository } from "../../repositories/courses-authority.repository.pg.js";
 import { assessmentAuthorityRepository } from "../../repositories/assessment-authority.repository.pg.js";
 import { relationalSkillsEnabled } from "../../runtime-modes.js";
+import { relationalWorkplaceEnabled } from "../../runtime-modes.js";
+import { workplaceRepository } from "../../repositories/workplace.repository.pg.js";
 
 const USE_RELATIONAL_SKILLS = relationalSkillsEnabled();
+const USE_RELATIONAL_WORKPLACE = relationalWorkplaceEnabled();
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
+const WORKPLACE_TIME_ZONE = process.env.APP_TIME_ZONE || "Asia/Kolkata";
+const formatWorkplaceTime = (value) => value
+  ? new Intl.DateTimeFormat("en-IN", {
+      timeZone: WORKPLACE_TIME_ZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).format(new Date(value))
+  : null;
+const attendanceForDisplay = (record) => record && ({
+  ...record,
+  checkInTime: record.checkInTime || formatWorkplaceTime(record.checkInAt),
+  checkOutTime: record.checkOutTime || formatWorkplaceTime(record.checkOutAt),
+});
 
 const learningSourceFor = async (user, {
   includeEnrollments = false,
@@ -183,28 +200,51 @@ I am your local code-driven training assistant. Here are the categories of tasks
 
   // 3. Attendance Commands
   if (msg.includes("check in") || msg.includes("clock in")) {
-    const existing = attendanceLogs.find(log => log.userId === user.id && log.date === todayDate);
-    if (existing) {
+    let newLog;
+    if (USE_RELATIONAL_WORKPLACE) {
+      const result = await workplaceRepository.clockIn({
+        id: "ATT-L-" + uuid().slice(0, 8),
+        userId: user.id,
+      });
+      newLog = attendanceForDisplay(result.record);
+      if (!result.created) {
+        return {
+          reply: `⚠️ You are already checked in for today (**${newLog.date}**) at **${newLog.checkInTime}**.`,
+          model: "Nalanda Copilot (Local)",
+          source: "local"
+        };
+      }
+    } else {
+      const existing = attendanceLogs.find(log => log.userId === user.id && log.date === todayDate);
+      if (existing) {
+        return {
+          reply: `⚠️ You are already checked in for today (**${todayDate}**) at **${existing.checkInTime}**.`,
+          model: "Nalanda Copilot (Local)",
+          source: "local"
+        };
+      }
+      newLog = {
+        id: "ATT-L-" + uuid().slice(0, 8),
+        userId: user.id,
+        date: todayDate,
+        checkInTime: new Date().toLocaleTimeString(),
+        checkOutTime: null,
+        status: "Present"
+      };
+      attendanceLogs.push(newLog);
+      persist();
+    }
+    if (!newLog) {
       return {
-        reply: `⚠️ You are already checked in for today (**${todayDate}**) at **${existing.checkInTime}**.`,
+        reply: "⚠️ Attendance service is temporarily unavailable.",
         model: "Nalanda Copilot (Local)",
         source: "local"
       };
     }
-    const newLog = {
-      id: "ATT-L-" + uuid().slice(0, 8),
-      userId: user.id,
-      date: todayDate,
-      checkInTime: new Date().toLocaleTimeString(),
-      checkOutTime: null,
-      status: "Present"
-    };
-    attendanceLogs.push(newLog);
-    persist();
     return {
       reply: `### 📅 Attendance Clock In\n` +
              `*   **Status:** ✅ Present\n` +
-             `*   **Date:** ${todayDate}\n` +
+             `*   **Date:** ${newLog.date}\n` +
              `*   **Clock In Time:** ${newLog.checkInTime}\n\n` +
              `Have a great day of learning!`,
       model: "Nalanda Copilot (Local)",
@@ -213,29 +253,42 @@ I am your local code-driven training assistant. Here are the categories of tasks
   }
 
   if (msg.includes("check out") || msg.includes("clock out")) {
-    const existingIndex = attendanceLogs.findIndex(log => log.userId === user.id && log.date === todayDate);
-    if (existingIndex === -1) {
+    let log;
+    let updated = false;
+    if (USE_RELATIONAL_WORKPLACE) {
+      const result = await workplaceRepository.clockOut({ userId: user.id });
+      log = attendanceForDisplay(result.record);
+      updated = result.updated;
+    } else {
+      const existingIndex = attendanceLogs.findIndex(log => log.userId === user.id && log.date === todayDate);
+      if (existingIndex !== -1) {
+        log = attendanceLogs[existingIndex];
+        if (!log.checkOutTime) {
+          log.checkOutTime = new Date().toLocaleTimeString();
+          attendanceLogs[existingIndex] = log;
+          persist();
+          updated = true;
+        }
+      }
+    }
+    if (!log) {
       return {
         reply: `⚠️ You cannot check out because you haven't checked in today yet. Type **\`check in\`** first.`,
         model: "Nalanda Copilot (Local)",
         source: "local"
       };
     }
-    const log = attendanceLogs[existingIndex];
-    if (log.checkOutTime) {
+    if (!updated) {
       return {
         reply: `⚠️ You have already checked out today at **${log.checkOutTime}**.`,
         model: "Nalanda Copilot (Local)",
         source: "local"
       };
     }
-    log.checkOutTime = new Date().toLocaleTimeString();
-    attendanceLogs[existingIndex] = log;
-    persist();
     return {
       reply: `### 📅 Attendance Clock Out\n` +
              `*   **Status:** ⏸️ Checked Out\n` +
-             `*   **Date:** ${todayDate}\n` +
+             `*   **Date:** ${log.date}\n` +
              `*   **Clock Out Time:** ${log.checkOutTime}\n\n` +
              `Great job completing your training hours today!`,
       model: "Nalanda Copilot (Local)",
@@ -244,7 +297,9 @@ I am your local code-driven training assistant. Here are the categories of tasks
   }
 
   if (msg.includes("attendance log") || msg.includes("attendance history") || msg === "attendance") {
-    const userLogs = attendanceLogs.filter(log => log.userId === user.id).slice(-10);
+    const userLogs = USE_RELATIONAL_WORKPLACE
+      ? (await workplaceRepository.listAttendance({ userId: user.id, limit: 10 })).map(attendanceForDisplay)
+      : attendanceLogs.filter(log => log.userId === user.id).slice(-10);
     if (userLogs.length === 0) {
       return {
         reply: `📅 No attendance logs found for you. Type **\`check in\`** to create your first attendance record!`,
@@ -272,17 +327,21 @@ I am your local code-driven training assistant. Here are the categories of tasks
   }
 
   if (msg.includes("attendance status") || msg.includes("attendance percentage") || msg.includes("attendance stats")) {
-    const userLogs = attendanceLogs.filter(log => log.userId === user.id);
-    const presentCount = userLogs.filter(log => log.status === "Present").length;
-    const rate = userLogs.length > 0 ? Math.round((presentCount / userLogs.length) * 100) : 0;
+    const summary = USE_RELATIONAL_WORKPLACE
+      ? await workplaceRepository.attendanceSummary({ userId: user.id })
+      : (() => {
+          const userLogs = attendanceLogs.filter(log => log.userId === user.id);
+          const present = userLogs.filter(log => log.status === "Present").length;
+          return { present, total: userLogs.length, rate: userLogs.length > 0 ? Math.round((present / userLogs.length) * 100) : 0 };
+        })();
 
     return {
       reply: `### 📊 Attendance Performance Summary\n` +
              `*   **Student:** **${user.name}**\n` +
              `*   **Designation:** ${user.designation}\n` +
-             `*   **Present Days:** ${presentCount} / ${userLogs.length}\n` +
-             `*   **Overall Rate:** **${rate}%**\n` +
-             `*   **GTM Status:** ${rate >= 75 ? "✅ Compliance Cleared" : "❌ Below Threshold (Requires 75%+)"}`,
+             `*   **Present Days:** ${summary.present} / ${summary.total}\n` +
+             `*   **Overall Rate:** **${summary.rate}%**\n` +
+             `*   **GTM Status:** ${summary.rate >= 75 ? "✅ Compliance Cleared" : "❌ Below Threshold (Requires 75%+)"}`,
       model: "Nalanda Copilot (Local)",
       source: "local"
     };
@@ -435,7 +494,9 @@ I am your local code-driven training assistant. Here are the categories of tasks
 
   // 5. Performance Reviews
   if (msg === "performance" || msg === "performance review" || msg === "appraisal" || msg === "goals") {
-    const reviews = performanceReviews.filter(r => r.userId === user.id);
+    const reviews = USE_RELATIONAL_WORKPLACE
+      ? await workplaceRepository.listPerformanceReviews({ userId: user.id, limit: 1 })
+      : performanceReviews.filter(r => r.userId === user.id);
     if (reviews.length === 0) {
       return {
         reply: `📊 No performance review records found for employee **${user.name}**.\n\n*Self-appraisal can still be submitted by typing: \`submit appraisal: [comments]\`*`,
@@ -469,6 +530,13 @@ I am your local code-driven training assistant. Here are the categories of tasks
         source: "local"
       };
     }
+    if (comment.length > 2000) {
+      return {
+        reply: "⚠️ Self-appraisal comments must be 2,000 characters or fewer.",
+        model: "Nalanda Copilot (Local)",
+        source: "local"
+      };
+    }
 
     // Save as a message/communication record to maintain durability
     const newMsg = {
@@ -479,8 +547,21 @@ I am your local code-driven training assistant. Here are the categories of tasks
       content: `[SELF-APPRAISAL SUBMISSION]: ${comment}`,
       sentAt: now()
     };
-    communications.push(newMsg);
-    persist();
+    if (USE_RELATIONAL_WORKPLACE) {
+      const stored = await workplaceRepository.sendCommunication({
+        id: newMsg.id,
+        sender: user,
+        recipientId: newMsg.recipientId,
+        content: newMsg.content,
+        kind: "SelfAppraisal",
+      });
+      if (!stored) {
+        return { reply: "⚠️ Your manager account is unavailable; the appraisal was not stored.", model: "Nalanda Copilot (Local)", source: "local" };
+      }
+    } else {
+      communications.push(newMsg);
+      persist();
+    }
 
     return {
       reply: `### ✅ Self-Appraisal Recorded Successfully!\n` +
@@ -494,7 +575,9 @@ I am your local code-driven training assistant. Here are the categories of tasks
 
   // 6. Communications / Announcements / Inbox
   if (msg === "announcements" || msg === "announcement") {
-    const announceList = communications.filter(c => c.recipientId === "ALL");
+    const announceList = USE_RELATIONAL_WORKPLACE
+      ? await workplaceRepository.listAnnouncements({ limit: 25 })
+      : communications.filter(c => c.recipientId === "ALL");
     if (announceList.length === 0) {
       return {
         reply: `🔔 There are currently no institute announcements.`,
@@ -516,7 +599,9 @@ I am your local code-driven training assistant. Here are the categories of tasks
   }
 
   if (msg === "inbox" || msg === "messages" || msg === "message") {
-    const inbox = communications.filter(c => c.recipientId === user.id);
+    const inbox = USE_RELATIONAL_WORKPLACE
+      ? await workplaceRepository.listInbox({ userId: user.id, limit: 50 })
+      : communications.filter(c => c.recipientId === user.id);
     if (inbox.length === 0) {
       return {
         reply: `📨 Your inbox is empty. No messages from trainers or managers.`,
@@ -558,8 +643,25 @@ I am your local code-driven training assistant. Here are the categories of tasks
         source: "local"
       };
     }
+    if (contentPart.length > 2000) {
+      return {
+        reply: "⚠️ Message content must be 2,000 characters or fewer.",
+        model: "Nalanda Copilot (Local)",
+        source: "local"
+      };
+    }
 
-    const recipient = users.find(u => u.name.toLowerCase().includes(namePart) && u.id !== user.id);
+    const resolution = USE_RELATIONAL_WORKPLACE
+      ? await workplaceRepository.resolveRecipient({ search: namePart, senderId: user.id })
+      : { user: users.find(u => u.name.toLowerCase().includes(namePart) && u.id !== user.id), ambiguous: false };
+    const recipient = resolution.user;
+    if (resolution.ambiguous) {
+      return {
+        reply: `⚠️ More than one active recipient matches "${namePart}". Please enter the full name.`,
+        model: "Nalanda Copilot (Local)",
+        source: "local"
+      };
+    }
     if (!recipient) {
       return {
         reply: `❌ Recipient matching "${namePart}" was not found in the users list. Please double check the spelling.`,
@@ -576,8 +678,21 @@ I am your local code-driven training assistant. Here are the categories of tasks
       content: contentPart,
       sentAt: now()
     };
-    communications.push(newMsg);
-    persist();
+    if (USE_RELATIONAL_WORKPLACE) {
+      const stored = await workplaceRepository.sendCommunication({
+        id: newMsg.id,
+        sender: user,
+        recipientId: recipient.id,
+        content: contentPart,
+        kind: "Direct",
+      });
+      if (!stored) {
+        return { reply: "⚠️ The recipient is no longer active; the message was not stored.", model: "Nalanda Copilot (Local)", source: "local" };
+      }
+    } else {
+      communications.push(newMsg);
+      persist();
+    }
 
     return {
       reply: `### ✉️ Message Outbox\n` +

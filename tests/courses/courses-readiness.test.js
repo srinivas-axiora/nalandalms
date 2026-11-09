@@ -30,6 +30,7 @@ describe("experimental course authority readiness interlock", () => {
         attempts: { mode: "normalized" },
         certificates: { mode: "normalized" },
         candidateAssessments: { mode: "normalized" },
+        workplace: { mode: "normalized" },
         courses: { ok: false, mode: "experimental-learning-secondary-consumers" },
       },
     });

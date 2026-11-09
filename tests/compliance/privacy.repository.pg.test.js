@@ -24,7 +24,7 @@ const requestRow = (overrides = {}) => ({
   attempts: 0,
   next_attempt_at: null,
   last_error_code: null,
-  coverage_version: "normalized-v1",
+  coverage_version: "normalized-v2",
   completion_evidence: {},
   version: 0,
   ...overrides,
@@ -106,6 +106,77 @@ describe("PostgreSQL privacy workflow", () => {
     const statements = client.query.mock.calls.map(([sql]) => sql);
     expect(statements.some((sql) => sql.includes("jsonb_array_elements"))).toBe(true);
     expect(statements.some((sql) => sql.includes("FOR UPDATE SKIP LOCKED"))).toBe(true);
+    expect(statements.find((sql) => sql.includes("FOR UPDATE SKIP LOCKED")))
+      .toContain("coverage_version = 'normalized-v2'");
+  });
+
+  it("erases workplace subject data and pseudonymizes retained reviewer evidence", async () => {
+    const processing = requestRow({
+      status: "Processing",
+      reviewed_by: "ADM-1",
+      reviewed_at: new Date("2026-11-04T00:00:00.000Z"),
+      review_reason: "Identity and retention review approved",
+      processing_started_at: new Date("2026-12-03T00:00:01.000Z"),
+    });
+    const completed = requestRow({
+      ...processing,
+      status: "Completed",
+      completed_at: new Date("2026-12-03T00:01:00.000Z"),
+      completion_evidence: { policyVersion: "normalized-v2" },
+    });
+    const { client, db } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT * FROM privacy_requests")) return { rows: [processing] };
+      if (sql.includes("privacy_erasure_objects") && sql.includes("status <> 'Deleted'")) {
+        return { rows: [{ count: 0 }] };
+      }
+      if (sql.includes("SELECT * FROM users")) {
+        return { rows: [{ id: "USR-1", email: "person@example.invalid" }] };
+      }
+      if (sql.includes("FROM issued_certificates")) return { rows: [{ count: 0 }] };
+      if (sql.includes("privacy_erasure_objects") && sql.includes("status = 'Deleted'")) {
+        return { rows: [{ count: 0 }] };
+      }
+      if (sql.includes("UPDATE privacy_requests SET") && sql.includes("status = 'Completed'")) {
+        return { rows: [completed] };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    const repository = createPrivacyPgRepository(db, "p".repeat(64));
+
+    const result = await repository.finalizeErasure("PRIV-1");
+
+    expect(result).toMatchObject({ blocked: false, request: { status: "Completed" } });
+    const statements = client.query.mock.calls.map(([sql]) => sql);
+    expect(statements.some((sql) => sql.includes("DELETE FROM attendance_records"))).toBe(true);
+    expect(statements.some((sql) => sql.includes("DELETE FROM performance_reviews"))).toBe(true);
+    expect(statements.some((sql) => sql.includes("UPDATE performance_reviews SET reviewer_id = NULL"))).toBe(true);
+    expect(statements.some((sql) => sql.includes("DELETE FROM workplace_communications"))).toBe(true);
+    const completionUpdate = client.query.mock.calls.find(([sql]) =>
+      sql.includes("UPDATE privacy_requests SET") && sql.includes("status = 'Completed'"));
+    expect(completionUpdate[1][1]).toContain('"policyVersion":"normalized-v2"');
+  });
+
+  it("exports workplace records without credential columns", async () => {
+    const { db } = fakeDb(async (sql) => {
+      if (sql.includes("FROM users WHERE id")) {
+        return { rows: [{ id: "USR-1", email: "person@example.invalid" }] };
+      }
+      if (sql.includes("FROM attendance_records")) return { rows: [{ id: "ATT-1", status: "Present" }] };
+      if (sql.includes("FROM performance_reviews")) return { rows: [{ id: "REV-1", rating: 4.5 }] };
+      if (sql.includes("FROM workplace_communications")) return { rows: [{ id: "MSG-1", kind: "Direct" }] };
+      return { rows: [] };
+    });
+    const repository = createPrivacyPgRepository(db, "p".repeat(64));
+
+    const exported = await repository.exportUserData("USR-1");
+
+    expect(exported.workplace).toEqual({
+      attendance: [{ id: "ATT-1", status: "Present" }],
+      performanceReviews: [{ id: "REV-1", rating: 4.5 }],
+      communications: [{ id: "MSG-1", kind: "Direct" }],
+    });
+    const profileSql = db.query.mock.calls[0][0];
+    expect(profileSql).not.toContain("password_hash");
   });
 
   it("blocks finalization if the subject is certificate issuer evidence", async () => {

@@ -183,6 +183,7 @@ export function createPrivacyPgRepository(
     const current = await client.query(
       `SELECT * FROM privacy_requests
        WHERE status IN ('Approved', 'Failed')
+         AND coverage_version = 'normalized-v2'
          AND grace_ends_at <= now()
          AND (next_attempt_at IS NULL OR next_attempt_at <= now())
        ORDER BY grace_ends_at, requested_at
@@ -339,6 +340,14 @@ export function createPrivacyPgRepository(
     await mutate("aiFeedbackDeleted", "DELETE FROM ai_generation_feedback WHERE created_by = $1");
     await mutate("learningEventsDeleted", "DELETE FROM learning_time_events WHERE user_id = $1");
     await mutate("reportsDeleted", "DELETE FROM report_exports WHERE requested_by = $1");
+    await mutate("attendanceDeleted", "DELETE FROM attendance_records WHERE user_id = $1");
+    await mutate("performanceReviewsDeleted", "DELETE FROM performance_reviews WHERE user_id = $1");
+    await mutate("reviewerIdentityScrubbed",
+      `UPDATE performance_reviews SET reviewer_id = NULL, reviewer_name = $2
+       WHERE reviewer_id = $1`,
+      [request.user_id, `Erased reviewer ${pseudonym.slice(0, 12)}`]);
+    await mutate("workplaceCommunicationsDeleted",
+      "DELETE FROM workplace_communications WHERE sender_id = $1 OR recipient_id = $1");
     await mutate("attemptsScrubbed",
       `UPDATE assessment_attempts SET
          answers = '{}'::jsonb, question_map = '{}'::jsonb, manual_grades = '{}'::jsonb,
@@ -380,7 +389,7 @@ export function createPrivacyPgRepository(
       [requestId]
     );
     const evidence = {
-      policyVersion: "normalized-v1",
+      policyVersion: "normalized-v2",
       subjectPseudonym: pseudonym.slice(0, 24),
       objectsDeleted: Number(objectCount.rows[0]?.count || 0),
       mutations: counts,
@@ -440,6 +449,22 @@ export function createPrivacyPgRepository(
          FROM ai_generation_feedback WHERE created_by = $1 ORDER BY created_at`,
         [userId]
       ),
+      db.query(
+        `SELECT id, attendance_date, check_in_at, check_out_at, status, created_at, updated_at
+         FROM attendance_records WHERE user_id = $1 ORDER BY attendance_date`,
+        [userId]
+      ),
+      db.query(
+        `SELECT id, reviewer_id, reviewer_name, review_date, rating, comments, goals, created_at
+         FROM performance_reviews WHERE user_id = $1 ORDER BY review_date`,
+        [userId]
+      ),
+      db.query(
+        `SELECT id, sender_id, sender_name, recipient_id, kind, content, sent_at
+         FROM workplace_communications
+         WHERE sender_id = $1 OR recipient_id = $1 ORDER BY sent_at`,
+        [userId]
+      ),
     ]);
     return {
       exportMetadata: {
@@ -459,6 +484,11 @@ export function createPrivacyPgRepository(
       transactions: queries[5].rows,
       candidateAssessments: queries[6].rows,
       auditHistory: queries[7].rows,
+      workplace: {
+        attendance: queries[9].rows,
+        performanceReviews: queries[10].rows,
+        communications: queries[11].rows,
+      },
     };
   };
 

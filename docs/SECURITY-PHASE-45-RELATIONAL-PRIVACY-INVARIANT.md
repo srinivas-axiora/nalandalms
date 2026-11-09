@@ -12,7 +12,8 @@ pseudonymization and completion evidence therefore use the durable PostgreSQL
 workflow for a relational learning deployment.
 
 This removes the process-local deletion map from the course-cutover path. The
-erasure worker and `PRIVACY_COVERAGE_ACK=normalized-v1` remain explicit controls:
+erasure worker and a versioned `PRIVACY_COVERAGE_ACK` remain explicit controls
+(Phase 50 supersedes the original `normalized-v1` value with `normalized-v2`):
 readiness fails until both are deliberately enabled and the schema checks pass.
 Course cutover does not silently execute destructive erasure work.
 
@@ -43,6 +44,6 @@ Course cutover does not silently execute destructive erasure work.
 - Prove retry/idempotency behavior across multiple ECS tasks and worker restart,
   including legal hold and partial object-store failure.
 - Complete the data-store/subprocessor coverage registry and backup-erasure or
-  expiry evidence before acknowledging `normalized-v1` in production.
+  expiry evidence before acknowledging the current coverage version in production.
 
 Production decision remains **NO-GO**.

@@ -8,7 +8,11 @@ import bcrypt from "bcryptjs";
 import { fileURLToPath } from "node:url";
 import { createStorage } from "../db.js";
 import { USER_ROLES, ADMIN_ROLES } from "./roles.js";
-import { relationalAuditEnabled, relationalIdentityEnabled } from "./runtime-modes.js";
+import {
+  relationalAuditEnabled,
+  relationalIdentityEnabled,
+  relationalWorkplaceEnabled,
+} from "./runtime-modes.js";
 import {
   pythonFullStackCourse,
   pythonFullStackSkills,
@@ -511,6 +515,7 @@ const videoProgress = {}; // { "userId-courseId-chapterId": { currentTime, updat
 const dbPath = path.resolve(__dirname, "..", "..", "database", "db.json");
 const storage = createStorage({ filePath: dbPath, databaseUrl: process.env.DATABASE_URL });
 const USE_RELATIONAL_AUDIT = relationalAuditEnabled();
+const USE_RELATIONAL_WORKPLACE = relationalWorkplaceEnabled();
 const USE_PG_ARCHIVES = relationalIdentityEnabled() && process.env.USE_PG_COURSES === "1";
 
 const snapshot = () => ({
@@ -543,9 +548,7 @@ const snapshot = () => ({
   targetSkills,
   skillRatings,
   chapterFeedbacks,
-  attendanceLogs,
-  performanceReviews,
-  communications,
+  ...(USE_RELATIONAL_WORKPLACE ? {} : { attendanceLogs, performanceReviews, communications }),
   candidateAssessments
 });
 
@@ -599,9 +602,9 @@ const loadDb = async () => {
     if (data.targetSkills) { targetSkills.length = 0; targetSkills.push(...data.targetSkills); }
     if (data.skillRatings) { skillRatings.length = 0; skillRatings.push(...data.skillRatings); }
     if (data.chapterFeedbacks) { chapterFeedbacks.length = 0; chapterFeedbacks.push(...data.chapterFeedbacks); }
-    if (data.attendanceLogs) { attendanceLogs.length = 0; attendanceLogs.push(...data.attendanceLogs); }
-    if (data.performanceReviews) { performanceReviews.length = 0; performanceReviews.push(...data.performanceReviews); }
-    if (data.communications) { communications.length = 0; communications.push(...data.communications); }
+    if (!USE_RELATIONAL_WORKPLACE && data.attendanceLogs) { attendanceLogs.length = 0; attendanceLogs.push(...data.attendanceLogs); }
+    if (!USE_RELATIONAL_WORKPLACE && data.performanceReviews) { performanceReviews.length = 0; performanceReviews.push(...data.performanceReviews); }
+    if (!USE_RELATIONAL_WORKPLACE && data.communications) { communications.length = 0; communications.push(...data.communications); }
     if (data.candidateAssessments) { candidateAssessments.length = 0; candidateAssessments.push(...data.candidateAssessments); }
   } catch (err) {
     console.error("[persist] load failed:", err?.message || err);

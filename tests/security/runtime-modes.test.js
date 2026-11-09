@@ -10,6 +10,7 @@ import {
   relationalIdentityEnabled,
   relationalPrivacyEnabled,
   relationalAuditEnabled,
+  relationalWorkplaceEnabled,
 } from "../../backend/src/runtime-modes.js";
 
 describe("relational runtime invariants", () => {
@@ -24,6 +25,7 @@ describe("relational runtime invariants", () => {
   const previousIdentity = process.env.USE_PG_IDENTITY;
   const previousPrivacy = process.env.USE_PG_PRIVACY;
   const previousAudit = process.env.USE_PG_AUDIT;
+  const previousWorkplace = process.env.USE_PG_WORKPLACE;
 
   afterEach(() => {
     if (previousAttempts === undefined) delete process.env.USE_PG_ATTEMPTS;
@@ -48,6 +50,19 @@ describe("relational runtime invariants", () => {
     else process.env.USE_PG_PRIVACY = previousPrivacy;
     if (previousAudit === undefined) delete process.env.USE_PG_AUDIT;
     else process.env.USE_PG_AUDIT = previousAudit;
+    if (previousWorkplace === undefined) delete process.env.USE_PG_WORKPLACE;
+    else process.env.USE_PG_WORKPLACE = previousWorkplace;
+  });
+
+  it.each([
+    ["0", "0", false],
+    ["1", "0", true],
+    ["0", "1", true],
+    ["1", "1", true],
+  ])("maps workplace=%s courses=%s to relational workplace=%s", (workplace, courses, expected) => {
+    process.env.USE_PG_WORKPLACE = workplace;
+    process.env.USE_PG_COURSES = courses;
+    expect(relationalWorkplaceEnabled()).toBe(expected);
   });
 
   it.each([
@@ -200,6 +215,11 @@ describe("relational runtime invariants", () => {
       "backend/src/core.js",
       "backend/src/modules/governance/governance.routes.js",
     ];
+    const workplaceFiles = [
+      "backend/server.js",
+      "backend/src/core.js",
+      "backend/src/modules/ai/localAgent.js",
+    ];
     expect(server).toContain("relationalCertificatesEnabled");
     expect(certificateRoutes).toContain("relationalCertificatesEnabled");
     expect(server).not.toContain("process.env.USE_PG_CERTIFICATES");
@@ -236,6 +256,11 @@ describe("relational runtime invariants", () => {
       const source = readFileSync(file, "utf8");
       expect(source, file).toContain("relationalAuditEnabled");
       expect(source, file).not.toContain("process.env.USE_PG_AUDIT");
+    }
+    for (const file of workplaceFiles) {
+      const source = readFileSync(file, "utf8");
+      expect(source, file).toContain("relationalWorkplaceEnabled");
+      expect(source, file).not.toContain("process.env.USE_PG_WORKPLACE");
     }
   });
 });

@@ -97,6 +97,7 @@ describe("AWS staging release controls", () => {
       "USE_PG_CERTIFICATES",
       "USE_PG_CANDIDATE_ASSESSMENTS",
       "USE_PG_COURSES",
+      "USE_PG_WORKPLACE",
       "USE_PG_PRIVACY",
       "USE_PG_SETTINGS",
       "USE_PG_AUDIT",
@@ -132,6 +133,7 @@ describe("AWS staging release controls", () => {
       "verify-operational-authority.mjs",
       "verify-security-evidence.mjs",
       "verify-archives.mjs",
+      "verify-workplace.mjs",
     ];
     for (const verifier of expectedVerifiers) expect(deploymentScript).toContain(verifier);
   });

@@ -769,6 +769,56 @@ CREATE TRIGGER trg_scrub_security_metadata
   BEFORE INSERT OR UPDATE OF metadata ON security_events
   FOR EACH ROW EXECUTE FUNCTION nalanda_scrub_evidence_metadata();
 
+-- ── Workplace Authority ──
+CREATE TABLE attendance_records (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  attendance_date DATE NOT NULL,
+  check_in_at TIMESTAMPTZ NOT NULL,
+  check_out_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'Present'
+    CHECK (status IN ('Present', 'Absent', 'Leave')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_attendance_user_date UNIQUE (user_id, attendance_date),
+  CHECK (check_out_at IS NULL OR check_out_at >= check_in_at)
+);
+
+CREATE INDEX idx_attendance_user_date
+  ON attendance_records(user_id, attendance_date DESC);
+
+CREATE TABLE performance_reviews (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reviewer_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  reviewer_name TEXT NOT NULL CHECK (char_length(trim(reviewer_name)) BETWEEN 1 AND 200),
+  review_date DATE NOT NULL,
+  rating NUMERIC(2,1) NOT NULL CHECK (rating >= 1 AND rating <= 5),
+  comments TEXT NOT NULL CHECK (char_length(comments) BETWEEN 1 AND 4000),
+  goals TEXT NOT NULL CHECK (char_length(goals) BETWEEN 1 AND 8000),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_performance_reviews_user_date
+  ON performance_reviews(user_id, review_date DESC, id);
+
+CREATE TABLE workplace_communications (
+  id TEXT PRIMARY KEY,
+  sender_id TEXT NOT NULL,
+  sender_name TEXT NOT NULL CHECK (char_length(trim(sender_name)) BETWEEN 1 AND 200),
+  recipient_id TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'Direct'
+    CHECK (kind IN ('Direct', 'Announcement', 'SelfAppraisal')),
+  content TEXT NOT NULL CHECK (char_length(trim(content)) BETWEEN 1 AND 4000),
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((kind = 'Announcement') = (recipient_id = 'ALL'))
+);
+
+CREATE INDEX idx_workplace_communications_recipient
+  ON workplace_communications(recipient_id, sent_at DESC, id);
+CREATE INDEX idx_workplace_communications_sender
+  ON workplace_communications(sender_id, sent_at DESC, id);
+
 -- ── Deletion Archive ──
 -- Super Admin only: stores full entity snapshots with mandatory deletion reason
 CREATE TABLE deleted_archives (
@@ -826,7 +876,7 @@ CREATE TABLE privacy_requests (
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   next_attempt_at TIMESTAMPTZ,
   last_error_code TEXT,
-  coverage_version TEXT NOT NULL DEFAULT 'normalized-v1',
+  coverage_version TEXT NOT NULL DEFAULT 'normalized-v2',
   completion_evidence JSONB NOT NULL DEFAULT '{}'
     CHECK (jsonb_typeof(completion_evidence) = 'object'),
   version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),

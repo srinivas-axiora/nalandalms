@@ -29,7 +29,7 @@ describe("course cutover privacy authority", () => {
       status: "GracePeriod",
       requestedAt: "2026-11-08T16:00:00.000Z",
       graceEndsAt: "2026-12-08T16:00:00.000Z",
-      coverageVersion: "normalized-v1",
+      coverageVersion: "normalized-v2",
     });
     const { registerPrivacyCompliance } = await import(
       "../../backend/src/modules/governance/privacy.routes.js?phase45-course-cutover"
@@ -57,7 +57,7 @@ describe("course cutover privacy authority", () => {
     expect(response.body.data).toMatchObject({
       id: "PRIV-PHASE-45",
       status: "GracePeriod",
-      coverageVersion: "normalized-v1",
+      coverageVersion: "normalized-v2",
     });
     expect(privacyPgRepository.getForUser).toHaveBeenCalledWith(user.id);
   });

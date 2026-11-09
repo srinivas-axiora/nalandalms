@@ -85,6 +85,7 @@ import {
   relationalIdentityEnabled,
   relationalPrivacyEnabled,
   relationalAuditEnabled,
+  relationalWorkplaceEnabled,
 } from "./src/runtime-modes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -98,13 +99,15 @@ const USE_RELATIONAL_SKILLS = relationalSkillsEnabled();
 const USE_RELATIONAL_IDENTITY = relationalIdentityEnabled();
 const USE_RELATIONAL_PRIVACY = relationalPrivacyEnabled();
 const USE_RELATIONAL_AUDIT = relationalAuditEnabled();
+const USE_RELATIONAL_WORKPLACE = relationalWorkplaceEnabled();
+const WORKPLACE_TRANSACTIONAL_DEPENDENCIES = USE_RELATIONAL_IDENTITY && USE_RELATIONAL_AUDIT;
 const AUDIT_TRANSACTIONAL_DEPENDENCIES = USE_RELATIONAL_PAYMENTS && USE_RELATIONAL_SKILLS
   && USE_RELATIONAL_IDENTITY && USE_RELATIONAL_ATTEMPTS && USE_RELATIONAL_CERTIFICATES
   && USE_RELATIONAL_CANDIDATE_ASSESSMENTS && USE_PG_COURSES && USE_RELATIONAL_PRIVACY
-  && USE_RELATIONAL_SETTINGS;
+  && USE_RELATIONAL_SETTINGS && USE_RELATIONAL_WORKPLACE;
 const ENABLE_PRIVACY_ERASURE_WORKER = process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1";
 const ENABLE_REPORT_EXPORT_WORKER = process.env.ENABLE_REPORT_EXPORT_WORKER === "1";
-const PRIVACY_COVERAGE_ACK = process.env.PRIVACY_COVERAGE_ACK === "normalized-v1";
+const PRIVACY_COVERAGE_ACK = process.env.PRIVACY_COVERAGE_ACK === "normalized-v2";
 
 const app = express();
 app.set("trust proxy", TRUST_PROXY);
@@ -176,7 +179,7 @@ app.get("/api/ready", async (_req, res) => {
   const [
     database, redis, objects, skillsAuthority, payments, identity, attemptRuntime,
     certificateAuthority, candidateRuntime, privacyAuthority, reportAuthority, settingsAuthority, auditAuthority,
-    archiveAuthority,
+    archiveAuthority, workplaceAuthority,
   ] = await Promise.all([
     storage.health(),
     redisHealth(),
@@ -345,6 +348,11 @@ app.get("/api/ready", async (_req, res) => {
                  AND (completed_at IS NULL OR completion_evidence = '{}'::jsonb)
              ) AS completion_evidence,
              NOT EXISTS (
+               SELECT 1 FROM privacy_requests
+               WHERE status IN ('PendingReview', 'Approved', 'Processing', 'Blocked', 'Failed')
+                 AND coverage_version <> 'normalized-v2'
+             ) AS active_coverage_current,
+             NOT EXISTS (
                SELECT 1 FROM privacy_erasure_objects
                WHERE status = 'Deleted' AND object_key IS NOT NULL
              ) AS deleted_keys_redacted`
@@ -357,7 +365,8 @@ app.get("/api/ready", async (_req, res) => {
             && USE_RELATIONAL_IDENTITY
             && USE_RELATIONAL_ATTEMPTS
             && USE_RELATIONAL_CERTIFICATES
-            && USE_RELATIONAL_CANDIDATE_ASSESSMENTS,
+            && USE_RELATIONAL_CANDIDATE_ASSESSMENTS
+            && USE_RELATIONAL_WORKPLACE,
           mode: "normalized",
           worker: ENABLE_PRIVACY_ERASURE_WORKER ? "enabled" : "disabled",
         })).catch(() => ({ ok: false, mode: "normalized", worker: "unknown" }))
@@ -430,6 +439,29 @@ app.get("/api/ready", async (_req, res) => {
           ok: Object.values(rows[0] || {}).every(Boolean), mode: "normalized",
         })).catch(() => ({ ok: false, mode: "normalized" }))
       : Promise.resolve({ ok: true, mode: "disabled" }),
+    USE_RELATIONAL_WORKPLACE
+      ? Promise.resolve().then(() => relationalQuery(
+          `SELECT
+             to_regclass('public.attendance_records') IS NOT NULL AS attendance,
+             to_regclass('public.performance_reviews') IS NOT NULL AS reviews,
+             to_regclass('public.workplace_communications') IS NOT NULL AS communications,
+             to_regclass('public.idx_attendance_user_date') IS NOT NULL AS attendance_index,
+             to_regclass('public.idx_performance_reviews_user_date') IS NOT NULL AS review_index,
+             to_regclass('public.idx_workplace_communications_recipient') IS NOT NULL AS recipient_index,
+             to_regclass('public.idx_workplace_communications_sender') IS NOT NULL AS sender_index,
+             EXISTS (
+               SELECT 1 FROM pg_constraint WHERE conname = 'uq_attendance_user_date'
+             ) AS attendance_uniqueness`
+        )).then(({ rows }) => ({
+          ok: Object.values(rows[0] || {}).every(Boolean) && WORKPLACE_TRANSACTIONAL_DEPENDENCIES,
+          mode: "normalized",
+          dependencies: WORKPLACE_TRANSACTIONAL_DEPENDENCIES ? "complete" : "incomplete",
+        })).catch(() => ({
+          ok: false,
+          mode: "normalized",
+          dependencies: WORKPLACE_TRANSACTIONAL_DEPENDENCIES ? "complete" : "incomplete",
+        }))
+      : Promise.resolve({ ok: true, mode: "disabled", dependencies: "disabled" }),
   ]);
   // The relational learning workflow is still a partial cutover. Course,
   // chapter, progress and assessment authority exist, but secondary consumers
@@ -442,6 +474,7 @@ app.get("/api/ready", async (_req, res) => {
     && payments.ok && identity.ok
     && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok && privacyAuthority.ok
     && reportAuthority.ok && settingsAuthority.ok && auditAuthority.ok && archiveAuthority.ok
+    && workplaceAuthority.ok
     && courseAuthority.ok;
   if (!ok) logger.error("READINESS_CHECK_FAILED", {
     database, redis, objects, skills: skillsAuthority, payments, identity, attempts: attemptRuntime,
@@ -449,6 +482,7 @@ app.get("/api/ready", async (_req, res) => {
     privacy: privacyAuthority, reports: reportAuthority, settings: settingsAuthority,
     audit: auditAuthority,
     archives: archiveAuthority,
+    workplace: workplaceAuthority,
     courses: courseAuthority, startupReady,
   });
   res.status(ok ? 200 : 503).json({
@@ -481,6 +515,11 @@ app.get("/api/ready", async (_req, res) => {
         dependencies: auditAuthority.dependencies,
       },
       archives: { ok: archiveAuthority.ok, mode: archiveAuthority.mode },
+      workplace: {
+        ok: workplaceAuthority.ok,
+        mode: workplaceAuthority.mode,
+        dependencies: workplaceAuthority.dependencies,
+      },
       courses: courseAuthority,
     },
   });

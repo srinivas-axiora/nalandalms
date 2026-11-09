@@ -12,6 +12,33 @@ import { redactAuditMetadata, redactSensitive } from "../security/redaction.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_JSON = path.resolve(__dirname, "..", "..", "..", "database", "db.json");
 
+const normalizeLegacyTime = (value) => {
+  const candidate = String(value || "").trim();
+  const match = candidate.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const second = Number(match[3] || 0);
+  if (minute > 59 || second > 59) return null;
+  const meridiem = match[4]?.toUpperCase();
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return null;
+    if (meridiem === "AM") hour %= 12;
+    else hour = (hour % 12) + 12;
+  } else if (hour > 23) return null;
+  return [hour, minute, second].map((part) => String(part).padStart(2, "0")).join(":");
+};
+
+const normalizeLegacyDate = (value) => {
+  const candidate = String(value || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return null;
+  const [year, month, day] = candidate.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day ? candidate : null;
+};
+
 async function loadSource() {
   if (process.env.DATABASE_URL || process.env.PGHOST) {
     const sentinel = await query("SELECT to_regclass('public.app_state') AS table_name");
@@ -51,6 +78,9 @@ async function loadSource() {
       auditLogs: core.auditLogs || [],
       securityEvents: core.securityEvents || [],
       archives: core.archives || [],
+      attendanceLogs: core.attendanceLogs || [],
+      performanceReviews: core.performanceReviews || [],
+      communications: core.communications || [],
     },
     source: "in-memory seed",
   };
@@ -801,13 +831,97 @@ export async function backfill() {
         `INSERT INTO privacy_requests (
            id, user_id, status, reason, reason_sha256,
            requested_at, grace_ends_at, coverage_version
-         ) VALUES ($1, $2, 'PendingReview', $3, $4, $5, $6, 'normalized-v1')
+         ) VALUES ($1, $2, 'PendingReview', $3, $4, $5, $6, 'normalized-v2')
          ON CONFLICT DO NOTHING`,
         [requestId, user.id, reason, hashCandidateToken(reason), requestedAt.toISOString(), graceEndsAt]
       );
     }
 
-    // 12. Operational settings and learning feedback.
+    // 12. Workplace attendance, performance reviews and communications.
+    // Legacy local times are interpreted in the configured workplace timezone.
+    const workplaceTimeZone = process.env.APP_TIME_ZONE || "Asia/Kolkata";
+    const attendanceLogs = data.attendanceLogs || [];
+    let admittedAttendance = 0;
+    for (const record of attendanceLogs) {
+      const attendanceDate = normalizeLegacyDate(record.date);
+      const checkInTime = normalizeLegacyTime(record.checkInTime);
+      const checkOutTime = record.checkOutTime ? normalizeLegacyTime(record.checkOutTime) : null;
+      if (!record.id || !userIds.has(record.userId) || !attendanceDate || !checkInTime
+        || (record.checkOutTime && !checkOutTime)
+        || (checkOutTime && checkOutTime < checkInTime)) continue;
+      const status = ["Present", "Absent", "Leave"].includes(record.status) ? record.status : "Present";
+      await client.query(
+        `INSERT INTO attendance_records (
+           id, user_id, attendance_date, check_in_at, check_out_at, status
+         ) VALUES (
+           $1, $2, $3::date,
+           ($3::date + $4::time) AT TIME ZONE $7,
+           CASE WHEN $5::text IS NULL THEN NULL
+             ELSE ($3::date + $5::time) AT TIME ZONE $7 END,
+           $6
+         ) ON CONFLICT (user_id, attendance_date) DO UPDATE SET
+           check_in_at = EXCLUDED.check_in_at,
+           check_out_at = EXCLUDED.check_out_at,
+           status = EXCLUDED.status,
+           updated_at = now()`,
+        [record.id, record.userId, attendanceDate, checkInTime, checkOutTime, status, workplaceTimeZone],
+      );
+      admittedAttendance += 1;
+    }
+    console.log(`[backfill] Admitted ${admittedAttendance}/${attendanceLogs.length} attendance records.`);
+
+    const performanceReviews = data.performanceReviews || [];
+    let admittedReviews = 0;
+    for (const review of performanceReviews) {
+      const reviewDate = normalizeLegacyDate(review.reviewDate);
+      const reviewerName = String(review.reviewerName || "").trim().slice(0, 200);
+      const comments = String(review.comments || "").trim().slice(0, 4000);
+      const goals = String(review.goals || "").trim().slice(0, 8000);
+      const rating = Number(review.rating);
+      if (!review.id || !userIds.has(review.userId) || !reviewDate || !reviewerName
+        || !comments || !goals || !Number.isFinite(rating) || rating < 1 || rating > 5) continue;
+      const reviewerId = userIds.has(review.reviewerId) ? review.reviewerId : null;
+      await client.query(
+        `INSERT INTO performance_reviews (
+           id, user_id, reviewer_id, reviewer_name, review_date, rating, comments, goals
+         ) VALUES ($1, $2, $3, $4, $5::date, $6, $7, $8)
+         ON CONFLICT (id) DO UPDATE SET
+           user_id = EXCLUDED.user_id, reviewer_id = EXCLUDED.reviewer_id,
+           reviewer_name = EXCLUDED.reviewer_name, review_date = EXCLUDED.review_date,
+           rating = EXCLUDED.rating, comments = EXCLUDED.comments, goals = EXCLUDED.goals`,
+        [review.id, review.userId, reviewerId, reviewerName, reviewDate, rating, comments, goals],
+      );
+      admittedReviews += 1;
+    }
+    console.log(`[backfill] Admitted ${admittedReviews}/${performanceReviews.length} performance reviews.`);
+
+    const communications = data.communications || [];
+    let admittedCommunications = 0;
+    for (const message of communications) {
+      const senderId = String(message.senderId || "");
+      const recipientId = String(message.recipientId || "");
+      const senderName = String(message.senderName || "").trim().slice(0, 200);
+      const content = String(message.content || "").trim().slice(0, 4000);
+      const kind = recipientId === "ALL" ? "Announcement"
+        : content.startsWith("[SELF-APPRAISAL SUBMISSION]:") ? "SelfAppraisal" : "Direct";
+      if (!message.id || (!userIds.has(senderId) && senderId !== "SYSTEM")
+        || (recipientId !== "ALL" && !userIds.has(recipientId)) || !senderName || !content) continue;
+      await client.query(
+        `INSERT INTO workplace_communications (
+           id, sender_id, sender_name, recipient_id, kind, content, sent_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::timestamptz, now()))
+         ON CONFLICT (id) DO UPDATE SET
+           sender_id = EXCLUDED.sender_id, sender_name = EXCLUDED.sender_name,
+           recipient_id = EXCLUDED.recipient_id, kind = EXCLUDED.kind,
+           content = EXCLUDED.content, sent_at = EXCLUDED.sent_at`,
+        [message.id, senderId, senderName, recipientId, kind, content,
+          Number.isFinite(Date.parse(message.sentAt || "")) ? message.sentAt : null],
+      );
+      admittedCommunications += 1;
+    }
+    console.log(`[backfill] Admitted ${admittedCommunications}/${communications.length} workplace communications.`);
+
+    // 13. Operational settings and learning feedback.
     if (data.settings && typeof data.settings === "object" && !Array.isArray(data.settings)) {
       const defaults = {
         fullscreenRequired: true, cameraRequired: true, microphoneRequired: true,
@@ -880,7 +994,7 @@ export async function backfill() {
       );
     }
 
-    // 13. AI generation feedback. Only records with a valid UUID and an
+    // 14. AI generation feedback. Only records with a valid UUID and an
     // existing creator are admitted; expired legacy prompt influence is not
     // carried into the relational authority.
     const aiFeedback = data.acharyaFeedbackMemory || [];
@@ -912,7 +1026,7 @@ export async function backfill() {
     }
     console.log(`[backfill] Admitted ${admittedFeedback}/${aiFeedback.length} active AI feedback records.`);
 
-    // 14. Application-wide audit and security evidence. Legacy identifiers are
+    // 15. Application-wide audit and security evidence. Legacy identifiers are
     // retained only as hashed idempotency keys; database UUIDs are generated by
     // PostgreSQL so malformed historic IDs cannot block the migration.
     const validTimestamp = (value) => Number.isFinite(Date.parse(value || "")) ? value : null;

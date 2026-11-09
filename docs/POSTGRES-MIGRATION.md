@@ -1,7 +1,7 @@
 # Nalanda — PostgreSQL data-layer migration
 
 Status: **in progress — core business boundaries plus relational audit/security evidence are built and feature-gated.**
-Owner: Engineering. Updated: 2026-11-06.
+Owner: Engineering. Updated: 2026-11-09.
 
 > ⚠️ **This code is UNVERIFIED by the author.** It was written without a live
 > PostgreSQL to execute against (per the agreed "build it blind, I'll test"
@@ -17,7 +17,10 @@ Owner: Engineering. Updated: 2026-11-06.
 > audit/security evidence, so it must not be enabled before that same live gate.
 > `USE_PG_COURSES` now covers the Phase-12/21 course, chapter, progress,
 > assessment, question, assignment, cohort, upload-grant and protected-content
-> authority plus analytics and report-data preparation, but
+> authority plus analytics, report-data preparation and Phase-50 workplace
+> state. `USE_PG_WORKPLACE` must remain off until its live verifier and
+> multi-task concurrency gate pass. Course cutover also requires privacy
+> coverage acknowledgement `normalized-v2`, but
 > intentionally makes readiness fail until every secondary content consumer is
 > also migrated.
 
@@ -70,6 +73,9 @@ backend/src/db/verify-assessments.mjs             live authoring/eligibility/att
 database/migrations/0019_archive_authority.sql     archive integrity/backfill controls
 backend/src/repositories/archive-authority.repository.pg.js transactional archive restore authority
 backend/src/db/verify-archives.mjs                 live complete archive/restore verifier
+database/migrations/0021_workplace_authority.sql   attendance/review/communication authority
+backend/src/repositories/workplace.repository.pg.js transactional workplace authority
+backend/src/db/verify-workplace.mjs                live concurrency/privacy-adjacent verifier
 ```
 
 The **skills** bounded context is the pilot (like the certificates pilot for the
@@ -121,6 +127,7 @@ npm run db:verify-learning
 npm run db:verify-assessments
 npm run db:verify-security-evidence
 npm run db:verify-archives
+npm run db:verify-workplace
 ```
 
 If `verify-skills.mjs` prints all `ok`, the pilot pattern is sound and we proceed
@@ -252,6 +259,10 @@ For each bounded context, in roughly ascending coupling:
       restores atomically as inactive draft content, backfills legacy archives
       idempotently and serves governance projections behind `USE_PG_COURSES=1`
       (Phase 33; live RDS verifier and legacy-incomplete reconciliation pending)
+- [x] Copilot attendance, performance reviews, announcements, inbox/direct
+      messages and self-appraisals use normalized, transactionally audited
+      workplace authority behind `USE_PG_WORKPLACE=1` and are implied by course
+      cutover (Phase 50; live RDS, privacy-v2 and multi-task gates pending)
 - [ ] remove the in-memory arrays + JSON-blob adapter; externalize rate-limit /
       session / lockout state to enable **multi-instance** horizontal scaling
 
@@ -267,7 +278,7 @@ Each entity: add migration SQL → repository → backfill → verify → wire m
   verifier and cross-task gates in `SECURITY-PHASE-10-CANDIDATE-RUNTIME.md`
   pass. Candidate email must not be treated as verified identity.
 - **Privacy execution remains disabled** until the source-of-truth flags,
-  `normalized-v1` coverage register, live verifier and AWS backup/S3-version
+  `normalized-v2` coverage register, live verifier and AWS backup/S3-version
   erasure drill in `SECURITY-PHASE-11-PRIVACY-ERASURE.md` pass.
 - **`now()`-seeded timestamps** are identical across seed rows, so list ordering
   by `created_at` is approximate; if exact order matters, add a sort key.

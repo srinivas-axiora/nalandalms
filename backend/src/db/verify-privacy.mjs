@@ -21,6 +21,10 @@ const ratingId = `VERIFY-PRIVACY-RATING-${suffix}`;
 const linkId = `VERIFY-PRIVACY-LINK-${suffix}`;
 const submissionId = `VERIFY-PRIVACY-SUBMISSION-${suffix}`;
 const requestId = `VERIFY-PRIVACY-REQUEST-${suffix}`;
+const attendanceId = `VERIFY-PRIVACY-ATTENDANCE-${suffix}`;
+const reviewId = `VERIFY-PRIVACY-REVIEW-${suffix}`;
+const reviewerEvidenceId = `VERIFY-PRIVACY-REVIEWER-${suffix}`;
+const communicationId = `VERIFY-PRIVACY-MESSAGE-${suffix}`;
 const subjectEmail = `privacy.subject.${suffix}@example.invalid`;
 const objectKeys = [
   `proctoring/${attemptId}/chunk.webm`,
@@ -148,13 +152,37 @@ try {
       [submissionId, linkId,
         crypto.createHash("sha256").update(`attempt-${suffix}`).digest("hex"), subjectEmail]
     );
+    await client.query(
+      `INSERT INTO attendance_records (id, user_id, attendance_date, check_in_at, status)
+       VALUES ($1, $2, current_date, now(), 'Present')`,
+      [attendanceId, subjectId]
+    );
+    await client.query(
+      `INSERT INTO performance_reviews (
+         id, user_id, reviewer_id, reviewer_name, review_date, rating, comments, goals
+       ) VALUES
+         ($1, $2, $3, 'Privacy verifier admin', current_date, 4.5,
+          'Synthetic subject review', 'Synthetic subject goals'),
+         ($4, $3, $2, 'Privacy verifier subject', current_date, 4.0,
+          'Synthetic reviewer evidence', 'Preserve review while removing reviewer identity')`,
+      [reviewId, subjectId, adminId, reviewerEvidenceId]
+    );
+    await client.query(
+      `INSERT INTO workplace_communications (
+         id, sender_id, sender_name, recipient_id, kind, content
+       ) VALUES ($1, $2, 'Privacy verifier subject', $3, 'Direct', 'Synthetic private message')`,
+      [communicationId, subjectId, adminId]
+    );
 
     const exported = await repository.exportUserData(subjectId);
     ok(
-      "portable export covers normalized profile, learning, transactions and candidate data",
+      "portable export covers normalized profile, learning, workplace and candidate data",
       exported?.profile?.email === subjectEmail
         && exported.learning.examAttempts.length === 1
         && exported.candidateAssessments.length === 1
+        && exported.workplace.attendance.length === 1
+        && exported.workplace.performanceReviews.length === 1
+        && exported.workplace.communications.length === 1
     );
 
     const requested = await repository.requestErasure({
@@ -212,8 +240,16 @@ try {
          (SELECT count(*) FROM proctor_captures WHERE user_id = $2)::integer AS captures,
          (SELECT count(*) FROM chapter_feedbacks WHERE user_id = $2)::integer AS feedbacks,
          (SELECT count(*) FROM skill_ratings WHERE user_id = $2)::integer AS ratings,
-         (SELECT count(*) FROM report_exports WHERE requested_by = $2)::integer AS reports`,
+         (SELECT count(*) FROM report_exports WHERE requested_by = $2)::integer AS reports,
+         (SELECT count(*) FROM attendance_records WHERE user_id = $2)::integer AS attendance,
+         (SELECT count(*) FROM performance_reviews WHERE user_id = $2)::integer AS reviews,
+         (SELECT count(*) FROM workplace_communications
+           WHERE sender_id = $2 OR recipient_id = $2)::integer AS communications`,
       [attemptId, subjectId]
+    );
+    const reviewerEvidence = await client.query(
+      "SELECT reviewer_id, reviewer_name FROM performance_reviews WHERE id = $1",
+      [reviewerEvidenceId]
     );
     const candidate = await client.query(
       "SELECT * FROM candidate_assessment_submissions WHERE id = $1",
@@ -237,6 +273,11 @@ try {
         && Object.values(removed.rows[0] || {}).every((count) => Number(count) === 0)
     );
     ok(
+      "review evidence owned by another subject is retained without reviewer identity",
+      reviewerEvidence.rows[0]?.reviewer_id === null
+        && String(reviewerEvidence.rows[0]?.reviewer_name).startsWith("Erased reviewer ")
+    );
+    ok(
       "candidate identity and responses are pseudonymized",
       String(candidate.rows[0]?.candidate_email).endsWith("@privacy.invalid")
         && Object.keys(candidate.rows[0]?.answers || {}).length === 0
@@ -251,7 +292,7 @@ try {
     ok(
       "completion evidence is durable and contains no original email",
       completed?.reason === "[erased after completion]"
-        && completed?.completionEvidence?.policyVersion === "normalized-v1"
+        && completed?.completionEvidence?.policyVersion === "normalized-v2"
         && !JSON.stringify(completed.completionEvidence).includes(subjectEmail)
     );
 

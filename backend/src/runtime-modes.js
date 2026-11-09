@@ -43,3 +43,8 @@ export const relationalAuditEnabled = () => (
   process.env.USE_PG_AUDIT === "1"
   || process.env.USE_PG_COURSES === "1"
 );
+
+export const relationalWorkplaceEnabled = () => (
+  process.env.USE_PG_WORKPLACE === "1"
+  || process.env.USE_PG_COURSES === "1"
+);
