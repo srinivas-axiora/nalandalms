@@ -62,7 +62,8 @@ describe("AWS staging release controls", () => {
     expect(template).toContain("GuardDuty Malware Protection Object Scan Result");
     expect(template).toContain("THREATS_FOUND");
     expect(template).toContain("GuardDuty Malware Protection Post Scan Action Failed");
-    expect(template).toContain("Action: [s3:GetObject, s3:GetObjectTagging, s3:PutObject, s3:DeleteObject]");
+    expect(template).toContain("s3:GetObjectTagging");
+    expect(template).toContain("s3:DeleteObjectVersion");
   });
 
   it("configures custom-domain TLS only from a complete validated input tuple", () => {

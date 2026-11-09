@@ -3,7 +3,7 @@
 import { attempts, now, saveDb } from "../core.js";
 import { audit } from "../domain.js";
 import { logger } from "../logging/logger.js";
-import { deleteObject, normalizeObjectKey } from "../storage/object-store.js";
+import { deleteObjectCompletely, normalizeObjectKey } from "../storage/object-store.js";
 import { relationalAttemptsEnabled } from "../runtime-modes.js";
 import { proctorMediaRetentionRepository } from "../repositories/proctor-media-retention.repository.pg.js";
 
@@ -29,7 +29,7 @@ async function runSnapshotRetentionCleanup({ retentionDays, dryRun }) {
         if (!dryRun) {
           for (const chunk of attempt.videoChunks) {
             try {
-              if (chunk.key) await deleteObject(normalizeObjectKey(chunk.key));
+              if (chunk.key) await deleteObjectCompletely(normalizeObjectKey(chunk.key));
               deletedChunksCount += 1;
             } catch (err) {
               retainedChunks.push(chunk);
@@ -129,7 +129,7 @@ export async function runRetentionCleanup({
   dryRun = false,
   limit = DEFAULT_BATCH_SIZE,
   repository = proctorMediaRetentionRepository,
-  deleteFn = deleteObject,
+  deleteFn = deleteObjectCompletely,
   auditFn = audit,
 } = {}) {
   if (relationalAttemptsEnabled()) {

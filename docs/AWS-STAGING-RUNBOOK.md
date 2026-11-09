@@ -159,6 +159,24 @@ Do not use real learner/candidate PII or real payments in this staging stack.
     ms, bounded p99/error rate, continuous readiness, CPU/memory headroom, no
     active alarms, exact fixture cleanup and restoration of the original
     service count.
+- With normalized authority stable, exercise payment reconciliation, privacy
+  erasure retry and proctor-media retention retry:
+
+    ```powershell
+    .\infra\aws\verify-operational-recovery.ps1 `
+      -Region ap-south-1 `
+      -StackName nalanda-staging `
+      -ExpectedAccountId <12-digit-staging-account-id> `
+      -ExpectedSourceRevision <40-character-git-revision> `
+      -ConfirmRecoveryDrill
+    ```
+
+    Require all three isolated tasks to exit zero, zero internal payment-ledger
+    anomalies, recovered privacy/media deletion state, unchanged ECS service
+    state and no active stack alarm. This does not replace Razorpay settlement,
+    refund and dispute reconciliation. The object checks must report zero
+    remaining S3 versions; a current-key 404 backed only by a delete marker is
+    not valid privacy or retention evidence.
 - Confirm Redis reports two members in distinct Availability Zones with
   Multi-AZ and automatic failover enabled. Run the guarded failover rehearsal:
 

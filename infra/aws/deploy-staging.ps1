@@ -338,6 +338,7 @@ try {
   if ($RunRelationalVerifiers) {
     $verifiers = @(
       "verify-normalized-reconciliation.mjs",
+      "verify-payments.mjs",
       "verify-identity.mjs",
       "verify-attempts.mjs",
       "verify-certificates.mjs",
@@ -355,6 +356,7 @@ try {
       "verify-security-evidence.mjs",
       "verify-archives.mjs",
       "verify-workplace.mjs",
+      "verify-proctor-retention.mjs",
       "verify-course-cutover.mjs"
     )
     foreach ($verifier in $verifiers) {

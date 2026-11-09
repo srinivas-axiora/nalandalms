@@ -846,8 +846,27 @@ Resources:
                 Action: s3:ListBucket
                 Resource: !GetAtt MediaBucket.Arn
               - Effect: Allow
+                Action: s3:ListBucketVersions
+                Resource: !GetAtt MediaBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - course_media/*
+                      - chapter_pdf/*
+                      - proctoring/*
+                      - reports/*
+                      - verification/*
+              - Effect: Allow
                 Action: [s3:GetObject, s3:GetObjectTagging, s3:PutObject, s3:DeleteObject]
                 Resource: !Sub ${MediaBucket.Arn}/*
+              - Effect: Allow
+                Action: s3:DeleteObjectVersion
+                Resource:
+                  - !Sub ${MediaBucket.Arn}/course_media/*
+                  - !Sub ${MediaBucket.Arn}/chapter_pdf/*
+                  - !Sub ${MediaBucket.Arn}/proctoring/*
+                  - !Sub ${MediaBucket.Arn}/reports/*
+                  - !Sub ${MediaBucket.Arn}/verification/*
 
   Cluster:
     Type: AWS::ECS::Cluster

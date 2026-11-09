@@ -135,7 +135,8 @@ rollback.
 - Execute this promotion in AWS and review all generated evidence.
 - Execute backup/restore, ECS rollback and Redis/RDS failover on the promoted
   release.
-- Complete privacy-erasure retry, payment reconciliation and media-retention
-  failure/retry drills before a production go decision.
+- Execute the Phase-59 operational recovery gate in AWS and complete external
+  Razorpay settlement/refund/dispute reconciliation before a production go
+  decision.
 
 Current decision: **NO-GO for production**.

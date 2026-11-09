@@ -128,6 +128,7 @@ node backend/src/db/verify-skills.mjs
 
 # 6. Exercise identity/session invariants with self-cleaning synthetic data
 npm run db:verify-identity
+npm run db:verify-payments
 npm run db:verify-attempts
 npm run db:verify-certificates
 npm run db:verify-candidate-assessments
@@ -138,6 +139,7 @@ npm run db:verify-assessments
 npm run db:verify-security-evidence
 npm run db:verify-archives
 npm run db:verify-workplace
+npm run db:verify-proctor-retention
 ```
 
 If `verify-skills.mjs` prints all `ok`, the pilot pattern is sound and we proceed

@@ -218,16 +218,57 @@ try {
     ok("administrator review creates an approved durable state", approved.status === "Approved");
 
     const deletedKeys = [];
-    const batch = await runPrivacyErasureBatch({
+    let injectedFailure = false;
+    const failedBatch = await runPrivacyErasureBatch({
+      limit: 1,
+      repository,
+      deleteFn: async (key) => {
+        if (!injectedFailure) {
+          injectedFailure = true;
+          throw new Error("synthetic object-store interruption");
+        }
+        deletedKeys.push(key);
+        return true;
+      },
+    });
+    ok(
+      "object-store interruption schedules a durable privacy retry",
+      failedBatch.failed === 1 && failedBatch.completed === 0
+        && failedBatch.objectsDeleted === objectKeys.length - 1,
+    );
+    const retryState = await client.query(
+      `SELECT request.status, request.attempts, request.last_error_code,
+              request.next_attempt_at,
+              count(*) FILTER (WHERE object.status = 'Failed')::integer AS failed_objects
+         FROM privacy_requests request
+         JOIN privacy_erasure_objects object ON object.request_id = request.id
+        WHERE request.id = $1
+        GROUP BY request.id`,
+      [requestId],
+    );
+    ok(
+      "failed privacy work remains recoverable without losing object evidence",
+      retryState.rows[0]?.status === "Failed"
+        && Number(retryState.rows[0]?.attempts) === 1
+        && retryState.rows[0]?.last_error_code === "OBJECT_DELETE_FAILED"
+        && retryState.rows[0]?.next_attempt_at
+        && Number(retryState.rows[0]?.failed_objects) === 1,
+    );
+
+    await client.query(
+      "UPDATE privacy_requests SET next_attempt_at = now() - interval '1 second' WHERE id = $1",
+      [requestId],
+    );
+    const retryBatch = await runPrivacyErasureBatch({
       limit: 1,
       repository,
       deleteFn: async (key) => { deletedKeys.push(key); return true; },
     });
     ok(
-      "worker deletes every discovered object before finalization",
-      batch.completed === 1
-        && batch.objectsDeleted === objectKeys.length
-        && objectKeys.every((key) => deletedKeys.includes(key))
+      "privacy retry deletes the remaining object and finalizes exactly once",
+      retryBatch.completed === 1 && retryBatch.failed === 0
+        && retryBatch.objectsDeleted === 1
+        && objectKeys.every((key) => deletedKeys.includes(key)),
     );
 
     const completed = await repository.getForUser(subjectId);

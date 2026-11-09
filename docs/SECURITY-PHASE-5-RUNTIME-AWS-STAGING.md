@@ -155,6 +155,10 @@ mandatory staging gates, not assumed successes.
   concurrency gate, create an encrypted source-tagged RDS snapshot, promote and
   attest, require the Phase-57 soak, and automatically restore/attest snapshot
   authority after any post-cutover failure.
+- Phase 59 adds an isolated normalized operational-recovery gate for internal
+  payment-ledger reconciliation, privacy-erasure failure/retry and real
+  object-store media-retention failure/retry. External Razorpay settlement,
+  refund and dispute parity remains a live go-production requirement.
 - Execute the backup/restore, rollback, Redis and RDS failover gates, then
   execute the Phase-57 load/soak gate and complete privacy erasure, payment
   reconciliation and retention retry drills.

@@ -22,6 +22,15 @@ snapshot-hash/revision evidence, creates an encrypted pre-cutover snapshot,
 attests before and after the change, runs the soak gate and automatically
 restores snapshot authority if a post-cutover assertion fails.
 
+After promotion, `verify-operational-recovery.ps1` runs isolated normalized
+payment-reconciliation, privacy-erasure retry and real object-store retention
+retry tasks. It is non-production-only, revision/digest bound, preserves JSON
+evidence and rejects service drift or active alarms. Provider payout/refund/
+dispute reconciliation remains a separate external gate.
+The task role can list and delete exact object versions for approved media,
+report and verification prefixes so erasure cannot be falsely satisfied by an
+S3 delete marker.
+
 The ECS deployment configuration never overlaps old and new tasks. This avoids
 two application processes writing the current whole-state JSONB snapshot at the
 same time. Deployments therefore have a short interruption. Do not raise

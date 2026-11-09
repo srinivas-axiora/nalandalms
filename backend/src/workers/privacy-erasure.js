@@ -1,5 +1,5 @@
 import { privacyPgRepository } from "../repositories/privacy.repository.pg.js";
-import { deleteObject, normalizeObjectKey } from "../storage/object-store.js";
+import { deleteObjectCompletely, normalizeObjectKey } from "../storage/object-store.js";
 import { logger } from "../logging/logger.js";
 
 const DEFAULT_INTERVAL_MS = Number(process.env.PRIVACY_ERASURE_INTERVAL_MS || 5 * 60 * 1000);
@@ -8,7 +8,7 @@ const DEFAULT_BATCH_SIZE = Number(process.env.PRIVACY_ERASURE_BATCH_SIZE || 10);
 export async function runPrivacyErasureBatch({
   limit = DEFAULT_BATCH_SIZE,
   repository = privacyPgRepository,
-  deleteFn = deleteObject,
+  deleteFn = deleteObjectCompletely,
 } = {}) {
   const result = {
     claimed: 0,

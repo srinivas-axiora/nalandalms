@@ -9,7 +9,10 @@ import {
   GetObjectCommand,
   GetObjectTaggingCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
+  ListObjectVersionsCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { JWT_SECRET } from "../config.js";
@@ -214,4 +217,74 @@ export async function deleteObject(keyValue) {
   if (!fs.existsSync(target)) return false;
   fs.unlinkSync(target);
   return true;
+}
+
+const listExactObjectVersions = async (key) => {
+  const versions = [];
+  let keyMarker;
+  let versionIdMarker;
+  for (let page = 0; page < 100; page += 1) {
+    const response = await s3Client.send(new ListObjectVersionsCommand({
+      Bucket: bucketName,
+      Prefix: key,
+      KeyMarker: keyMarker,
+      VersionIdMarker: versionIdMarker,
+      MaxKeys: 1000,
+    }));
+    for (const item of [...(response.Versions || []), ...(response.DeleteMarkers || [])]) {
+      if (item.Key === key && item.VersionId) versions.push({ Key: key, VersionId: item.VersionId });
+    }
+    if (!response.IsTruncated) return versions;
+    if (!response.NextKeyMarker
+      || (response.NextKeyMarker === keyMarker && response.NextVersionIdMarker === versionIdMarker)) {
+      throw new Error("Object version listing did not advance");
+    }
+    keyMarker = response.NextKeyMarker;
+    versionIdMarker = response.NextVersionIdMarker;
+  }
+  throw new Error("Object version listing exceeded the safety page limit");
+};
+
+export async function objectVersionCount(keyValue) {
+  const key = normalizeObjectKey(keyValue);
+  if (isS3Configured && s3Client) return (await listExactObjectVersions(key)).length;
+  return fs.existsSync(localPathForKey(key).target) ? 1 : 0;
+}
+
+// Privacy and retention deletion must remove every version, not merely create
+// a delete marker in a versioned S3 bucket.
+export async function deleteObjectCompletely(keyValue) {
+  const key = normalizeObjectKey(keyValue);
+  if (!isS3Configured || !s3Client) return deleteObject(key);
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    const versions = await listExactObjectVersions(key);
+    if (versions.length === 0) return pass > 0;
+    for (let offset = 0; offset < versions.length; offset += 1000) {
+      const response = await s3Client.send(new DeleteObjectsCommand({
+        Bucket: bucketName,
+        Delete: { Objects: versions.slice(offset, offset + 1000), Quiet: true },
+      }));
+      if (response.Errors?.length) throw new Error("One or more object versions could not be deleted");
+    }
+  }
+  if ((await listExactObjectVersions(key)).length !== 0) {
+    throw new Error("Object versions remain after complete deletion");
+  }
+  return true;
+}
+
+export async function objectExists(keyValue) {
+  const key = normalizeObjectKey(keyValue);
+  if (isS3Configured && s3Client) {
+    try {
+      await s3Client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }));
+      return true;
+    } catch (error) {
+      const status = Number(error?.$metadata?.httpStatusCode || 0);
+      if (status === 404 || error?.name === "NotFound" || error?.name === "NoSuchKey") return false;
+      throw error;
+    }
+  }
+  return fs.existsSync(localPathForKey(key).target);
 }

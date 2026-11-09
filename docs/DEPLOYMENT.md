@@ -26,6 +26,13 @@ RDS snapshot, zero-task write quiescence, source-hash-bound reconciliation,
 attestation, two-task soak and automatic authority rollback remain one release
 transaction.
 
+After normalized promotion, run `infra/aws/verify-operational-recovery.ps1`
+with its explicit confirmation to exercise internal payment reconciliation,
+privacy-erasure retry and real object-store media-retention retry. Provider
+settlement/refund/dispute parity remains a separate live release gate.
+Privacy and retention deletion must purge all versions from the versioned media
+bucket; an S3 delete marker is not evidence of erasure.
+
 The one-task limit is a correctness constraint, not a sizing recommendation.
 The running application still holds its authoritative working set in process
 memory and persists whole collections. Multiple tasks or overlapping rolling
