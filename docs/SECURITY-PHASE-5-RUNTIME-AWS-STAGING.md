@@ -143,6 +143,11 @@ mandatory staging gates, not assumed successes.
   bounds database queries and adds a forced-failover rehearsal proving durable
   marker continuity, DNS/client reconnection and in-place ECS recovery. These
   are local controls only until executed in the intended AWS account.
+- Phase 57 adds a default-off atomic normalized-authority mode and a guarded
+  two-task HTTP load/soak gate. It pins traffic to both cross-AZ tasks, exercises
+  authenticated reads and writes plus the public edge, and enforces latency,
+  error, readiness, resource-headroom and alarm thresholds while restoring the
+  original service size.
 - Execute the backup/restore, rollback, Redis and RDS failover gates, then
-  complete load/soak, privacy erasure, payment reconciliation and retention
-  retry drills.
+  execute the Phase-57 load/soak gate and complete privacy erasure, payment
+  reconciliation and retention retry drills.

@@ -119,6 +119,10 @@ Do not use real learner/candidate PII or real payments in this staging stack.
 - Force-stop the ECS task and verify ECS replaces it and readiness recovers.
 - Confirm RDS automated backups and S3 versioning are enabled.
 - Confirm Redis and RDS have no public endpoint exposure.
+- Keep `AuthorityMode=snapshot` through schema preparation, backfill,
+  reconciliation and relational/multi-task verification. Promote it to
+  `normalized` only through an approved change set, then rerun standard
+  attestation before load testing.
 - Confirm RDS is encrypted, `available` and Multi-AZ. Stop staging writers and
   run the forced-failover rehearsal:
 
@@ -136,6 +140,22 @@ Do not use real learner/candidate PII or real payments in this staging stack.
     history. Require marker continuity, HTTP 503 during interruption, a changed
     writer Availability Zone, stable endpoint, unchanged ECS task and final
     HTTP 200 readiness.
+- With normalized authority attested, run the two-task HTTP load/soak gate:
+
+    ```powershell
+    .\infra\aws\verify-http-soak.ps1 `
+      -Region ap-south-1 `
+      -StackName nalanda-staging `
+      -ExpectedAccountId <12-digit-staging-account-id> `
+      -ExpectedSourceRevision <40-character-git-revision> `
+      -ConfirmLoadTest `
+      -DurationSeconds 900
+    ```
+
+    Require both tasks in distinct Availability Zones, per-route p95 below 400
+    ms, bounded p99/error rate, continuous readiness, CPU/memory headroom, no
+    active alarms, exact fixture cleanup and restoration of the original
+    service count.
 - Confirm Redis reports two members in distinct Availability Zones with
   Multi-AZ and automatic failover enabled. Run the guarded failover rehearsal:
 

@@ -88,6 +88,7 @@ if (
   || !outputs?.ApplicationSubnetIds
   || !outputs?.ApplicationRouteTableIds
   || !outputs?.NatGatewayIds
+  || !outputs?.AuthorityMode
 ) {
   throw new Error("Required application, edge, WAF, access-log or malware-protection outputs are missing.");
 }

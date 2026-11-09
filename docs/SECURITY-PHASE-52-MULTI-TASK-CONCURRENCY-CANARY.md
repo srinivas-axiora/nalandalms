@@ -94,8 +94,8 @@ CloudWatch task logs in the release record.
 
 1. Run this canary in the intended private subnets with the deployed task role,
    RDS and exact release image digest.
-2. Add and execute sustained multi-task load/soak tests across API endpoints,
-   not only repository transactions.
+2. Execute the Phase-57 sustained two-task HTTP load/soak gate after the
+   reviewed normalized-authority promotion.
 3. Exercise RDS restore and failover, Redis interruption, S3 quarantine and
    retention retry, privacy erasure retry, and task-definition rollback.
 4. Reconcile backfill counts and audit/certificate/payment/exam records before

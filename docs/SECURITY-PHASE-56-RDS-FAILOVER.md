@@ -128,8 +128,9 @@ promotion or application reconnection; those claims require the live drill.
 ## Remaining production gates
 
 - Execute backup/restore, ECS rollback, Redis failover and RDS failover in AWS.
-- Complete sustained multi-task load/soak, privacy-erasure retry, payment
-  reconciliation and media-retention failure/retry exercises.
+- Execute the Phase-57 sustained multi-task load/soak gate, then complete
+  privacy-erasure retry, payment reconciliation and media-retention
+  failure/retry exercises.
 - Reconcile migrations/backfill and enable relational authorities only after
   all live evidence is approved.
 

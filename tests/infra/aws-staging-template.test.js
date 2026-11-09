@@ -92,7 +92,7 @@ describe("AWS staging release controls", () => {
     expect(deploymentScript).toContain("origin ACM certificate must be provisioned in the deployment region");
   });
 
-  it("keeps relational authority flags disabled until live verification", () => {
+  it("keeps relational authority default-off behind one attested promotion mode", () => {
     const expectedFlags = [
       "USE_PG_PAYMENTS",
       "USE_PG_SKILLS",
@@ -106,12 +106,17 @@ describe("AWS staging release controls", () => {
       "USE_PG_SETTINGS",
       "USE_PG_AUDIT",
     ];
+    expect(template).toContain("AuthorityMode:");
+    expect(template).toContain("Default: snapshot");
+    expect(template).toContain("AllowedValues: [snapshot, normalized]");
+    expect(template).toContain("NormalizedAuthorityEnabled: !Equals [!Ref AuthorityMode, normalized]");
     for (const flag of expectedFlags) {
-      expect(template).toContain(`Name: ${flag}, Value: "0"`);
+      expect(template).toContain(`Name: ${flag}, Value: !If [NormalizedAuthorityEnabled, "1", "0"]`);
     }
-    expect(template).not.toMatch(/Name: USE_PG_[A-Z_]+, Value: "1"/);
-    expect(template).toContain('Name: COURSE_AUTHORITY_COVERAGE_ACK, Value: ""');
-    expect(template).not.toContain('Name: COURSE_AUTHORITY_COVERAGE_ACK, Value: "normalized-v1"');
+    expect(template).toContain("Name: COURSE_AUTHORITY_COVERAGE_ACK, Value: !If [NormalizedAuthorityEnabled, normalized-v1, \"\"]");
+    expect(template).toContain("Name: PRIVACY_COVERAGE_ACK, Value: !If [NormalizedAuthorityEnabled, normalized-v2, \"\"]");
+    expect(verificationScript).toContain("Task environment $flag is inconsistent with AuthorityMode=$authorityMode");
+    expect(verificationScript).toContain("runtimeAuthority = [ordered]@{");
   });
 
   it("gates deployment on service validation, image scanning, verifiers and readiness", () => {

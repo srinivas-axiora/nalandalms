@@ -12,9 +12,9 @@ then proves the required normalized schema, indexes, reference integrity and
 all dependent relational authorities.
 
 This is a controlled path for staging evidence, **not permission to switch the
-AWS service**. CloudFormation still deploys `USE_PG_COURSES=0` and an empty
-coverage acknowledgement. Production remains NO-GO until live evidence and a
-reviewed change authorize the cutover.
+AWS service**. Phase 57 later adds a single default-off `AuthorityMode`
+parameter that can atomically select normalized flags and acknowledgements only
+after live evidence and a reviewed change authorize the cutover.
 
 ## Controls implemented
 

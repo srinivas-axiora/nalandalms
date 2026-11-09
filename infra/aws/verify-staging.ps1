@@ -95,6 +95,7 @@ $applicationRouteTableIds = @((Get-RequiredOutput $outputs "ApplicationRouteTabl
 $natGatewayIds = @((Get-RequiredOutput $outputs "NatGatewayIds") -split ",")
 $cacheReplicationGroupId = Get-RequiredOutput $outputs "CacheReplicationGroupId"
 $databaseIdentifier = Get-RequiredOutput $outputs "DatabaseIdentifier"
+$authorityMode = Get-RequiredOutput $outputs "AuthorityMode"
 $deployedSourceRevision = Get-RequiredOutput $outputs "SourceRevision"
 Assert-Condition ($deployedSourceRevision -eq $ExpectedSourceRevision) `
   "The stack source revision does not match the expected Git commit."
@@ -147,6 +148,32 @@ if ($null -ne $taskContainer.dockerLabels) {
 }
 Assert-Condition ($null -ne $revisionLabel -and [string]$revisionLabel.Value -eq $ExpectedSourceRevision) `
   "The task definition source-revision label does not match the expected Git commit."
+$taskEnvironment = @{}
+foreach ($entry in @($taskContainer.environment)) {
+  $taskEnvironment[[string]$entry.name] = [string]$entry.value
+}
+Assert-Condition ($authorityMode -in @("snapshot", "normalized")) `
+  "The stack authority mode is invalid."
+$expectedRelationalFlag = if ($authorityMode -eq "normalized") { "1" } else { "0" }
+$relationalFlags = @(
+  "USE_PG_PAYMENTS", "USE_PG_SKILLS", "USE_PG_IDENTITY", "USE_PG_ATTEMPTS",
+  "USE_PG_CERTIFICATES", "USE_PG_CANDIDATE_ASSESSMENTS", "USE_PG_COURSES",
+  "USE_PG_WORKPLACE", "USE_PG_PRIVACY", "USE_PG_SETTINGS", "USE_PG_AUDIT"
+)
+foreach ($flag in $relationalFlags) {
+  Assert-Condition ($taskEnvironment[$flag] -eq $expectedRelationalFlag) `
+    "Task environment $flag is inconsistent with AuthorityMode=$authorityMode."
+}
+$expectedCourseCoverage = if ($authorityMode -eq "normalized") { "normalized-v1" } else { "" }
+$expectedPrivacyCoverage = if ($authorityMode -eq "normalized") { "normalized-v2" } else { "" }
+Assert-Condition ($taskEnvironment["COURSE_AUTHORITY_COVERAGE_ACK"] -eq $expectedCourseCoverage) `
+  "Course authority coverage is inconsistent with the stack authority mode."
+Assert-Condition ($taskEnvironment["PRIVACY_COVERAGE_ACK"] -eq $expectedPrivacyCoverage) `
+  "Privacy coverage is inconsistent with the stack authority mode."
+foreach ($workerFlag in @("ENABLE_PRIVACY_ERASURE_WORKER", "ENABLE_REPORT_EXPORT_WORKER")) {
+  Assert-Condition ($taskEnvironment[$workerFlag] -eq $expectedRelationalFlag) `
+    "Task environment $workerFlag is inconsistent with AuthorityMode=$authorityMode."
+}
 
 $serviceEnvelope = Invoke-AwsJson @("ecs", "describe-services", "--cluster", $clusterName, "--services", $serviceName)
 $service = @($serviceEnvelope.services)[0]
@@ -311,6 +338,27 @@ Assert-Condition ($prefixIds.Count -eq 1 -and $prefixIds[0] -eq $originPrefixLis
 Assert-Condition (@($permission.IpRanges).Count -eq 0 -and @($permission.Ipv6Ranges).Count -eq 0 -and @($permission.UserIdGroupPairs).Count -eq 0) `
   "The ALB ingress rule contains an unexpected CIDR or security-group source."
 
+$applicationSecurityGroupEnvelope = Invoke-AwsJson @(
+  "ec2", "describe-security-groups", "--group-ids", $applicationSecurityGroupId
+)
+$applicationSecurityGroup = @($applicationSecurityGroupEnvelope.SecurityGroups)[0]
+$applicationIngress = @($applicationSecurityGroup.IpPermissions)
+Assert-Condition ($applicationIngress.Count -eq 1) `
+  "The application security group must expose only container port 8080."
+$applicationPermission = $applicationIngress[0]
+Assert-Condition ([string]$applicationPermission.IpProtocol -eq "tcp" `
+  -and [int]$applicationPermission.FromPort -eq 8080 -and [int]$applicationPermission.ToPort -eq 8080) `
+  "The application security group has an unexpected ingress port."
+$applicationSources = @($applicationPermission.UserIdGroupPairs | ForEach-Object { [string]$_.GroupId } | Sort-Object -Unique)
+Assert-Condition ($applicationSources.Count -eq 2 `
+  -and $applicationSources -contains $loadBalancerSecurityGroupId `
+  -and $applicationSources -contains $applicationSecurityGroupId) `
+  "Application ingress must be scoped to the ALB and self-referencing verifier traffic."
+Assert-Condition (@($applicationPermission.IpRanges).Count -eq 0 `
+  -and @($applicationPermission.Ipv6Ranges).Count -eq 0 `
+  -and @($applicationPermission.PrefixListIds).Count -eq 0) `
+  "The application security group contains an unexpected CIDR or prefix-list source."
+
 $webAclEnvelope = Invoke-AwsJson @("wafv2", "get-web-acl-for-resource", "--resource-arn", $loadBalancerArn)
 Assert-Condition ([string]$webAclEnvelope.WebACL.ARN -eq $expectedWebAclArn) `
   "The expected regional WAF is not associated with the ALB."
@@ -362,6 +410,14 @@ $evidence = [ordered]@{
     endToEndTlsRequired = [bool]$RequireEndToEndTls
     endToEndTlsVerified = [bool]$originTlsEnabled
     regionalWebAclArn = [string]$webAclEnvelope.WebACL.ARN
+  }
+  runtimeAuthority = [ordered]@{
+    mode = $authorityMode
+    relationalFlags = $expectedRelationalFlag
+    courseCoverage = $expectedCourseCoverage
+    privacyCoverage = $expectedPrivacyCoverage
+    privacyWorkerEnabled = $taskEnvironment["ENABLE_PRIVACY_ERASURE_WORKER"]
+    reportWorkerEnabled = $taskEnvironment["ENABLE_REPORT_EXPORT_WORKER"]
   }
   supplyChain = [ordered]@{
     sourceRevision = $ExpectedSourceRevision

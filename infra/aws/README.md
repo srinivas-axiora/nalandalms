@@ -8,6 +8,12 @@ Secrets Manager, ALB access logs, a regional AWS WAF and CloudWatch/SNS alarms
 encrypted with a rotating customer-managed KMS key. GuardDuty Malware
 Protection scans course media, chapter PDFs and proctoring objects.
 
+`AuthorityMode` defaults to `snapshot`. The `normalized` value atomically
+enables every relational authority, exact course/privacy coverage
+acknowledgements and required workers. Use it only after migration, backfill,
+reconciliation and verifier approval; the two-task HTTP soak gate refuses the
+snapshot mode.
+
 The ECS deployment configuration never overlaps old and new tasks. This avoids
 two application processes writing the current whole-state JSONB snapshot at the
 same time. Deployments therefore have a short interruption. Do not raise
@@ -174,8 +180,8 @@ production PII, payment records or real candidate evidence into this stack.
 - GuardDuty malware scanning/quarantine is declared, but staging must prove the
   plan becomes active, clean media becomes readable, non-clean media remains
   unreadable and alert delivery works before production.
-- Restore, ECS rollback, Redis/RDS failover, load, privacy-erasure and payment
-  reconciliation drills still require live evidence.
+- Restore, ECS rollback, Redis/RDS failover, the Phase-57 two-task HTTP soak,
+  privacy-erasure and payment reconciliation drills still require live evidence.
 - Application-wide relational audit/security evidence is feature-gated and
   locally tested, but its RDS verifier, reconciliation and external append-only
   export/tamper-resistance controls remain pending.

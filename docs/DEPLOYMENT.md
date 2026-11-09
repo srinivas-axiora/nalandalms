@@ -16,6 +16,11 @@ Browser
        -> CloudWatch Logs / Container Insights
 ```
 
+The stack defaults to `AuthorityMode=snapshot`. A reviewed staging promotion
+may atomically select `normalized`, which enables every relational authority,
+its exact coverage acknowledgements and required privacy/report workers. Never
+enable individual flags independently in a multi-task service.
+
 The one-task limit is a correctness constraint, not a sizing recommendation.
 The running application still holds its authoritative working set in process
 memory and persists whole collections. Multiple tasks or overlapping rolling
@@ -75,4 +80,6 @@ Do not promote staging to production until all of the following are evidenced:
 6. RDS point-in-time restore and Multi-AZ failover, Redis failover, application
    rollback and secret rotation drills meet the agreed RTO/RPO.
 7. Production-like load, soak, payment reconciliation and negative-security
-   tests pass with approved evidence.
+   tests pass with approved evidence. The HTTP gate must exercise at least two
+   cross-AZ tasks and meet the documented per-route p95, error, readiness and
+   resource-headroom thresholds.
