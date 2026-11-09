@@ -161,9 +161,25 @@ Do not use real learner/candidate PII or real payments in this staging stack.
 
 ## 5. Rollback
 
-Redeploy the last known-good immutable ECR image digest through the same script.
-Because this is a single-writer service, ECS stops the old task before starting
-the replacement. Do not roll back the database independently unless a reviewed
+Before production consideration, rehearse application rollback in staging with
+the explicit prior task-definition ARN, Git revision and immutable image digest:
+
+```powershell
+.\infra\aws\verify-ecs-rollback.ps1 `
+  -Region ap-south-1 `
+  -StackName nalanda-staging `
+  -RollbackTaskDefinitionArn <full-prior-task-definition-arn> `
+  -ExpectedRollbackSourceRevision <40-character-git-revision> `
+  -ExpectedRollbackContainerImage <digest-pinned-ecr-image>
+```
+
+The rehearsal rejects configuration drift, verifies both ECR scans, proves
+running-task identity and readiness, and always attempts to restore the
+stack-owned task definition. Rerun `verify-staging.ps1` afterward and preserve
+both evidence artifacts. For an actual rollback, redeploy the last known-good
+immutable ECR image digest through the normal reviewed release path. Because
+this is a single-writer service, ECS stops the old task before starting the
+replacement. Do not roll back the database independently unless a reviewed
 data migration requires it.
 
 If data integrity is in doubt:

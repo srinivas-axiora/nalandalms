@@ -130,5 +130,12 @@ mandatory staging gates, not assumed successes.
   attendance, active-attempt uniqueness, report work claiming and optimistic
   course updates. It writes source-revision-bound evidence but remains unproven
   until executed in the intended AWS account.
-- Execute backup restore, failover, load/soak, privacy erasure, payment
-  reconciliation and rollback drills.
+  Phase 53 adds a tagged, isolated RDS snapshot/restore drill that verifies a
+  source-revision marker, critical schema, private networking, encryption and
+  a bounded recovery-time objective before deleting only run-scoped resources.
+  Phase 54 adds an explicit ECS task-definition rollback rehearsal that rejects
+  configuration drift and unsafe images, proves running-task identity and
+  readiness, and restores the stack-owned release from a `finally` path.
+  Both are local tooling only until executed in the intended AWS account.
+- Execute the backup/restore and rollback gates, then complete failover,
+  load/soak, privacy erasure, payment reconciliation and retention retry drills.
