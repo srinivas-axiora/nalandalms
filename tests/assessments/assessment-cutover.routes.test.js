@@ -6,6 +6,7 @@ import { users } from "../../backend/src/core.js";
 import { signToken } from "../../backend/src/domain.js";
 import { assessmentAuthorityRepository } from "../../backend/src/repositories/assessment-authority.repository.pg.js";
 import { identityRepository } from "../../backend/src/repositories/identity.repository.pg.js";
+import { settingsRepository } from "../../backend/src/repositories/settings.repository.pg.js";
 
 describe("assessment relational cutover selection", () => {
   const previous = process.env.USE_PG_COURSES;
@@ -44,5 +45,52 @@ describe("assessment relational cutover selection", () => {
     expect(assessmentAuthorityRepository.listVisible).toHaveBeenCalledWith(expect.objectContaining({
       actor: expect.objectContaining({ id: employee.id }),
     }));
+  });
+
+  it("starts attempts through the transactional assessment authority without consulting snapshot enrollment", async () => {
+    const employee = users.find((user) => user.role === "Employee");
+    const assessment = {
+      id: "ASM-RELATIONAL-START",
+      courseId: "CRS-RELATIONAL",
+      title: "Relational runtime assessment",
+      strictMode: false,
+      durationMinutes: 30,
+      questions: [{ id: "Q-1", type: "MCQ", prompt: "Safe?", options: ["Yes", "No"], answer: 0 }],
+    };
+    const attempt = {
+      id: "ATT-RELATIONAL",
+      assessmentId: assessment.id,
+      courseId: assessment.courseId,
+      chapterId: null,
+      userId: employee.id,
+      startedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+      status: "InProgress",
+      questionOrder: ["Q-1"],
+      maxScore: 1,
+      version: 1,
+    };
+
+    vi.spyOn(identityRepository, "findUserById").mockResolvedValue(employee);
+    vi.spyOn(settingsRepository, "getProctoring").mockResolvedValue({});
+    vi.spyOn(assessmentAuthorityRepository, "startAttempt").mockImplementation(async ({ actor, buildAttempt }) => {
+      expect(actor.id).toBe(employee.id);
+      expect(buildAttempt).toEqual(expect.any(Function));
+      return { assessment, attempt };
+    });
+
+    const response = await request(app)
+      .post(`/api/assessments/${assessment.id}/attempts/start`)
+      .set("Cookie", `token=${signToken(employee)}`)
+      .send({});
+
+    expect(response.status).toBe(201);
+    expect(response.body.data).toMatchObject({
+      id: attempt.id,
+      assessmentId: assessment.id,
+      courseId: assessment.courseId,
+      userId: employee.id,
+    });
+    expect(assessmentAuthorityRepository.startAttempt).toHaveBeenCalledOnce();
   });
 });

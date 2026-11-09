@@ -232,13 +232,12 @@ For each bounded context, in roughly ascending coupling:
       `USE_PG_SETTINGS=1` and are implied by course cutover (Phases 24 and 42);
       app-data ratings/feedback and local AI recommendations use relational
       skill authority behind `USE_PG_SKILLS=1` (live verifier pending)
-- [ ] remaining enrollment consumers; Phase 34 moved local Copilot course,
-      enrollment, chapter and assessment projections to scoped relational
-      authorities, and relational candidate-link creation already uses the
-      assessment authority when both cutover flags are enabled; Phase 36 moved
-      the active proctor cockpit to a minimal SQL-scoped learning projection;
-      Phase 38 makes course cutover imply relational attempt reads and writes
-      across assessment, proctoring, cockpit, companion and startup paths
+- [x] remaining enrollment consumers are bound to relational authority by the
+      course cutover (Phase 48). The final audit covers course/chapter/content,
+      assignment/cohort, assessment start/grading, proctor transitions,
+      payment entitlement, certificate state, analytics/report/app-data and
+      local Copilot projections. Legacy `assignments` access remains reachable
+      only while `USE_PG_COURSES=0`; live RDS and multi-task proof is pending
 - [x] attempts (+ answers/flags as JSONB; reconcile status CHECK)
 - [x] proctoring_logs  ·  certificates
 - [x] proctoring media retention uses a normalized object manifest, bounded

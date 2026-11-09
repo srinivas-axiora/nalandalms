@@ -110,5 +110,10 @@ mandatory staging gates, not assumed successes.
   preserving the fail-closed response gate and schema/dependency readiness checks.
   Phase 47 replaces process-local proctoring-media retention with a normalized,
   retryable and multi-worker-safe RDS/S3 deletion workflow.
+  Phase 48 closes the remaining enrollment-consumer inventory: course cutover
+  selects relational authority for every enrollment read or mutation surface,
+  with a route regression covering transactional attempt start. This removes
+  the documented code-coverage gap but does not replace live RDS, concurrency
+  or rollback evidence.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.
