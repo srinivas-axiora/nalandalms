@@ -14,6 +14,14 @@ acknowledgements and required workers. Use it only after migration, backfill,
 reconciliation and verifier approval; the two-task HTTP soak gate refuses the
 snapshot mode.
 
+The supported promotion path is `deploy-staging.ps1` with
+`-PromoteNormalizedAuthority`, both explicit confirmation switches and all
+database/concurrency switches. It enforces two zero-task write-quiescence
+windows, performs zero-quarantine source-to-target reconciliation with durable
+snapshot-hash/revision evidence, creates an encrypted pre-cutover snapshot,
+attests before and after the change, runs the soak gate and automatically
+restores snapshot authority if a post-cutover assertion fails.
+
 The ECS deployment configuration never overlaps old and new tasks. This avoids
 two application processes writing the current whole-state JSONB snapshot at the
 same time. Deployments therefore have a short interruption. Do not raise

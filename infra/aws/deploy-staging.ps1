@@ -5,6 +5,11 @@ param(
   [switch]$PrepareRelationalDatabase,
   [switch]$RunRelationalVerifiers,
   [switch]$RunMultiTaskConcurrencyCanary,
+  [switch]$PromoteNormalizedAuthority,
+  [switch]$ConfirmNormalizedPromotion,
+  [switch]$ConfirmStagingTrafficStopped,
+  [ValidateRange(120, 3600)][int]$SoakDurationSeconds = 900,
+  [ValidateRange(0.5, 5.0)][double]$SoakRequestsPerSecondPerWorker = 2.0,
   [string]$AlertEmail = "",
   [ValidateRange(100, 2000000000)][int]$WafRateLimit = 2000,
   [string]$CustomDomainName = "",
@@ -13,6 +18,7 @@ param(
   [string]$OriginDomainName = "",
   [string]$OriginCertificateArn = "",
   [string]$EvidencePath = "",
+  [string]$PromotionEvidencePath = "",
   [Parameter(Mandatory = $true)][string]$RazorpayKeyIdSecretArn,
   [Parameter(Mandatory = $true)][string]$RazorpayKeySecretArn,
   [Parameter(Mandatory = $true)][string]$RazorpayWebhookSecretArn
@@ -21,6 +27,16 @@ param(
 $ErrorActionPreference = "Stop"
 if ($RunMultiTaskConcurrencyCanary -and -not $RunRelationalVerifiers) {
   throw "RunMultiTaskConcurrencyCanary requires RunRelationalVerifiers."
+}
+if ($PromoteNormalizedAuthority -and (-not $PrepareRelationalDatabase `
+  -or -not $RunRelationalVerifiers -or -not $RunMultiTaskConcurrencyCanary)) {
+  throw "PromoteNormalizedAuthority requires database preparation, every relational verifier and the multi-task concurrency canary."
+}
+if ($PromoteNormalizedAuthority -and -not $ConfirmNormalizedPromotion) {
+  throw "PromoteNormalizedAuthority requires the explicit -ConfirmNormalizedPromotion switch."
+}
+if ($PromoteNormalizedAuthority -and -not $ConfirmStagingTrafficStopped) {
+  throw "PromoteNormalizedAuthority requires confirmation that user and batch traffic is stopped."
 }
 $sourceRevision = (git rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $sourceRevision -notmatch '^[0-9a-f]{40}$') {
@@ -36,6 +52,9 @@ if ($ImageTag -notmatch '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$') {
   throw "ImageTag is not a valid ECR tag."
 }
 if (-not $EvidencePath) { $EvidencePath = "artifacts/aws/$StackName-$ImageTag-attestation.json" }
+if (-not $PromotionEvidencePath) {
+  $PromotionEvidencePath = "artifacts/aws/$StackName-$ImageTag-normalized-promotion.json"
+}
 $customDomainValues = @(@($CustomDomainName, $HostedZoneId, $CloudFrontCertificateArn) | Where-Object { $_ })
 if ($customDomainValues.Count -ne 0 -and $customDomainValues.Count -ne 3) {
   throw "CustomDomainName, HostedZoneId and CloudFrontCertificateArn must be supplied together."
@@ -147,14 +166,21 @@ if ($OriginDomainName) {
   $parameterOverrides += "OriginCertificateArn=$OriginCertificateArn"
 }
 
-aws cloudformation deploy `
-  --template-file infra/aws/staging.yml `
-  --stack-name $StackName `
-  --region $Region `
-  --capabilities CAPABILITY_IAM `
-  --no-fail-on-empty-changeset `
-  --parameter-overrides $parameterOverrides
-if ($LASTEXITCODE -ne 0) { throw "CloudFormation deployment failed." }
+function Invoke-StackDeployment([string]$AuthorityMode = "") {
+  $overrides = @($parameterOverrides | Where-Object { $_ -notmatch '^AuthorityMode=' })
+  if ($AuthorityMode) { $overrides += "AuthorityMode=$AuthorityMode" }
+  aws cloudformation deploy `
+    --template-file infra/aws/staging.yml `
+    --stack-name $StackName `
+    --region $Region `
+    --capabilities CAPABILITY_IAM `
+    --no-fail-on-empty-changeset `
+    --parameter-overrides $overrides
+  if ($LASTEXITCODE -ne 0) { throw "CloudFormation deployment failed for AuthorityMode=$AuthorityMode." }
+}
+
+$initialAuthorityMode = if ($PromoteNormalizedAuthority) { "snapshot" } else { "" }
+Invoke-StackDeployment $initialAuthorityMode
 
 function Get-StackOutput([string]$OutputKey) {
   $value = aws cloudformation describe-stacks `
@@ -202,75 +228,343 @@ function Invoke-OneOffTask([string[]]$Command) {
   }
 }
 
-if ($PrepareRelationalDatabase) {
-  Write-Host "Preparing normalized staging schema..."
-  Invoke-OneOffTask @("node", "backend/src/db/bootstrap.js")
-  Write-Host "Backfilling normalized staging tables from app_state..."
-  Invoke-OneOffTask @("node", "backend/src/db/backfill.js")
+function Set-StagingServiceCount([int]$DesiredCount) {
+  $cluster = Get-StackOutput "ClusterName"
+  $service = Get-StackOutput "ServiceName"
+  aws ecs update-service `
+    --cluster $cluster `
+    --service $service `
+    --desired-count $DesiredCount `
+    --region $Region `
+    --output json | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Unable to set staging service desired count to $DesiredCount." }
+  aws ecs wait services-stable --cluster $cluster --services $service --region $Region
+  if ($LASTEXITCODE -ne 0) { throw "Staging service did not stabilize at desired count $DesiredCount." }
+  $state = aws ecs describe-services `
+    --cluster $cluster `
+    --services $service `
+    --region $Region `
+    --query "services[0].{Status:status,Desired:desiredCount,Running:runningCount,Pending:pendingCount}" `
+    --output json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0 -or $state.Status -ne "ACTIVE" `
+    -or [int]$state.Desired -ne $DesiredCount -or [int]$state.Running -ne $DesiredCount `
+    -or [int]$state.Pending -ne 0) {
+    throw "Staging service count attestation failed for desired count $DesiredCount."
+  }
+  return $state
 }
 
-if ($RunRelationalVerifiers) {
-  $verifiers = @(
-    "verify-identity.mjs",
-    "verify-attempts.mjs",
-    "verify-certificates.mjs",
-    "verify-candidate-assessments.mjs",
-    "verify-privacy.mjs",
-    "verify-courses.mjs",
-    "verify-learning.mjs",
-    "verify-assessments.mjs",
-    "verify-assignments.mjs",
-    "verify-cohorts.mjs",
-    "verify-analytics.mjs",
-    "verify-reports.mjs",
-    "verify-ai-feedback.mjs",
-    "verify-operational-authority.mjs",
-    "verify-security-evidence.mjs",
-    "verify-archives.mjs",
-    "verify-workplace.mjs",
-    "verify-course-cutover.mjs"
-  )
-  foreach ($verifier in $verifiers) {
-    Write-Host "Running relational verifier: $verifier"
-    Invoke-OneOffTask @("node", "backend/src/db/$verifier")
+$promotionSnapshotIdentifier = ""
+$promotionSnapshotStatus = ""
+$promotionSnapshotEncrypted = $false
+$snapshotTaskDefinitionArn = if ($PromoteNormalizedAuthority) { Get-StackOutput "TaskDefinitionArn" } else { "" }
+$normalizedTaskDefinitionArn = ""
+$authorityModeAfter = if ($PromoteNormalizedAuthority) { Get-StackOutput "AuthorityMode" } else { "" }
+$soakEvidencePath = "artifacts/aws/$StackName-$ImageTag-http-soak.json"
+$rollbackResult = "not-required"
+$rollbackTaskDefinitionArn = ""
+$normalizedDeploymentAttempted = $false
+$cutoverQuiesced = $false
+$cutoverQuiescenceResult = if ($PromoteNormalizedAuthority) { "not-started" } else { "not-required" }
+$finalReconciliationResult = if ($PromoteNormalizedAuthority) { "not-started" } else { "not-required" }
+$promotionError = $null
+
+function Write-PromotionEvidence([string]$Result, [string]$ErrorMessage = "") {
+  $evidence = [ordered]@{
+    schemaVersion = 1
+    capturedAt = (Get-Date).ToUniversalTime().ToString("o")
+    result = $Result
+    error = $ErrorMessage
+    accountId = [string]$identity.Account
+    region = $Region
+    stackName = $StackName
+    sourceRevision = $sourceRevision
+    containerImage = $deployedImage
+    snapshotIdentifier = $promotionSnapshotIdentifier
+    snapshotStatus = $promotionSnapshotStatus
+    snapshotEncrypted = $promotionSnapshotEncrypted
+    snapshotTaskDefinitionArn = $snapshotTaskDefinitionArn
+    normalizedTaskDefinitionArn = $normalizedTaskDefinitionArn
+    authorityModeAfter = $authorityModeAfter
+    soakEvidencePath = $soakEvidencePath
+    rollbackResult = $rollbackResult
+    rollbackTaskDefinitionArn = $rollbackTaskDefinitionArn
+    quiescenceOriginalDesiredCount = $promotionOriginalDesiredCount
+    quiescenceResult = $promotionQuiescenceResult
+    serviceResumeResult = $promotionResumeResult
+    cutoverQuiescenceResult = $cutoverQuiescenceResult
+    finalReconciliationResult = $finalReconciliationResult
+  }
+  $resolvedPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($PromotionEvidencePath)
+  $directory = Split-Path -Parent $resolvedPath
+  if ($directory) { New-Item -ItemType Directory -Force -Path $directory | Out-Null }
+  $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $resolvedPath -Encoding utf8
+  Write-Host "Normalized-authority promotion evidence: $resolvedPath"
+}
+
+$promotionOriginalDesiredCount = $null
+$promotionQuiescenceResult = if ($PromoteNormalizedAuthority) { "pending" } else { "not-required" }
+$promotionResumeResult = if ($PromoteNormalizedAuthority) { "pending" } else { "not-required" }
+$databasePhaseError = $null
+$resumeError = $null
+
+try {
+  if ($PromoteNormalizedAuthority) {
+    $cluster = Get-StackOutput "ClusterName"
+    $service = Get-StackOutput "ServiceName"
+    $originalDesiredCount = aws ecs describe-services `
+      --cluster $cluster `
+      --services $service `
+      --region $Region `
+      --query "services[0].desiredCount" `
+      --output text
+    if ($LASTEXITCODE -ne 0 -or $originalDesiredCount -notmatch '^\d+$' `
+      -or [int]$originalDesiredCount -lt 1) {
+      throw "Normalized promotion requires a running staging service before the write-quiescence window."
+    }
+    $promotionOriginalDesiredCount = [int]$originalDesiredCount
+    Write-Host "Enforcing staging write quiescence for relational preparation..."
+    Set-StagingServiceCount 0 | Out-Null
+    $promotionQuiescenceResult = "passed"
+  }
+
+  if ($PrepareRelationalDatabase) {
+    Write-Host "Preparing normalized staging schema..."
+    Invoke-OneOffTask @("node", "backend/src/db/bootstrap.js")
+    Write-Host "Backfilling normalized staging tables from app_state..."
+    Invoke-OneOffTask @("node", "backend/src/db/backfill.js")
+  }
+
+  if ($RunRelationalVerifiers) {
+    $verifiers = @(
+      "verify-normalized-reconciliation.mjs",
+      "verify-identity.mjs",
+      "verify-attempts.mjs",
+      "verify-certificates.mjs",
+      "verify-candidate-assessments.mjs",
+      "verify-privacy.mjs",
+      "verify-courses.mjs",
+      "verify-learning.mjs",
+      "verify-assessments.mjs",
+      "verify-assignments.mjs",
+      "verify-cohorts.mjs",
+      "verify-analytics.mjs",
+      "verify-reports.mjs",
+      "verify-ai-feedback.mjs",
+      "verify-operational-authority.mjs",
+      "verify-security-evidence.mjs",
+      "verify-archives.mjs",
+      "verify-workplace.mjs",
+      "verify-course-cutover.mjs"
+    )
+    foreach ($verifier in $verifiers) {
+      Write-Host "Running relational verifier: $verifier"
+      Invoke-OneOffTask @("node", "backend/src/db/$verifier")
+    }
+  }
+
+  if ($RunMultiTaskConcurrencyCanary) {
+    Write-Host "Running two-task relational concurrency canary..."
+    & (Join-Path $PSScriptRoot "verify-multi-task.ps1") `
+      -Region $Region `
+      -StackName $StackName `
+      -EvidencePath "artifacts/aws/$StackName-$ImageTag-multi-task.json"
+    if ($LASTEXITCODE -ne 0) { throw "Multi-task concurrency canary failed." }
+  }
+} catch {
+  $databasePhaseError = $_
+} finally {
+  if ($PromoteNormalizedAuthority -and $null -ne $promotionOriginalDesiredCount) {
+    try {
+      Write-Host "Restoring the pre-promotion staging service count..."
+      Set-StagingServiceCount ([int]$promotionOriginalDesiredCount) | Out-Null
+      $promotionResumeResult = "passed"
+    } catch {
+      $promotionResumeResult = "failed"
+      $resumeError = $_
+    }
   }
 }
+if ($resumeError) {
+  $priorMessage = if ($databasePhaseError) { " Database phase error: $($databasePhaseError.Exception.Message)" } else { "" }
+  $recoveryMessage = "Staging service recovery after write quiescence failed: $($resumeError.Exception.Message).$priorMessage"
+  if ($PromoteNormalizedAuthority) {
+    $rollbackResult = "failed: $($resumeError.Exception.Message)"
+    try { $authorityModeAfter = Get-StackOutput "AuthorityMode" } catch { $authorityModeAfter = "unknown" }
+    try { Write-PromotionEvidence "failed" $recoveryMessage } catch { Write-Warning $_.Exception.Message }
+  }
+  throw $recoveryMessage
+}
+if ($databasePhaseError) {
+  if ($PromoteNormalizedAuthority) {
+    $authorityModeAfter = Get-StackOutput "AuthorityMode"
+    try { Write-PromotionEvidence "failed" $databasePhaseError.Exception.Message } catch { Write-Warning $_.Exception.Message }
+  }
+  throw $databasePhaseError
+}
 
-if ($RunMultiTaskConcurrencyCanary) {
-  Write-Host "Running two-task relational concurrency canary..."
-  & (Join-Path $PSScriptRoot "verify-multi-task.ps1") `
+function Wait-ApplicationReady {
+  $applicationUrl = Get-StackOutput "ApplicationUrl"
+  $ready = $null
+  for ($attempt = 1; $attempt -le 18; $attempt++) {
+    try {
+      $ready = Invoke-RestMethod "$applicationUrl/api/ready" -TimeoutSec 15
+      if ($ready.ok) { break }
+    } catch {
+      if ($attempt -eq 18) { throw }
+    }
+    Start-Sleep -Seconds 10
+  }
+  if (-not $ready.ok) { throw "Staging readiness smoke gate failed." }
+  Write-Host "Staging readiness smoke gate passed: $applicationUrl"
+  return $applicationUrl
+}
+
+function Invoke-StagingAttestation([string]$Path) {
+  Write-Host "Running deployed AWS control attestation..."
+  & (Join-Path $PSScriptRoot "verify-staging.ps1") `
     -Region $Region `
     -StackName $StackName `
-    -EvidencePath "artifacts/aws/$StackName-$ImageTag-multi-task.json"
-  if ($LASTEXITCODE -ne 0) { throw "Multi-task concurrency canary failed." }
+    -ExpectedCustomDomainName $CustomDomainName `
+    -ExpectedCloudFrontCertificateArn $CloudFrontCertificateArn `
+    -ExpectedOriginDomainName $OriginDomainName `
+    -ExpectedOriginCertificateArn $OriginCertificateArn `
+    -ExpectedContainerImage $deployedImage `
+    -ExpectedSourceRevision $sourceRevision `
+    -RequireEndToEndTls:([bool]$OriginDomainName) `
+    -EvidencePath $Path
 }
 
-$applicationUrl = Get-StackOutput "ApplicationUrl"
-$ready = $null
-for ($attempt = 1; $attempt -le 12; $attempt++) {
+$applicationUrl = Wait-ApplicationReady
+if (-not $PromoteNormalizedAuthority) {
+  Invoke-StagingAttestation $EvidencePath
+} else {
+  $cutoverQuiescenceResult = "pending"
+  $finalReconciliationResult = "pending"
+
   try {
-    $ready = Invoke-RestMethod "$applicationUrl/api/ready" -TimeoutSec 15
-    if ($ready.ok) { break }
-  } catch {
-    if ($attempt -eq 12) { throw }
-  }
-  Start-Sleep -Seconds 10
-}
-if (-not $ready.ok) { throw "Staging readiness smoke gate failed." }
-Write-Host "Staging readiness smoke gate passed: $applicationUrl"
+    if ($authorityModeAfter -ne "snapshot") {
+      throw "The pre-promotion stack did not converge to AuthorityMode=snapshot."
+    }
+    Invoke-StagingAttestation "artifacts/aws/$StackName-$ImageTag-prepromotion-attestation.json"
 
-Write-Host "Running deployed AWS control attestation..."
-& (Join-Path $PSScriptRoot "verify-staging.ps1") `
-  -Region $Region `
-  -StackName $StackName `
-  -ExpectedCustomDomainName $CustomDomainName `
-  -ExpectedCloudFrontCertificateArn $CloudFrontCertificateArn `
-  -ExpectedOriginDomainName $OriginDomainName `
-  -ExpectedOriginCertificateArn $OriginCertificateArn `
-  -ExpectedContainerImage $deployedImage `
-  -ExpectedSourceRevision $sourceRevision `
-  -RequireEndToEndTls:([bool]$OriginDomainName) `
-  -EvidencePath $EvidencePath
+    Write-Host "Enforcing the final write-quiescence window..."
+    $cutoverQuiesced = $true
+    Set-StagingServiceCount 0 | Out-Null
+    $cutoverQuiescenceResult = "passed"
+    $finalReconciliationResult = "running"
+    Write-Host "Refreshing the relational backfill inside the final write-quiescence window..."
+    Invoke-OneOffTask @("node", "backend/src/db/backfill.js")
+    Write-Host "Re-running source-to-target reconciliation inside the final write-quiescence window..."
+    Invoke-OneOffTask @("node", "backend/src/db/verify-normalized-reconciliation.mjs")
+    $finalReconciliationResult = "passed"
+
+    $databaseIdentifier = Get-StackOutput "DatabaseIdentifier"
+    $snapshotSuffix = (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss")
+    $snapshotBase = (($StackName.ToLowerInvariant() -replace '[^a-z0-9-]', '-') -replace '-+', '-').Trim('-')
+    if ($snapshotBase.Length -gt 80) { $snapshotBase = $snapshotBase.Substring(0, 80).TrimEnd('-') }
+    $promotionSnapshotIdentifier = "$snapshotBase-pre-normalized-$($sourceRevision.Substring(0, 8))-$snapshotSuffix"
+    Write-Host "Creating mandatory pre-promotion RDS snapshot: $promotionSnapshotIdentifier"
+    aws rds create-db-snapshot `
+      --db-instance-identifier $databaseIdentifier `
+      --db-snapshot-identifier $promotionSnapshotIdentifier `
+      --tags "Key=Purpose,Value=normalized-authority-promotion" "Key=SourceRevision,Value=$sourceRevision" `
+      --region $Region `
+      --output json | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Unable to create the pre-promotion RDS snapshot." }
+    aws rds wait db-snapshot-available `
+      --db-snapshot-identifier $promotionSnapshotIdentifier `
+      --region $Region
+    if ($LASTEXITCODE -ne 0) { throw "The pre-promotion RDS snapshot did not become available." }
+    $snapshotEnvelope = aws rds describe-db-snapshots `
+      --db-snapshot-identifier $promotionSnapshotIdentifier `
+      --region $Region `
+      --output json | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw "Unable to attest the pre-promotion RDS snapshot." }
+    $snapshot = @($snapshotEnvelope.DBSnapshots)[0]
+    $promotionSnapshotStatus = [string]$snapshot.Status
+    $promotionSnapshotEncrypted = [bool]$snapshot.Encrypted
+    if ($promotionSnapshotStatus -ne "available" -or -not $promotionSnapshotEncrypted `
+      -or [string]$snapshot.DBInstanceIdentifier -ne $databaseIdentifier) {
+      throw "The pre-promotion RDS snapshot failed availability, encryption or source binding checks."
+    }
+
+    Write-Host "Promoting the attested task definition to normalized authority..."
+    $normalizedDeploymentAttempted = $true
+    Invoke-StackDeployment "normalized"
+    Set-StagingServiceCount ([int]$promotionOriginalDesiredCount) | Out-Null
+    $cutoverQuiesced = $false
+    $authorityModeAfter = Get-StackOutput "AuthorityMode"
+    $normalizedTaskDefinitionArn = Get-StackOutput "TaskDefinitionArn"
+    if ($authorityModeAfter -ne "normalized") {
+      throw "The stack did not publish AuthorityMode=normalized after promotion."
+    }
+    if ($normalizedTaskDefinitionArn -eq $snapshotTaskDefinitionArn) {
+      throw "Promotion did not produce a new normalized task definition."
+    }
+    $applicationUrl = Wait-ApplicationReady
+    Invoke-StagingAttestation $EvidencePath
+
+    Write-Host "Running mandatory two-task HTTP load/soak gate..."
+    & (Join-Path $PSScriptRoot "verify-http-soak.ps1") `
+      -Region $Region `
+      -StackName $StackName `
+      -ExpectedAccountId ([string]$identity.Account) `
+      -ExpectedSourceRevision $sourceRevision `
+      -ConfirmLoadTest `
+      -DurationSeconds $SoakDurationSeconds `
+      -RequestsPerSecondPerWorker $SoakRequestsPerSecondPerWorker `
+      -EvidencePath $soakEvidencePath
+    $applicationUrl = Wait-ApplicationReady
+    Invoke-StagingAttestation $EvidencePath
+    $authorityModeAfter = Get-StackOutput "AuthorityMode"
+    if ($authorityModeAfter -ne "normalized") {
+      throw "The stack left normalized authority after the soak gate."
+    }
+    Write-PromotionEvidence "passed"
+  } catch {
+    $promotionError = $_
+    if ($finalReconciliationResult -eq "running") { $finalReconciliationResult = "failed" }
+    if ($normalizedDeploymentAttempted) {
+      try {
+        Write-Warning "Normalized promotion failed; restoring snapshot authority."
+        Invoke-StackDeployment "snapshot"
+        Set-StagingServiceCount ([int]$promotionOriginalDesiredCount) | Out-Null
+        $cutoverQuiesced = $false
+        $applicationUrl = Wait-ApplicationReady
+        $authorityModeAfter = Get-StackOutput "AuthorityMode"
+        $rollbackTaskDefinitionArn = Get-StackOutput "TaskDefinitionArn"
+        if ($authorityModeAfter -ne "snapshot") {
+          throw "Rollback did not restore AuthorityMode=snapshot."
+        }
+        Invoke-StagingAttestation $EvidencePath
+        $rollbackResult = "passed"
+      } catch {
+        $rollbackResult = "failed: $($_.Exception.Message)"
+      }
+    } elseif ($cutoverQuiesced) {
+      try {
+        Write-Warning "Pre-cutover gate failed; restoring the snapshot-mode staging service."
+        Set-StagingServiceCount ([int]$promotionOriginalDesiredCount) | Out-Null
+        $cutoverQuiesced = $false
+        $applicationUrl = Wait-ApplicationReady
+        $authorityModeAfter = Get-StackOutput "AuthorityMode"
+        if ($authorityModeAfter -ne "snapshot") {
+          throw "Pre-cutover recovery did not retain AuthorityMode=snapshot."
+        }
+        Invoke-StagingAttestation $EvidencePath
+        $rollbackResult = "passed"
+      } catch {
+        $rollbackResult = "failed: $($_.Exception.Message)"
+      }
+    }
+    try { Write-PromotionEvidence "failed" $promotionError.Exception.Message } catch { Write-Warning $_.Exception.Message }
+    if ($rollbackResult -like "failed:*") {
+      throw "Normalized promotion failed and automatic authority rollback also failed. Promotion error: $($promotionError.Exception.Message). $rollbackResult"
+    }
+    throw $promotionError
+  }
+}
 
 aws cloudformation describe-stacks `
   --stack-name $StackName `

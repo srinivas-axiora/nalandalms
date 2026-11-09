@@ -17,6 +17,7 @@
     "db:bootstrap": "node backend/src/db/bootstrap.js",
     "db:migrate": "node backend/src/db/migrate.js",
     "db:backfill": "node backend/src/db/backfill.js",
+    "db:verify-reconciliation": "node backend/src/db/verify-normalized-reconciliation.mjs",
     "db:verify-identity": "node backend/src/db/verify-identity.mjs",
     "db:verify-attempts": "node backend/src/db/verify-attempts.mjs",
     "db:verify-certificates": "node backend/src/db/verify-certificates.mjs",

@@ -121,8 +121,11 @@ Do not use real learner/candidate PII or real payments in this staging stack.
 - Confirm Redis and RDS have no public endpoint exposure.
 - Keep `AuthorityMode=snapshot` through schema preparation, backfill,
   reconciliation and relational/multi-task verification. Promote it to
-  `normalized` only through an approved change set, then rerun standard
-  attestation before load testing.
+  `normalized` only through the guarded Phase-58 deployment switches. The
+  workflow enforces zero-task write quiescence, rejects every missing or
+  quarantined backfill row, writes source-hash/revision-bound reconciliation
+  evidence, creates a pre-cutover snapshot, attests both modes, makes load/soak
+  mandatory and automatically restores snapshot authority after a failed gate.
 - Confirm RDS is encrypted, `available` and Multi-AZ. Stop staging writers and
   run the forced-failover rehearsal:
 

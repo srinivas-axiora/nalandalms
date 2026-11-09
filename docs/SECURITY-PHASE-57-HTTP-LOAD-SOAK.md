@@ -122,11 +122,13 @@ require the live staging gate.
 
 ## Remaining production gates
 
-- Execute relational promotion, multi-task concurrency, backup/restore, ECS
-  rollback, Redis/RDS failover and this load/soak gate in AWS.
+- Execute the Phase-58 guarded relational promotion, which makes the multi-task
+  concurrency canary and this load/soak gate mandatory, then run backup/restore,
+  ECS rollback and Redis/RDS failover in AWS.
 - Exercise privacy-erasure retry, payment reconciliation and media-retention
   failure/retry with reviewed evidence.
-- Reconcile normalized and legacy records before accepting the cutover and
-  complete the production change review.
+- Execute Phase 58's fail-closed reconciliation and promotion in AWS, preserve
+  its hash-bound audit/evidence artifacts, and complete the production change
+  review.
 
 Current decision: **NO-GO for production**.

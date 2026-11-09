@@ -47,6 +47,7 @@ backend/src/db/pool.js                      pooled pg client + query()/withTrans
 backend/src/db/migrate.js                   forward-only migration runner (schema_migrations)
 backend/src/db/bootstrap.js                 guarded empty-database baseline + migrations
 backend/src/db/backfill.js                  app_state/JSON snapshot relational backfill
+backend/src/db/verify-normalized-reconciliation.mjs fail-closed source-row coverage and binding gate
 backend/src/db/verify-skills.mjs            one-command verification of the pilot
 backend/src/repositories/skills.repository.pg.js   SQL repository (API-shaped output)
 database/migrations/0001_skills.sql         reconciled skills + target_skills tables
@@ -117,11 +118,15 @@ npm run db:bootstrap
 # 3. Backfill the current app_state snapshot (or local db.json fallback)
 npm run db:backfill
 
-# 4. One-command pilot verification (migrate + backfill + exercise repo + cleanup)
+# 4. Reconcile every source row before semantic verification. In production,
+# SOURCE_REVISION must be the deployed 40-character Git commit.
+npm run db:verify-reconciliation
+
+# 5. One-command pilot verification (migrate + backfill + exercise repo + cleanup)
 node backend/src/db/verify-skills.mjs
 #    Expect all lines to start with "ok"; any "FAIL" is a real problem to fix.
 
-# 5. Exercise identity/session invariants with self-cleaning synthetic data
+# 6. Exercise identity/session invariants with self-cleaning synthetic data
 npm run db:verify-identity
 npm run db:verify-attempts
 npm run db:verify-certificates

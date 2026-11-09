@@ -148,6 +148,13 @@ mandatory staging gates, not assumed successes.
   authenticated reads and writes plus the public edge, and enforces latency,
   error, readiness, resource-headroom and alarm thresholds while restoring the
   original service size.
+- Phase 58 integrates a guarded normalized-authority promotion into the release
+  workflow: force snapshot mode, enforce and recover zero-task write
+  quiescence, reject missing/quarantined source rows and critical binding
+  mismatches with durable reconciliation evidence, run every verifier and
+  concurrency gate, create an encrypted source-tagged RDS snapshot, promote and
+  attest, require the Phase-57 soak, and automatically restore/attest snapshot
+  authority after any post-cutover failure.
 - Execute the backup/restore, rollback, Redis and RDS failover gates, then
   execute the Phase-57 load/soak gate and complete privacy erasure, payment
   reconciliation and retention retry drills.
