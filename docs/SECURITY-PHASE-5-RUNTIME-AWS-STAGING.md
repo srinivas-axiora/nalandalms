@@ -121,5 +121,10 @@ mandatory staging gates, not assumed successes.
   inbox/direct messages and self-appraisals to normalized PostgreSQL authority;
   privacy coverage advances to `normalized-v2`. AWS retains a default-off
   `USE_PG_WORKPLACE` flag until live RDS, multi-task and erasure evidence exists.
+  Phase 51 closes the final task-local course label lookup and replaces the
+  unconditional production rejection with a versioned, default-off coverage
+  acknowledgement plus database-shape readiness. The deployment verifier can
+  now run an isolated production-mode course cutover canary, but the ECS service
+  still ships with course authority and its acknowledgement disabled.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

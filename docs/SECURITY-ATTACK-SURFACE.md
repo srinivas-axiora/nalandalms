@@ -53,6 +53,12 @@ authority across authentication, user administration, companion validation,
 application projections and user archives. Course tasks therefore cannot trust
 stale process-local roles, account status or session versions.
 
+Phase 51 closes the pending-review queue's final task-local course-label lookup.
+Production-mode course authority now also requires the exact versioned coverage
+acknowledgement and passes readiness only when the normalized learning schema,
+reference integrity and every implied relational authority are healthy. AWS
+keeps the flag and acknowledgement disabled until live staging approval.
+
 ## Courses, chapters, enrollment and cohorts
 
 | Method | Route | Auth | State | CSRF | Step | Rate | Scope / concern |

@@ -409,7 +409,7 @@ export function registerAssessments(app) {
       const assessment = USE_PG_COURSES
         ? await assessmentAuthorityRepository.findById(a.assessmentId)
         : await findAssessmentRuntime(a.assessmentId);
-      const course = courses.find((c) => c.id === a.courseId);
+      const course = USE_PG_COURSES ? null : courses.find((c) => c.id === a.courseId);
       return {
         ...a,
         learnerName: user?.name || "Unknown Learner",

@@ -106,6 +106,8 @@ describe("AWS staging release controls", () => {
       expect(template).toContain(`Name: ${flag}, Value: "0"`);
     }
     expect(template).not.toMatch(/Name: USE_PG_[A-Z_]+, Value: "1"/);
+    expect(template).toContain('Name: COURSE_AUTHORITY_COVERAGE_ACK, Value: ""');
+    expect(template).not.toContain('Name: COURSE_AUTHORITY_COVERAGE_ACK, Value: "normalized-v1"');
   });
 
   it("gates deployment on service validation, image scanning, verifiers and readiness", () => {
@@ -134,6 +136,7 @@ describe("AWS staging release controls", () => {
       "verify-security-evidence.mjs",
       "verify-archives.mjs",
       "verify-workplace.mjs",
+      "verify-course-cutover.mjs",
     ];
     for (const verifier of expectedVerifiers) expect(deploymentScript).toContain(verifier);
   });

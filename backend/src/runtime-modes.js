@@ -1,3 +1,9 @@
+export const COURSE_AUTHORITY_COVERAGE_VERSION = "normalized-v1";
+
+export const courseAuthorityCoverageAcknowledged = () => (
+  process.env.COURSE_AUTHORITY_COVERAGE_ACK === COURSE_AUTHORITY_COVERAGE_VERSION
+);
+
 export const relationalAttemptsEnabled = () => (
   process.env.USE_PG_ATTEMPTS === "1"
   || process.env.USE_PG_COURSES === "1"

@@ -33,7 +33,8 @@
     "db:verify-operational": "node backend/src/db/verify-operational-authority.mjs",
     "db:verify-security-evidence": "node backend/src/db/verify-security-evidence.mjs",
     "db:verify-archives": "node backend/src/db/verify-archives.mjs",
-    "db:verify-workplace": "node backend/src/db/verify-workplace.mjs"
+    "db:verify-workplace": "node backend/src/db/verify-workplace.mjs",
+    "db:verify-course-cutover": "node backend/src/db/verify-course-cutover.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1160.0",

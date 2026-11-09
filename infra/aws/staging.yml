@@ -883,6 +883,7 @@ Resources:
             - { Name: USE_PG_CERTIFICATES, Value: "0" }
             - { Name: USE_PG_CANDIDATE_ASSESSMENTS, Value: "0" }
             - { Name: USE_PG_COURSES, Value: "0" }
+            - { Name: COURSE_AUTHORITY_COVERAGE_ACK, Value: "" }
             - { Name: USE_PG_WORKPLACE, Value: "0" }
             - { Name: USE_PG_PRIVACY, Value: "0" }
             - { Name: USE_PG_SETTINGS, Value: "0" }

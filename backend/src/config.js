@@ -8,6 +8,10 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { USER_ROLES } from "./roles.js";
 import { allowedUploadMimeTypes, uploadMetadataIsAllowed, MAX_COURSE_UPLOAD_BYTES } from "./security/file-validation.js";
+import {
+  COURSE_AUTHORITY_COVERAGE_VERSION,
+  courseAuthorityCoverageAcknowledged,
+} from "./runtime-modes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -66,8 +70,10 @@ if (IS_PRODUCTION) {
     console.error("FATAL: PRIVACY_PSEUDONYM_SECRET must be at least 32 characters when privacy erasure is enabled.");
     process.exit(1);
   }
-  if (process.env.USE_PG_COURSES === "1") {
-    console.error("FATAL: USE_PG_COURSES is an incomplete relational learning cutover and cannot run in production yet.");
+  if (process.env.USE_PG_COURSES === "1" && !courseAuthorityCoverageAcknowledged()) {
+    console.error(
+      `FATAL: USE_PG_COURSES requires COURSE_AUTHORITY_COVERAGE_ACK=${COURSE_AUTHORITY_COVERAGE_VERSION} in production.`
+    );
     process.exit(1);
   }
 }

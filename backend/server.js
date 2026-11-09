@@ -86,6 +86,8 @@ import {
   relationalPrivacyEnabled,
   relationalAuditEnabled,
   relationalWorkplaceEnabled,
+  COURSE_AUTHORITY_COVERAGE_VERSION,
+  courseAuthorityCoverageAcknowledged,
 } from "./src/runtime-modes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -108,6 +110,7 @@ const AUDIT_TRANSACTIONAL_DEPENDENCIES = USE_RELATIONAL_PAYMENTS && USE_RELATION
 const ENABLE_PRIVACY_ERASURE_WORKER = process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1";
 const ENABLE_REPORT_EXPORT_WORKER = process.env.ENABLE_REPORT_EXPORT_WORKER === "1";
 const PRIVACY_COVERAGE_ACK = process.env.PRIVACY_COVERAGE_ACK === "normalized-v2";
+const COURSE_AUTHORITY_COVERAGE_ACK = courseAuthorityCoverageAcknowledged();
 
 const app = express();
 app.set("trust proxy", TRUST_PROXY);
@@ -179,7 +182,7 @@ app.get("/api/ready", async (_req, res) => {
   const [
     database, redis, objects, skillsAuthority, payments, identity, attemptRuntime,
     certificateAuthority, candidateRuntime, privacyAuthority, reportAuthority, settingsAuthority, auditAuthority,
-    archiveAuthority, workplaceAuthority,
+    archiveAuthority, workplaceAuthority, courseAuthority,
   ] = await Promise.all([
     storage.health(),
     redisHealth(),
@@ -462,14 +465,48 @@ app.get("/api/ready", async (_req, res) => {
           dependencies: WORKPLACE_TRANSACTIONAL_DEPENDENCIES ? "complete" : "incomplete",
         }))
       : Promise.resolve({ ok: true, mode: "disabled", dependencies: "disabled" }),
+    USE_PG_COURSES
+      ? Promise.resolve().then(() => relationalQuery(
+          `SELECT
+             to_regclass('public.courses') IS NOT NULL AS courses,
+             to_regclass('public.chapters') IS NOT NULL AS chapters,
+             to_regclass('public.enrollments') IS NOT NULL AS enrollments,
+             to_regclass('public.assessments') IS NOT NULL AS assessments,
+             to_regclass('public.questions') IS NOT NULL AS questions,
+             to_regclass('public.assessment_versions') IS NOT NULL AS assessment_versions,
+             to_regclass('public.learning_time_events') IS NOT NULL AS learning_time_events,
+             to_regclass('public.cohorts') IS NOT NULL AS cohorts,
+             to_regclass('public.idx_courses_owner') IS NOT NULL AS course_owner_index,
+             to_regclass('public.uq_learning_time_event_idempotency') IS NOT NULL AS time_idempotency,
+             to_regclass('public.uq_active_assessment_attempt') IS NOT NULL AS active_attempt_uniqueness,
+             to_regclass('public.idx_cohorts_course') IS NOT NULL AS cohort_course_index,
+             to_regclass('public.idx_enrollments_cohort') IS NOT NULL AS cohort_enrollment_index,
+             NOT EXISTS (
+               SELECT 1 FROM enrollments e
+               LEFT JOIN courses c ON c.id = e.course_id
+               LEFT JOIN users u ON u.id = e.user_id
+               WHERE c.id IS NULL OR u.id IS NULL
+             ) AS enrollment_references,
+             NOT EXISTS (
+               SELECT 1 FROM assessments a
+               LEFT JOIN courses c ON c.id = a.course_id
+               WHERE c.id IS NULL
+             ) AS assessment_references`
+        )).then(({ rows }) => ({
+          ok: Object.values(rows[0] || {}).every(Boolean) && COURSE_AUTHORITY_COVERAGE_ACK,
+          mode: "normalized",
+          coverage: COURSE_AUTHORITY_COVERAGE_ACK
+            ? COURSE_AUTHORITY_COVERAGE_VERSION
+            : "unacknowledged",
+        })).catch(() => ({
+          ok: false,
+          mode: "normalized",
+          coverage: COURSE_AUTHORITY_COVERAGE_ACK
+            ? COURSE_AUTHORITY_COVERAGE_VERSION
+            : "unacknowledged",
+        }))
+      : Promise.resolve({ ok: true, mode: "disabled", coverage: "disabled" }),
   ]);
-  // The relational learning workflow is still a partial cutover. Course,
-  // chapter, progress and assessment authority exist, but secondary consumers
-  // are not fully migrated; enabled tasks must drain from the load balancer.
-  const courseAuthority = {
-    ok: !USE_PG_COURSES,
-    mode: USE_PG_COURSES ? "experimental-learning-secondary-consumers" : "disabled",
-  };
   const ok = startupReady && database.ok && redis.ok && objects.ok && skillsAuthority.ok
     && payments.ok && identity.ok
     && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok && privacyAuthority.ok

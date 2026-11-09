@@ -133,4 +133,47 @@ describe("assessment relational cutover selection", () => {
     })]);
     expect(identityRepository.findUserSummariesByIds).toHaveBeenCalledWith([attempt.userId]);
   });
+
+  it("does not fall back to a task-local course title in the relational review queue", async () => {
+    const instructor = users.find((user) => user.role === "Manager");
+    const attempt = {
+      id: "ATT-RELATIONAL-NO-LOCAL-COURSE",
+      assessmentId: "ASM-RELATIONAL-NO-LOCAL-COURSE",
+      courseId: "CRS-TASK-LOCAL-ONLY",
+      userId: "USR-RDS-LEARNER-NO-LOCAL-COURSE",
+      status: "PendingManualReview",
+    };
+    const localCourse = { id: attempt.courseId, title: "Stale task-local course" };
+    const { courses } = await import("../../backend/src/core.js");
+    courses.push(localCourse);
+    try {
+      vi.spyOn(identityRepository, "findUserById").mockResolvedValue(instructor);
+      vi.spyOn(attemptsRepository, "list").mockResolvedValue([attempt]);
+      vi.spyOn(assessmentAuthorityRepository, "canManageAssessment").mockResolvedValue(true);
+      vi.spyOn(assessmentAuthorityRepository, "findById").mockResolvedValue({
+        id: attempt.assessmentId,
+        title: "RDS assessment without denormalized course title",
+        courseTitle: "",
+      });
+      vi.spyOn(identityRepository, "findUserSummariesByIds").mockResolvedValue([{
+        id: attempt.userId,
+        name: "RDS learner",
+        email: "rds-only@example.invalid",
+        status: "Active",
+      }]);
+
+      const response = await request(app)
+        .get("/api/assessments/attempts/pending-review")
+        .set("Cookie", `token=${signToken(instructor)}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data[0]).toMatchObject({
+        id: attempt.id,
+        courseTitle: "",
+      });
+    } finally {
+      const index = courses.indexOf(localCourse);
+      if (index >= 0) courses.splice(index, 1);
+    }
+  });
 });

@@ -20,9 +20,11 @@ Owner: Engineering. Updated: 2026-11-09.
 > authority plus analytics, report-data preparation and Phase-50 workplace
 > state. `USE_PG_WORKPLACE` must remain off until its live verifier and
 > multi-task concurrency gate pass. Course cutover also requires privacy
-> coverage acknowledgement `normalized-v2`, but
-> intentionally makes readiness fail until every secondary content consumer is
-> also migrated.
+> coverage acknowledgement `normalized-v2`. Phase 51 closes the static
+> secondary-consumer inventory and introduces a separate, versioned
+> `COURSE_AUTHORITY_COVERAGE_ACK=normalized-v1` gate. Both acknowledgements,
+> every schema/dependency readiness check and live staging evidence are required
+> before course cutover; AWS keeps them disabled by default.
 
 ---
 

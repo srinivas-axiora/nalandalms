@@ -11,6 +11,8 @@ import {
   relationalPrivacyEnabled,
   relationalAuditEnabled,
   relationalWorkplaceEnabled,
+  COURSE_AUTHORITY_COVERAGE_VERSION,
+  courseAuthorityCoverageAcknowledged,
 } from "../../backend/src/runtime-modes.js";
 
 describe("relational runtime invariants", () => {
@@ -26,6 +28,7 @@ describe("relational runtime invariants", () => {
   const previousPrivacy = process.env.USE_PG_PRIVACY;
   const previousAudit = process.env.USE_PG_AUDIT;
   const previousWorkplace = process.env.USE_PG_WORKPLACE;
+  const previousCourseCoverage = process.env.COURSE_AUTHORITY_COVERAGE_ACK;
 
   afterEach(() => {
     if (previousAttempts === undefined) delete process.env.USE_PG_ATTEMPTS;
@@ -52,6 +55,17 @@ describe("relational runtime invariants", () => {
     else process.env.USE_PG_AUDIT = previousAudit;
     if (previousWorkplace === undefined) delete process.env.USE_PG_WORKPLACE;
     else process.env.USE_PG_WORKPLACE = previousWorkplace;
+    if (previousCourseCoverage === undefined) delete process.env.COURSE_AUTHORITY_COVERAGE_ACK;
+    else process.env.COURSE_AUTHORITY_COVERAGE_ACK = previousCourseCoverage;
+  });
+
+  it("accepts only the current course-authority coverage version", () => {
+    delete process.env.COURSE_AUTHORITY_COVERAGE_ACK;
+    expect(courseAuthorityCoverageAcknowledged()).toBe(false);
+    process.env.COURSE_AUTHORITY_COVERAGE_ACK = "normalized-v0";
+    expect(courseAuthorityCoverageAcknowledged()).toBe(false);
+    process.env.COURSE_AUTHORITY_COVERAGE_ACK = COURSE_AUTHORITY_COVERAGE_VERSION;
+    expect(courseAuthorityCoverageAcknowledged()).toBe(true);
   });
 
   it.each([
