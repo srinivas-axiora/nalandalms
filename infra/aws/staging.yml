@@ -1396,6 +1396,14 @@ Outputs:
     Value: !Ref BootstrapAdminSecret
   DatabaseSecretArn:
     Value: !GetAtt Database.MasterUserSecret.SecretArn
+  DatabaseIdentifier:
+    Value: !Ref Database
+  DatabaseSubnetGroupName:
+    Value: !Ref DatabaseSubnetGroup
+  DatabaseSecurityGroupId:
+    Value: !GetAtt DatabaseSecurityGroup.GroupId
+  DatabaseName:
+    Value: !Ref DatabaseName
   TaskDefinitionArn:
     Value: !Ref TaskDefinition
   SourceRevision:
