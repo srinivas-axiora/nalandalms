@@ -159,6 +159,10 @@ mandatory staging gates, not assumed successes.
   payment-ledger reconciliation, privacy-erasure failure/retry and real
   object-store media-retention failure/retry. External Razorpay settlement,
   refund and dispute parity remains a live go-production requirement.
+- Phases 60-61 bind the restore and primary staging-deployment entry points to
+  explicit confirmation, the intended AWS account/revision and an unmistakably
+  non-production stack. Phase 62 adds the final fresh, cross-artifact release
+  decision over all AWS drills plus finance and privacy approval evidence.
 - Execute the backup/restore, rollback, Redis and RDS failover gates, then
   execute the Phase-57 load/soak gate and complete privacy erasure, payment
   reconciliation and retention retry drills.

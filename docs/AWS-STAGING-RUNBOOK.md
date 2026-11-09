@@ -118,6 +118,18 @@ From a clean browser profile and the command line:
 
 Do not use real learner/candidate PII or real payments in this staging stack.
 
+## 3.1 Final release evidence decision
+
+After every operational drill and both manual reviews are complete, run the
+Phase-62 evaluator described in
+`SECURITY-PHASE-62-RELEASE-EVIDENCE-GATE.md`. It requires all eleven artifacts
+to be fresh and bound to the same account, stack, revision, task definition and
+digest-pinned image. Preserve its exclusive-write decision JSON and the exact
+input files whose SHA-256 digests it records.
+
+Absence or failure of this decision is a production **NO-GO**. Do not hand-edit
+or reuse a decision from another release.
+
 ## 4. Operational checks
 
 - Force-stop the ECS task and verify ECS replaces it and readiness recovers.

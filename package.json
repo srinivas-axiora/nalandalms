@@ -41,7 +41,8 @@
     "db:verify-multi-task": "node backend/src/db/verify-multi-task.mjs",
     "db:verify-failover": "node backend/src/db/verify-rds-failover.mjs",
     "cache:verify-recovery": "node backend/src/cache/verify-redis-recovery.mjs",
-    "load:verify-http": "node backend/src/load/verify-http-soak.mjs"
+    "load:verify-http": "node backend/src/load/verify-http-soak.mjs",
+    "release:verify-evidence": "node scripts/verify-release-evidence.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1160.0",

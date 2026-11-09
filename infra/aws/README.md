@@ -31,6 +31,12 @@ The task role can list and delete exact object versions for approved media,
 report and verification prefixes so erasure cannot be falsely satisfied by an
 S3 delete marker.
 
+After all AWS drills and manual reviews, run
+`npm run release:verify-evidence -- <arguments>` using the contract in
+`docs/SECURITY-PHASE-62-RELEASE-EVIDENCE-GATE.md`. The evaluator is offline and
+creates the production decision only when the complete evidence set is coherent
+and fresh.
+
 The ECS deployment configuration never overlaps old and new tasks. This avoids
 two application processes writing the current whole-state JSONB snapshot at the
 same time. Deployments therefore have a short interruption. Do not raise

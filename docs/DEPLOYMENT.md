@@ -35,6 +35,11 @@ settlement/refund/dispute parity remains a separate live release gate.
 Privacy and retention deletion must purge all versions from the versioned media
 bucket; an S3 delete marker is not evidence of erasure.
 
+Production promotion additionally requires `npm run release:verify-evidence`
+to emit a fresh immutable `GO` decision over the complete AWS, Razorpay and
+privacy-approval evidence set for the exact release revision. A green local
+test suite or any individual AWS drill is insufficient by itself.
+
 The one-task limit is a correctness constraint, not a sizing recommendation.
 The running application still holds its authoritative working set in process
 memory and persists whole collections. Multiple tasks or overlapping rolling
