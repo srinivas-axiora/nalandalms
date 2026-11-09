@@ -70,6 +70,23 @@ export function createIdentityRepository(db = { query, withTransaction }) {
     return rows.map(mapIdentityUser);
   };
 
+  const findUserSummariesByIds = async (ids, client = db) => {
+    const uniqueIds = [...new Set((ids || []).filter((id) => typeof id === "string" && id.length))];
+    if (!uniqueIds.length) return [];
+    const { rows } = await client.query(
+      `SELECT u.id, u.name, u.email, u.status
+       FROM users u
+       WHERE u.id = ANY($1::text[])`,
+      [uniqueIds]
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      email: row.email,
+      status: row.status,
+    }));
+  };
+
   const ensureDepartment = async (client, name) => {
     if (!name) return null;
     const { rows } = await client.query(
@@ -272,6 +289,7 @@ export function createIdentityRepository(db = { query, withTransaction }) {
   return {
     findUserById,
     findUserByIdentifier,
+    findUserSummariesByIds,
     listUsers,
     insertUser,
     updateUser,

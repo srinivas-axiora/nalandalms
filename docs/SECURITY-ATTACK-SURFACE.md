@@ -94,7 +94,7 @@ stale process-local roles, account status or session versions.
 | GET | `/api/assessments/attempts/:attemptId/questions` | Any | N | N/A | N | G | Central attempt view policy; answer keys remain server-only and relational attempts retain immutable duration/pass-score/version settings |
 | POST | `/api/assessments/attempts/:attemptId/answer` | Any | Y | Y | N | G | Owner-only; database-clock and optimistic-version guard in relational mode |
 | POST | `/api/assessments/attempts/:attemptId/submit` | Any | Y | Y | N | G | Owner-only; deadline and duplicate submit enforced server-side; grading uses the attempt-bound pass score rather than mutable authoring state |
-| GET | `/api/assessments/attempts/pending-review` | A/M/I | N | N/A | N | G | Phase-14 relational mode scopes reviewers through assessment/course authority |
+| GET | `/api/assessments/attempts/pending-review` | A/M/I | N | N/A | N | G | Phase-14 relational mode scopes reviewers through assessment/course authority; Phase 49 resolves learner labels from a password-free relational identity projection |
 | POST | `/api/assessments/attempts/:attemptId/grade` | A/M/I | Y | Y | Y | G | Central owner/assigned-proctor policy plus step-up |
 | GET | `/api/assessments/question-library` | A | N | N/A | N | G | Answer-bearing authoring view is administrator-only |
 | POST | `/api/candidate-assessments` | A/M/I | Y | Y | N | G | Source ownership checked; when both flags are enabled the source assessment is relational and the candidate runtime freezes an immutable question snapshot |

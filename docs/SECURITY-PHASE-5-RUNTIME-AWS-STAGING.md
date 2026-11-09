@@ -115,5 +115,7 @@ mandatory staging gates, not assumed successes.
   with a route regression covering transactional attempt start. This removes
   the documented code-coverage gap but does not replace live RDS, concurrency
   or rollback evidence.
+  Phase 49 removes the pending-review queue's last process-local identity join;
+  learner labels now come from a bounded, credential-free PostgreSQL projection.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

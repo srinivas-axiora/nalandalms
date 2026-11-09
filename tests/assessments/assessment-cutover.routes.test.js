@@ -7,6 +7,7 @@ import { signToken } from "../../backend/src/domain.js";
 import { assessmentAuthorityRepository } from "../../backend/src/repositories/assessment-authority.repository.pg.js";
 import { identityRepository } from "../../backend/src/repositories/identity.repository.pg.js";
 import { settingsRepository } from "../../backend/src/repositories/settings.repository.pg.js";
+import { attemptsRepository } from "../../backend/src/repositories/attempts.repository.pg.js";
 
 describe("assessment relational cutover selection", () => {
   const previous = process.env.USE_PG_COURSES;
@@ -92,5 +93,44 @@ describe("assessment relational cutover selection", () => {
       userId: employee.id,
     });
     expect(assessmentAuthorityRepository.startAttempt).toHaveBeenCalledOnce();
+  });
+
+  it("decorates the pending-review queue from relational identity summaries", async () => {
+    const instructor = users.find((user) => user.role === "Manager");
+    const attempt = {
+      id: "ATT-RELATIONAL-REVIEW",
+      assessmentId: "ASM-RELATIONAL-REVIEW",
+      courseId: "CRS-RELATIONAL",
+      userId: "USR-RDS-LEARNER",
+      status: "PendingManualReview",
+    };
+    vi.spyOn(identityRepository, "findUserById").mockResolvedValue(instructor);
+    vi.spyOn(attemptsRepository, "list").mockResolvedValue([attempt]);
+    vi.spyOn(assessmentAuthorityRepository, "canManageAssessment").mockResolvedValue(true);
+    vi.spyOn(assessmentAuthorityRepository, "findById").mockResolvedValue({
+      id: attempt.assessmentId,
+      title: "Relational review assessment",
+      courseTitle: "Relational course",
+    });
+    vi.spyOn(identityRepository, "findUserSummariesByIds").mockResolvedValue([{
+      id: attempt.userId,
+      name: "Current RDS Learner",
+      email: "current-rds@example.com",
+      status: "Active",
+    }]);
+
+    const response = await request(app)
+      .get("/api/assessments/attempts/pending-review")
+      .set("Cookie", `token=${signToken(instructor)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual([expect.objectContaining({
+      id: attempt.id,
+      learnerName: "Current RDS Learner",
+      learnerEmail: "current-rds@example.com",
+      assessmentTitle: "Relational review assessment",
+      courseTitle: "Relational course",
+    })]);
+    expect(identityRepository.findUserSummariesByIds).toHaveBeenCalledWith([attempt.userId]);
   });
 });

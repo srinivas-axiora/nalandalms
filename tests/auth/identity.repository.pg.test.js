@@ -34,6 +34,27 @@ const fakeDb = (handler) => {
 };
 
 describe("PostgreSQL identity repository", () => {
+  it("loads bounded identity summaries without selecting credential material", async () => {
+    const { db } = fakeDb(async () => ({
+      rows: [userRow({ password_hash: "$2b$10$must-not-be-projected" })],
+    }));
+    const repository = createIdentityRepository(db);
+
+    const result = await repository.findUserSummariesByIds(["USR-001", "USR-001", ""]);
+
+    expect(result).toEqual([{
+      id: "USR-001",
+      name: "Identity User",
+      email: "identity@example.com",
+      status: "Active",
+    }]);
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toContain("SELECT u.id, u.name, u.email, u.status");
+    expect(sql).not.toContain("password_hash");
+    expect(params).toEqual([["USR-001"]]);
+    expect(result[0]).not.toHaveProperty("passwordHash");
+  });
+
   it("persists a user and its creation audit atomically", async () => {
     const { db, client } = fakeDb(async (sql) => {
       if (sql.includes("INSERT INTO departments")) return { rows: [{ id: "DEP-001" }] };

@@ -13,6 +13,7 @@ import { attemptsRepository, AttemptRepositoryError } from "../../repositories/a
 import { upsertAttemptProjection } from "../../attempt-projection.js";
 import { registerAssessmentAuthoringPgRoutes, sendAssessmentAuthorityError } from "./assessments.pg.routes.js";
 import { assessmentAuthorityRepository, AssessmentAuthorityError } from "../../repositories/assessment-authority.repository.pg.js";
+import { identityRepository } from "../../repositories/identity.repository.pg.js";
 import { settingsRepository } from "../../repositories/settings.repository.pg.js";
 import { relationalAttemptsEnabled, relationalSettingsEnabled } from "../../runtime-modes.js";
 
@@ -397,8 +398,14 @@ export function registerAssessments(app) {
         }));
       if (permitted) pending.push(attempt);
     }
+    const relationalLearners = USE_PG_COURSES
+      ? await identityRepository.findUserSummariesByIds(pending.map((attempt) => attempt.userId))
+      : [];
+    const relationalLearnersById = new Map(relationalLearners.map((user) => [user.id, user]));
     const decorated = await Promise.all(pending.map(async (a) => {
-      const user = users.find((u) => u.id === a.userId);
+      const user = USE_PG_COURSES
+        ? relationalLearnersById.get(a.userId)
+        : users.find((u) => u.id === a.userId);
       const assessment = USE_PG_COURSES
         ? await assessmentAuthorityRepository.findById(a.assessmentId)
         : await findAssessmentRuntime(a.assessmentId);
