@@ -79,7 +79,7 @@ describe("relational report repository", () => {
         expect(sql).toContain("FOR UPDATE SKIP LOCKED");
         expect(sql).toContain("interval '15 minutes'");
         expect(sql).toContain("report.status = 'Processing'");
-        expect(params).toEqual([3]);
+        expect(params).toEqual([3, null]);
         return { rows: [{ ...reportRow, status: "Processing", attempts: 1, storage_key: "reports/stale.pdf" }] };
       }
       if (sql.includes("SELECT id, role, status FROM users")) {
@@ -98,6 +98,23 @@ describe("relational report repository", () => {
       pendingStorageKey: "reports/stale.pdf",
       actor: { id: "MGR-1", role: "Manager", status: "Active" },
     });
+  });
+
+  it("can scope a concurrency verifier claim to one synthetic report", async () => {
+    const query = vi.fn(async (sql, params) => {
+      if (sql.includes("WITH candidate")) {
+        expect(sql).toContain("$2::uuid IS NULL OR report.id = $2::uuid");
+        expect(params).toEqual([3, reportRow.id]);
+        return { rows: [] };
+      }
+      throw new Error("unexpected query");
+    });
+    const repository = createReportsRepository({
+      query,
+      withTransaction: vi.fn((fn) => fn({ query })),
+    });
+
+    await expect(repository.claimDue({ reportId: reportRow.id })).resolves.toBeNull();
   });
 
   it("reserves an in-flight object key only while the report is processing", async () => {

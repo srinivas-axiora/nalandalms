@@ -69,7 +69,8 @@ the database preparation and verifier switches:
   -Region ap-south-1 `
   -StackName nalanda-staging `
   -PrepareRelationalDatabase `
-  -RunRelationalVerifiers
+  -RunRelationalVerifiers `
+  -RunMultiTaskConcurrencyCanary
 ```
 
 The last verifier is equivalent to:

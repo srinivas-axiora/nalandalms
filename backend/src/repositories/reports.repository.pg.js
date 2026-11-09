@@ -115,7 +115,7 @@ export function createReportsRepository(db = { query, withTransaction }) {
     return { ...mapReport(report), rows, summary, rowCount: rows.length };
   });
 
-  const claimDue = async () => db.withTransaction(async (client) => {
+  const claimDue = async ({ reportId = null } = {}) => db.withTransaction(async (client) => {
     const claimed = await client.query(
       `WITH candidate AS (
          SELECT report.id FROM report_exports report
@@ -127,6 +127,7 @@ export function createReportsRepository(db = { query, withTransaction }) {
            OR (report.status = 'Processing' AND report.attempts <= $1
              AND report.claimed_at < now() - interval '15 minutes')
          )
+           AND ($2::uuid IS NULL OR report.id = $2::uuid)
          ORDER BY report.created_at, report.id
          FOR UPDATE SKIP LOCKED LIMIT 1
        )
@@ -135,7 +136,7 @@ export function createReportsRepository(db = { query, withTransaction }) {
            attempts = CASE WHEN report.status = 'Processing' THEN report.attempts ELSE report.attempts + 1 END,
            claimed_at = now(), next_attempt_at = NULL, last_error_code = NULL, updated_at = now()
        FROM candidate WHERE report.id = candidate.id RETURNING report.*`,
-      [MAX_REPORT_ATTEMPTS],
+      [MAX_REPORT_ATTEMPTS, reportId],
     );
     if (!claimed.rows[0]) return null;
     const actorResult = await client.query("SELECT id, role, status FROM users WHERE id = $1", [claimed.rows[0].requested_by]);

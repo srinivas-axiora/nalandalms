@@ -25,6 +25,9 @@ Owner: Engineering. Updated: 2026-11-09.
 > `COURSE_AUTHORITY_COVERAGE_ACK=normalized-v1` gate. Both acknowledgements,
 > every schema/dependency readiness check and live staging evidence are required
 > before course cutover; AWS keeps them disabled by default.
+> Phase 52 provides a two-Fargate-task shared-database concurrency canary for
+> the critical uniqueness, work-claim and optimistic-version invariants. Its
+> source-bound AWS evidence artifact is mandatory before scale-out approval.
 
 ---
 

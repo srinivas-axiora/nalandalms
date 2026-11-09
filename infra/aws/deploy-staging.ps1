@@ -4,6 +4,7 @@ param(
   [string]$ImageTag = "",
   [switch]$PrepareRelationalDatabase,
   [switch]$RunRelationalVerifiers,
+  [switch]$RunMultiTaskConcurrencyCanary,
   [string]$AlertEmail = "",
   [ValidateRange(100, 2000000000)][int]$WafRateLimit = 2000,
   [string]$CustomDomainName = "",
@@ -18,6 +19,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($RunMultiTaskConcurrencyCanary -and -not $RunRelationalVerifiers) {
+  throw "RunMultiTaskConcurrencyCanary requires RunRelationalVerifiers."
+}
 $sourceRevision = (git rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $sourceRevision -notmatch '^[0-9a-f]{40}$') {
   throw "A valid Git source revision is required before deployment."
@@ -230,6 +234,15 @@ if ($RunRelationalVerifiers) {
     Write-Host "Running relational verifier: $verifier"
     Invoke-OneOffTask @("node", "backend/src/db/$verifier")
   }
+}
+
+if ($RunMultiTaskConcurrencyCanary) {
+  Write-Host "Running two-task relational concurrency canary..."
+  & (Join-Path $PSScriptRoot "verify-multi-task.ps1") `
+    -Region $Region `
+    -StackName $StackName `
+    -EvidencePath "artifacts/aws/$StackName-$ImageTag-multi-task.json"
+  if ($LASTEXITCODE -ne 0) { throw "Multi-task concurrency canary failed." }
 }
 
 $applicationUrl = Get-StackOutput "ApplicationUrl"

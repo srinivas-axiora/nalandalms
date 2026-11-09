@@ -126,5 +126,9 @@ mandatory staging gates, not assumed successes.
   acknowledgement plus database-shape readiness. The deployment verifier can
   now run an isolated production-mode course cutover canary, but the ECS service
   still ships with course authority and its acknowledgement disabled.
+  Phase 52 adds a two-Fargate-task concurrency canary for enrollment,
+  attendance, active-attempt uniqueness, report work claiming and optimistic
+  course updates. It writes source-revision-bound evidence but remains unproven
+  until executed in the intended AWS account.
 - Execute backup restore, failover, load/soak, privacy erasure, payment
   reconciliation and rollback drills.

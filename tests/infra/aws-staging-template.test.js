@@ -13,6 +13,10 @@ const verificationScript = fs.readFileSync(
   path.join(repositoryRoot, "infra", "aws", "verify-staging.ps1"),
   "utf8",
 );
+const multiTaskScript = fs.readFileSync(
+  path.join(repositoryRoot, "infra", "aws", "verify-multi-task.ps1"),
+  "utf8",
+);
 
 describe("AWS staging release controls", () => {
   it("retains encrypted ALB access logs behind a scoped delivery policy", () => {
@@ -139,6 +143,21 @@ describe("AWS staging release controls", () => {
       "verify-course-cutover.mjs",
     ];
     for (const verifier of expectedVerifiers) expect(deploymentScript).toContain(verifier);
+  });
+
+  it("runs a two-task shared-database concurrency canary only after relational verification", () => {
+    expect(deploymentScript).toContain("RunMultiTaskConcurrencyCanary");
+    expect(deploymentScript).toContain("RunMultiTaskConcurrencyCanary requires RunRelationalVerifiers");
+    expect(deploymentScript).toContain("verify-multi-task.ps1");
+    expect(multiTaskScript).toContain('"--count", [string]$Count');
+    expect(multiTaskScript).toContain("-Count 2");
+    expect(multiTaskScript).toContain('"ecs", "wait", "tasks-stopped"');
+    expect(multiTaskScript).toContain('"worker", $runId');
+    expect(multiTaskScript).toContain('"assert", $runId');
+    expect(multiTaskScript).toContain('"cleanup", $runId');
+    expect(multiTaskScript).toContain('result = "passed"');
+    expect(multiTaskScript).toContain("sourceRevision = $sourceRevision");
+    expect(multiTaskScript).toContain("taskDefinitionArn = $taskDefinition");
   });
 
   it("attests deployed edge, origin, WAF and readiness state before preserving evidence", () => {
