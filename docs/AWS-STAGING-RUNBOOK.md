@@ -68,6 +68,10 @@ For a new staging database, prepare (but do not enable) the normalized tables:
 
 ```powershell
 .\infra\aws\deploy-staging.ps1 `
+  -Region ap-south-1 `
+  -StackName nalanda-staging `
+  -ExpectedAccountId $stagingAccountId `
+  -ConfirmStagingDeployment `
   -PrepareRelationalDatabase `
   -RunRelationalVerifiers `
   -AlertEmail $alertEmail `

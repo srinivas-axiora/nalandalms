@@ -20,6 +20,8 @@ The stack defaults to `AuthorityMode=snapshot`. A reviewed staging promotion
 may atomically select `normalized`, which enables every relational authority,
 its exact coverage acknowledgements and required privacy/report workers. Never
 enable individual flags independently in a multi-task service. Use the guarded
+account-bound, explicitly confirmed, non-production-only staging deployment
+entry point. For normalized promotion, also use the guarded
 `-PromoteNormalizedAuthority`, `-ConfirmNormalizedPromotion` and
 `-ConfirmStagingTrafficStopped` deployment switches so preparation, an encrypted
 RDS snapshot, zero-task write quiescence, source-hash-bound reconciliation,

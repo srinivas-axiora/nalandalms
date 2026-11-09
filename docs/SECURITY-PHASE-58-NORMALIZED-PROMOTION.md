@@ -73,6 +73,8 @@ Run only in the approved synthetic staging window:
 .\infra\aws\deploy-staging.ps1 `
   -Region ap-south-1 `
   -StackName nalanda-staging `
+  -ExpectedAccountId <12-digit-staging-account-id> `
+  -ConfirmStagingDeployment `
   -PrepareRelationalDatabase `
   -RunRelationalVerifiers `
   -RunMultiTaskConcurrencyCanary `

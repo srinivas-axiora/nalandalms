@@ -19,6 +19,19 @@ const multiTaskScript = fs.readFileSync(
 );
 
 describe("AWS staging release controls", () => {
+  it("guards deployment by account, confirmation and non-production stack name", () => {
+    expect(deploymentScript).toContain("ExpectedAccountId");
+    expect(deploymentScript).toContain("ConfirmStagingDeployment");
+    expect(deploymentScript).toContain("restricted to an explicitly non-production stack");
+    expect(deploymentScript).toContain("authenticated AWS account does not match ExpectedAccountId");
+    expect(deploymentScript.indexOf("ConfirmStagingDeployment")).toBeLessThan(
+      deploymentScript.indexOf("docker build"),
+    );
+    expect(deploymentScript.indexOf("authenticated AWS account does not match ExpectedAccountId")).toBeLessThan(
+      deploymentScript.indexOf("docker build"),
+    );
+  });
+
   it("retains encrypted ALB access logs behind a scoped delivery policy", () => {
     expect(template).toContain("AccessLogBucket:");
     expect(template).toContain("SSEAlgorithm: AES256");

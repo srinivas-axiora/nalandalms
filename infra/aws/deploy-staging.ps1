@@ -19,12 +19,20 @@ param(
   [string]$OriginCertificateArn = "",
   [string]$EvidencePath = "",
   [string]$PromotionEvidencePath = "",
+  [Parameter(Mandatory = $true)][ValidatePattern('^\d{12}$')][string]$ExpectedAccountId,
+  [switch]$ConfirmStagingDeployment,
   [Parameter(Mandatory = $true)][string]$RazorpayKeyIdSecretArn,
   [Parameter(Mandatory = $true)][string]$RazorpayKeySecretArn,
   [Parameter(Mandatory = $true)][string]$RazorpayWebhookSecretArn
 )
 
 $ErrorActionPreference = "Stop"
+if (-not $ConfirmStagingDeployment) {
+  throw "Staging deployment requires the explicit -ConfirmStagingDeployment switch."
+}
+if ($StackName -notmatch '(?i)(staging|stage|test|nonprod|dev)' -or $StackName -match '(?i)(^|[-_])prod(uction)?($|[-_])') {
+  throw "This deployment script is restricted to an explicitly non-production stack."
+}
 if ($RunMultiTaskConcurrencyCanary -and -not $RunRelationalVerifiers) {
   throw "RunMultiTaskConcurrencyCanary requires RunRelationalVerifiers."
 }
@@ -87,6 +95,9 @@ if ($OriginCertificateArn -and $OriginCertificateArn -notmatch "^arn:[^:]+:acm:$
 
 $identity = aws sts get-caller-identity --region $Region | ConvertFrom-Json
 if (-not $identity.Account) { throw "AWS authentication is required." }
+if ([string]$identity.Account -ne $ExpectedAccountId) {
+  throw "The authenticated AWS account does not match ExpectedAccountId."
+}
 
 Write-Host "Validating CloudFormation template with AWS..."
 aws cloudformation validate-template `

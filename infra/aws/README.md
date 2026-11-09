@@ -70,6 +70,9 @@ $env:AWS_PROFILE = "YOUR_PROFILE"
 
 .\infra\aws\deploy-staging.ps1 `
   -Region ap-south-1 `
+  -StackName nalanda-staging `
+  -ExpectedAccountId 123456789012 `
+  -ConfirmStagingDeployment `
   -PrepareRelationalDatabase `
   -RunRelationalVerifiers `
   -AlertEmail sre@example.com `
