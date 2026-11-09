@@ -32,6 +32,16 @@ describe("AWS staging release controls", () => {
     );
   });
 
+  it("guards the direct multi-task canary by account, revision and immutable image", () => {
+    expect(multiTaskScript).toContain("ExpectedAccountId");
+    expect(multiTaskScript).toContain("ExpectedSourceRevision");
+    expect(multiTaskScript).toContain("ConfirmMultiTaskCanary");
+    expect(multiTaskScript).toContain("restricted to an explicitly non-production stack");
+    expect(multiTaskScript).toContain("requires a digest-pinned Nalanda container");
+    expect(multiTaskScript).toContain("task definition SOURCE_REVISION does not match ExpectedSourceRevision");
+    expect(deploymentScript).toContain("-ConfirmMultiTaskCanary");
+  });
+
   it("retains encrypted ALB access logs behind a scoped delivery policy", () => {
     expect(template).toContain("AccessLogBucket:");
     expect(template).toContain("SSEAlgorithm: AES256");

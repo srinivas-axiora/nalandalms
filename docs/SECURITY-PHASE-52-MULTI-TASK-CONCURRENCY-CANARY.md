@@ -88,6 +88,10 @@ After AWS authentication, snapshot approval and change-set review:
   -RazorpayWebhookSecretArn <secret-arn>
 ```
 
+Direct invocation of `verify-multi-task.ps1` is also guarded and requires the
+expected account, exact source revision and `-ConfirmMultiTaskCanary`. Its
+evidence records the account and digest-pinned image for Phase-62 coherence.
+
 Do not enable the long-running service's relational flags based only on the
 component verifiers. Preserve the multi-task evidence JSON and matching
 CloudWatch task logs in the release record.

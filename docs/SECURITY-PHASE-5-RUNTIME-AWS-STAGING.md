@@ -163,6 +163,9 @@ mandatory staging gates, not assumed successes.
   explicit confirmation, the intended AWS account/revision and an unmistakably
   non-production stack. Phase 62 adds the final fresh, cross-artifact release
   decision over all AWS drills plus finance and privacy approval evidence.
+- Phase 63 removes the last account exception from multi-task evidence by
+  guarding direct canary execution and recording its account and immutable
+  image binding.
 - Execute the backup/restore, rollback, Redis and RDS failover gates, then
   execute the Phase-57 load/soak gate and complete privacy erasure, payment
   reconciliation and retention retry drills.

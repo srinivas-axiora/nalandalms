@@ -1,6 +1,9 @@
 param(
   [string]$Region = "ap-south-1",
   [string]$StackName = "nalanda-staging",
+  [Parameter(Mandatory = $true)][ValidatePattern('^\d{12}$')][string]$ExpectedAccountId,
+  [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedSourceRevision,
+  [switch]$ConfirmMultiTaskCanary,
   [string]$EvidencePath = ""
 )
 
@@ -28,11 +31,38 @@ function Get-StackOutput([string]$OutputKey) {
   return [string]$output.OutputValue
 }
 
+if (-not $ConfirmMultiTaskCanary) {
+  throw "The multi-task canary requires the explicit -ConfirmMultiTaskCanary switch."
+}
+if ($StackName -notmatch '(?i)(staging|stage|test|nonprod|dev)' -or $StackName -match '(?i)(^|[-_])prod(uction)?($|[-_])') {
+  throw "The multi-task canary is restricted to an explicitly non-production stack."
+}
+$identity = Invoke-AwsJson @("sts", "get-caller-identity", "--region", $Region, "--output", "json")
+if ([string]$identity.Account -ne $ExpectedAccountId) {
+  throw "The authenticated AWS account does not match ExpectedAccountId."
+}
+
 $cluster = Get-StackOutput "ClusterName"
 $taskDefinition = Get-StackOutput "TaskDefinitionArn"
 $subnets = Get-StackOutput "ApplicationSubnetIds"
 $securityGroup = Get-StackOutput "ApplicationSecurityGroupId"
 $sourceRevision = Get-StackOutput "SourceRevision"
+if ($sourceRevision -ne $ExpectedSourceRevision) {
+  throw "The stack source revision does not match ExpectedSourceRevision."
+}
+$taskDefinitionEnvelope = Invoke-AwsJson @(
+  "ecs", "describe-task-definition", "--task-definition", $taskDefinition,
+  "--region", $Region, "--output", "json"
+)
+$taskContainer = @($taskDefinitionEnvelope.TaskDefinition.ContainerDefinitions | Where-Object { $_.Name -eq "nalanda" })[0]
+if ($null -eq $taskContainer -or [string]$taskContainer.Image -notmatch '@sha256:[0-9a-f]{64}$') {
+  throw "The multi-task canary requires a digest-pinned Nalanda container."
+}
+$taskSourceRevision = @($taskContainer.Environment | Where-Object { $_.Name -eq "SOURCE_REVISION" })[0]
+if ($null -eq $taskSourceRevision -or [string]$taskSourceRevision.Value -ne $ExpectedSourceRevision) {
+  throw "The task definition SOURCE_REVISION does not match ExpectedSourceRevision."
+}
+$containerImage = [string]$taskContainer.Image
 $network = "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$securityGroup],assignPublicIp=DISABLED}"
 $runId = "MT-$(([guid]::NewGuid().ToString('N')).ToUpperInvariant())"
 if (-not $EvidencePath) {
@@ -104,11 +134,13 @@ try {
   $evidence = [ordered]@{
     schemaVersion = 1
     capturedAt = (Get-Date).ToUniversalTime().ToString("o")
+    accountId = [string]$identity.Account
     region = $Region
     stackName = $StackName
     sourceRevision = $sourceRevision
     cluster = $cluster
     taskDefinitionArn = $taskDefinition
+    containerImage = $containerImage
     runId = $runId
     expectedWorkers = 2
     setupTasks = $setupTasks

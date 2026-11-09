@@ -101,7 +101,8 @@ export function evaluateReleaseEvidence({
   times.promotion = assertFresh(promotion.capturedAt, "promotion", { now, maxAgeHours });
 
   const multiTask = documents.multiTask;
-  assertCommon(multiTask, "multi-task", expected, canonicalTaskDefinition, { skipAccount: true });
+  assertCommon(multiTask, "multi-task", expected, canonicalTaskDefinition);
+  requireEvidence(multiTask.containerImage === canonicalImage, "multi-task image mismatch");
   requireEvidence(Number(multiTask.expectedWorkers) === 2, "multi-task evidence did not require two workers");
   requireEvidence(allExitZero(asArray(multiTask.setupTasks)), "multi-task setup task failed");
   requireEvidence(asArray(multiTask.workerTasks).length === 2 && allExitZero(multiTask.workerTasks), "multi-task workers did not both pass");

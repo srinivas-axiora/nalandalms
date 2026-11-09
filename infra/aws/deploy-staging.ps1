@@ -381,6 +381,9 @@ try {
     & (Join-Path $PSScriptRoot "verify-multi-task.ps1") `
       -Region $Region `
       -StackName $StackName `
+      -ExpectedAccountId $ExpectedAccountId `
+      -ExpectedSourceRevision $sourceRevision `
+      -ConfirmMultiTaskCanary `
       -EvidencePath "artifacts/aws/$StackName-$ImageTag-multi-task.json"
     if ($LASTEXITCODE -ne 0) { throw "Multi-task concurrency canary failed." }
   }

@@ -62,6 +62,7 @@ const fixtures = () => ({
   },
   multiTask: {
     ...common(prePromotion),
+    containerImage,
     expectedWorkers: 2,
     setupTasks: [task("setup")],
     workerTasks: [task("worker-a"), task("worker-b")],
