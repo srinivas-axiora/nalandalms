@@ -119,6 +119,23 @@ Do not use real learner/candidate PII or real payments in this staging stack.
 - Force-stop the ECS task and verify ECS replaces it and readiness recovers.
 - Confirm RDS automated backups and S3 versioning are enabled.
 - Confirm Redis and RDS have no public endpoint exposure.
+- Confirm Redis reports two members in distinct Availability Zones with
+  Multi-AZ and automatic failover enabled. Run the guarded failover rehearsal:
+
+    ```powershell
+    .\infra\aws\verify-redis-failover.ps1 `
+      -Region ap-south-1 `
+      -StackName nalanda-staging `
+      -ExpectedAccountId <12-digit-staging-account-id> `
+      -ExpectedSourceRevision <40-character-git-revision> `
+      -ConfirmFailover `
+      -RecoveryTimeoutSeconds 600
+    ```
+
+    Preserve the JSON evidence, observer log stream, ElastiCache events,
+    CloudTrail event and readiness alarm history. The drill must observe HTTP
+    503 while Redis request controls fail closed, a changed primary, in-place
+    ECS client recovery and final HTTP 200 readiness.
 - Confirm ECS service and one-off tasks use the private application subnets,
   `assignPublicIp=DISABLED`, and only the application security group. Verify
   both NAT gateways are available in their corresponding public subnets and

@@ -379,8 +379,9 @@ Resources:
       CacheNodeType: cache.t4g.micro
       CacheSubnetGroupName: !Ref CacheSubnetGroup
       SecurityGroupIds: [!GetAtt CacheSecurityGroup.GroupId]
-      NumCacheClusters: 1
-      AutomaticFailoverEnabled: false
+      NumCacheClusters: 2
+      AutomaticFailoverEnabled: true
+      MultiAZEnabled: true
       AtRestEncryptionEnabled: true
       TransitEncryptionEnabled: true
       SnapshotRetentionLimit: 1
@@ -1358,6 +1359,8 @@ Resources:
         EvaluateTargetHealth: false
 
 Outputs:
+  EnvironmentName:
+    Value: !Ref EnvironmentName
   ApplicationUrl:
     Value: !If
       - HasCustomDomain
@@ -1404,6 +1407,10 @@ Outputs:
     Value: !GetAtt DatabaseSecurityGroup.GroupId
   DatabaseName:
     Value: !Ref DatabaseName
+  CacheReplicationGroupId:
+    Value: !Ref Cache
+  ApplicationLogGroupName:
+    Value: !Ref LogGroup
   TaskDefinitionArn:
     Value: !Ref TaskDefinition
   SourceRevision:

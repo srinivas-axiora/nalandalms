@@ -35,7 +35,8 @@
     "db:verify-archives": "node backend/src/db/verify-archives.mjs",
     "db:verify-workplace": "node backend/src/db/verify-workplace.mjs",
     "db:verify-course-cutover": "node backend/src/db/verify-course-cutover.mjs",
-    "db:verify-multi-task": "node backend/src/db/verify-multi-task.mjs"
+    "db:verify-multi-task": "node backend/src/db/verify-multi-task.mjs",
+    "cache:verify-recovery": "node backend/src/cache/verify-redis-recovery.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1160.0",

@@ -136,6 +136,11 @@ mandatory staging gates, not assumed successes.
   Phase 54 adds an explicit ECS task-definition rollback rehearsal that rejects
   configuration drift and unsafe images, proves running-task identity and
   readiness, and restores the stack-owned release from a `finally` path.
-  Both are local tooling only until executed in the intended AWS account.
-- Execute the backup/restore and rollback gates, then complete failover,
-  load/soak, privacy erasure, payment reconciliation and retention retry drills.
+  Phase 55 replaces the single cache node with encrypted two-node Multi-AZ
+  Redis, fixes permanent client disconnect after transient failure and adds a
+  guarded managed-failover rehearsal proving fail-closed readiness and in-place
+  client recovery. These are local controls only until executed in the intended
+  AWS account.
+- Execute the backup/restore, rollback and Redis failover gates, then complete
+  RDS failover, load/soak, privacy erasure, payment reconciliation and retention
+  retry drills.

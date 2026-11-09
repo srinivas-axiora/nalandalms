@@ -1,4 +1,4 @@
-// Redis client wrapper with graceful in-memory fallback.
+// Redis client wrapper with a development-only in-memory fallback.
 import Redis from "ioredis";
 
 let redis = null;
@@ -11,16 +11,24 @@ const loginSecurityMemory = new Map();
 const companionPairingMemory = new Map();
 const proctorSignalMemory = new Map();
 
+// Keep retrying for the lifetime of a production task. Returning a non-number
+// from ioredis retryStrategy permanently ends reconnection, which would turn a
+// transient ElastiCache failover into a task replacement. Exponential backoff
+// is capped and jittered so a fleet does not reconnect in lockstep.
+export function redisRetryDelay(times, random = Math.random) {
+  const attempt = Math.max(1, Math.floor(Number(times) || 1));
+  const exponential = Math.min(2 ** Math.min(attempt - 1, 10) * 50, 5000);
+  const jitter = Math.floor(Math.max(0, Math.min(0.999999, Number(random()) || 0)) * 200);
+  return exponential + jitter;
+}
+
 if (process.env.REDIS_URL) {
   try {
     redis = new Redis(process.env.REDIS_URL, {
       maxRetriesPerRequest: 1,
       connectTimeout: 5000,
       lazyConnect: true,
-      retryStrategy(times) {
-        if (times > 3) return null; // Stop retrying after 3 attempts
-        return Math.min(times * 100, 2000);
-      },
+      retryStrategy: redisRetryDelay,
     });
 
     redis.on("ready", () => {
@@ -67,7 +75,11 @@ export async function ensureRedisReady() {
 }
 
 export async function redisHealth() {
-  if (!isRedisAvailable()) return { ok: !redisRequired, mode: "memory" };
+  if (!isRedisAvailable()) {
+    return redisRequired
+      ? { ok: false, mode: "redis", status: redis?.status || "unconfigured" }
+      : { ok: true, mode: "memory" };
+  }
   try {
     const reply = await redis.ping();
     return { ok: reply === "PONG", mode: "redis" };

@@ -93,9 +93,36 @@ $applicationSubnetIds = @((Get-RequiredOutput $outputs "ApplicationSubnetIds") -
 $publicSubnetIds = @((Get-RequiredOutput $outputs "PublicSubnetIds") -split ",")
 $applicationRouteTableIds = @((Get-RequiredOutput $outputs "ApplicationRouteTableIds") -split ",")
 $natGatewayIds = @((Get-RequiredOutput $outputs "NatGatewayIds") -split ",")
+$cacheReplicationGroupId = Get-RequiredOutput $outputs "CacheReplicationGroupId"
 $deployedSourceRevision = Get-RequiredOutput $outputs "SourceRevision"
 Assert-Condition ($deployedSourceRevision -eq $ExpectedSourceRevision) `
   "The stack source revision does not match the expected Git commit."
+
+$cacheEnvelope = Invoke-AwsJson @(
+  "elasticache", "describe-replication-groups",
+  "--replication-group-id", $cacheReplicationGroupId
+)
+$cache = @($cacheEnvelope.ReplicationGroups)[0]
+Assert-Condition ($null -ne $cache -and [string]$cache.Status -eq "available") `
+  "The Redis replication group is not available."
+Assert-Condition ([string]$cache.AutomaticFailover -eq "enabled" -and [string]$cache.MultiAZ -eq "enabled") `
+  "Redis must have Multi-AZ automatic failover enabled."
+Assert-Condition (-not [bool]$cache.ClusterEnabled -and @($cache.NodeGroups).Count -eq 1) `
+  "The staging Redis topology must use one non-clustered node group."
+$cacheMembers = @($cache.NodeGroups[0].NodeGroupMembers)
+Assert-Condition ($cacheMembers.Count -ge 2) `
+  "Redis failover requires a primary and at least one replica."
+$cacheAvailabilityZones = @()
+foreach ($cacheMember in $cacheMembers) {
+  $cacheClusterEnvelope = Invoke-AwsJson @(
+    "elasticache", "describe-cache-clusters",
+    "--cache-cluster-id", [string]$cacheMember.CacheClusterId
+  )
+  $cacheAvailabilityZones += [string]$cacheClusterEnvelope.CacheClusters[0].PreferredAvailabilityZone
+}
+$cacheAvailabilityZones = @($cacheAvailabilityZones | Sort-Object -Unique)
+Assert-Condition ($cacheAvailabilityZones.Count -ge 2) `
+  "Redis primary and replica are not distributed across Availability Zones."
 
 $taskDefinitionEnvelope = Invoke-AwsJson @("ecs", "describe-task-definition", "--task-definition", $taskDefinitionArn)
 $taskContainer = @($taskDefinitionEnvelope.taskDefinition.containerDefinitions | Where-Object { $_.name -eq "nalanda" })[0]
@@ -344,6 +371,14 @@ $evidence = [ordered]@{
     applicationRouteTableIds = $applicationRouteTableIds
     activeNatDefaultRoutes = $verifiedNatGatewayIds.Count
     sameZoneNatRoutingVerified = $true
+  }
+  cacheResilience = [ordered]@{
+    replicationGroupId = $cacheReplicationGroupId
+    status = [string]$cache.Status
+    automaticFailover = [string]$cache.AutomaticFailover
+    multiAZ = [string]$cache.MultiAZ
+    memberCount = $cacheMembers.Count
+    availabilityZones = $cacheAvailabilityZones
   }
 }
 
