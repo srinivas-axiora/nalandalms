@@ -94,6 +94,7 @@ $publicSubnetIds = @((Get-RequiredOutput $outputs "PublicSubnetIds") -split ",")
 $applicationRouteTableIds = @((Get-RequiredOutput $outputs "ApplicationRouteTableIds") -split ",")
 $natGatewayIds = @((Get-RequiredOutput $outputs "NatGatewayIds") -split ",")
 $cacheReplicationGroupId = Get-RequiredOutput $outputs "CacheReplicationGroupId"
+$databaseIdentifier = Get-RequiredOutput $outputs "DatabaseIdentifier"
 $deployedSourceRevision = Get-RequiredOutput $outputs "SourceRevision"
 Assert-Condition ($deployedSourceRevision -eq $ExpectedSourceRevision) `
   "The stack source revision does not match the expected Git commit."
@@ -123,6 +124,17 @@ foreach ($cacheMember in $cacheMembers) {
 $cacheAvailabilityZones = @($cacheAvailabilityZones | Sort-Object -Unique)
 Assert-Condition ($cacheAvailabilityZones.Count -ge 2) `
   "Redis primary and replica are not distributed across Availability Zones."
+
+$databaseEnvelope = Invoke-AwsJson @(
+  "rds", "describe-db-instances", "--db-instance-identifier", $databaseIdentifier
+)
+$database = @($databaseEnvelope.DBInstances)[0]
+Assert-Condition ($null -ne $database -and [string]$database.DBInstanceStatus -eq "available") `
+  "The RDS instance is not available."
+Assert-Condition ([bool]$database.MultiAZ) `
+  "RDS must be configured as a Multi-AZ DB instance."
+Assert-Condition ([bool]$database.StorageEncrypted -and -not [bool]$database.PubliclyAccessible) `
+  "RDS must remain encrypted and private."
 
 $taskDefinitionEnvelope = Invoke-AwsJson @("ecs", "describe-task-definition", "--task-definition", $taskDefinitionArn)
 $taskContainer = @($taskDefinitionEnvelope.taskDefinition.containerDefinitions | Where-Object { $_.name -eq "nalanda" })[0]
@@ -379,6 +391,14 @@ $evidence = [ordered]@{
     multiAZ = [string]$cache.MultiAZ
     memberCount = $cacheMembers.Count
     availabilityZones = $cacheAvailabilityZones
+  }
+  databaseResilience = [ordered]@{
+    identifier = $databaseIdentifier
+    status = [string]$database.DBInstanceStatus
+    multiAZ = [bool]$database.MultiAZ
+    availabilityZone = [string]$database.AvailabilityZone
+    encrypted = [bool]$database.StorageEncrypted
+    publiclyAccessible = [bool]$database.PubliclyAccessible
   }
 }
 

@@ -139,8 +139,10 @@ mandatory staging gates, not assumed successes.
   Phase 55 replaces the single cache node with encrypted two-node Multi-AZ
   Redis, fixes permanent client disconnect after transient failure and adds a
   guarded managed-failover rehearsal proving fail-closed readiness and in-place
-  client recovery. These are local controls only until executed in the intended
-  AWS account.
-- Execute the backup/restore, rollback and Redis failover gates, then complete
-  RDS failover, load/soak, privacy erasure, payment reconciliation and retention
+  client recovery. Phase 56 upgrades RDS to an encrypted Multi-AZ DB instance,
+  bounds database queries and adds a forced-failover rehearsal proving durable
+  marker continuity, DNS/client reconnection and in-place ECS recovery. These
+  are local controls only until executed in the intended AWS account.
+- Execute the backup/restore, rollback, Redis and RDS failover gates, then
+  complete load/soak, privacy erasure, payment reconciliation and retention
   retry drills.

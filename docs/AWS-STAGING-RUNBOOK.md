@@ -119,6 +119,23 @@ Do not use real learner/candidate PII or real payments in this staging stack.
 - Force-stop the ECS task and verify ECS replaces it and readiness recovers.
 - Confirm RDS automated backups and S3 versioning are enabled.
 - Confirm Redis and RDS have no public endpoint exposure.
+- Confirm RDS is encrypted, `available` and Multi-AZ. Stop staging writers and
+  run the forced-failover rehearsal:
+
+    ```powershell
+    .\infra\aws\verify-rds-failover.ps1 `
+      -Region ap-south-1 `
+      -StackName nalanda-staging `
+      -ExpectedAccountId <12-digit-staging-account-id> `
+      -ExpectedSourceRevision <40-character-git-revision> `
+      -ConfirmFailover `
+      -RecoveryTimeoutSeconds 900
+    ```
+
+    Preserve the JSON artifact, RDS/CloudTrail events, observer logs and alarm
+    history. Require marker continuity, HTTP 503 during interruption, a changed
+    writer Availability Zone, stable endpoint, unchanged ECS task and final
+    HTTP 200 readiness.
 - Confirm Redis reports two members in distinct Availability Zones with
   Multi-AZ and automatic failover enabled. Run the guarded failover rehearsal:
 

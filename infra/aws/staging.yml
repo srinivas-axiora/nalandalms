@@ -357,7 +357,7 @@ Resources:
       DBSubnetGroupName: !Ref DatabaseSubnetGroup
       VPCSecurityGroups: [!GetAtt DatabaseSecurityGroup.GroupId]
       PubliclyAccessible: false
-      MultiAZ: false
+      MultiAZ: true
       BackupRetentionPeriod: 7
       PreferredBackupWindow: 20:00-20:30
       PreferredMaintenanceWindow: sun:21:00-sun:22:00

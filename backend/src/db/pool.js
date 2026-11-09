@@ -40,6 +40,7 @@ export function getPool() {
       max: Number(process.env.PGPOOL_MAX || 10),
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
+      query_timeout: 10_000,
       ssl: resolveSsl(),
     });
     pool.on("error", (err) => console.error("[db] idle client error:", err?.message || err));

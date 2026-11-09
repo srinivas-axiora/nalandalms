@@ -9,8 +9,8 @@ Browser
   -> CloudFront (HTTPS, cache disabled for authenticated application traffic)
   -> Application Load Balancer (accepts CloudFront origin traffic only)
   -> one ECS Fargate task (single writer)
-       -> private RDS PostgreSQL (current JSONB collection snapshot)
-       -> private TLS ElastiCache Redis (distributed request budgets)
+       -> private Multi-AZ RDS PostgreSQL (current JSONB collection snapshot)
+       -> private Multi-AZ TLS ElastiCache Redis (distributed request budgets)
        -> private encrypted S3 (uploaded objects)
        -> Secrets Manager (runtime credentials)
        -> CloudWatch Logs / Container Insights
@@ -72,7 +72,7 @@ Do not promote staging to production until all of the following are evidenced:
 4. S3 malware scanning/quarantine prevents unscanned objects from being served.
 5. Privacy deletion and retention workflows operate durably across PostgreSQL,
    S3, logs and backups with legal-hold handling.
-6. RDS point-in-time restore, application rollback and secret rotation drills
-   meet the agreed RTO/RPO.
+6. RDS point-in-time restore and Multi-AZ failover, Redis failover, application
+   rollback and secret rotation drills meet the agreed RTO/RPO.
 7. Production-like load, soak, payment reconciliation and negative-security
    tests pass with approved evidence.

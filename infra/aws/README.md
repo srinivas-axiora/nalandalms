@@ -2,8 +2,8 @@
 
 This stack is intentionally a **single-writer staging environment**, not a
 production approval. It provides CloudFront HTTPS, an ALB, one ARM64 ECS Fargate
-task in private application subnets, private RDS PostgreSQL, private two-node
-Multi-AZ TLS-enabled ElastiCache Redis, private S3,
+task in private application subnets, private Multi-AZ RDS PostgreSQL, private
+two-node Multi-AZ TLS-enabled ElastiCache Redis, private S3,
 Secrets Manager, ALB access logs, a regional AWS WAF and CloudWatch/SNS alarms
 encrypted with a rotating customer-managed KMS key. GuardDuty Malware
 Protection scans course media, chapter PDFs and proctoring objects.
@@ -23,6 +23,10 @@ processing charges in staging.
 Redis also uses a paid replica in a second Availability Zone. This is required
 to rehearse managed primary promotion and application reconnection; a
 single-node cache is not production-failover evidence.
+
+RDS also provisions a synchronous standby in another Availability Zone. This
+adds cost but permits forced-failover, endpoint-continuity and reconnect
+evidence that a single-AZ database cannot provide.
 
 ## Prerequisites
 
@@ -170,8 +174,8 @@ production PII, payment records or real candidate evidence into this stack.
 - GuardDuty malware scanning/quarantine is declared, but staging must prove the
   plan becomes active, clean media becomes readable, non-clean media remains
   unreadable and alert delivery works before production.
-- Restore, ECS rollback, Redis failover, RDS failover, load, privacy-erasure and
-  payment reconciliation drills still require live evidence.
+- Restore, ECS rollback, Redis/RDS failover, load, privacy-erasure and payment
+  reconciliation drills still require live evidence.
 - Application-wide relational audit/security evidence is feature-gated and
   locally tested, but its RDS verifier, reconciliation and external append-only
   export/tamper-resistance controls remain pending.

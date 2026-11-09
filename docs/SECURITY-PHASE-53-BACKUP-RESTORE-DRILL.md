@@ -17,6 +17,11 @@ exercise. The workstation has no AWS credentials, so production remains
 **NO-GO** until the drill runs in the intended account and its logs and evidence
 are reviewed.
 
+Phase 56 subsequently upgrades the source staging database to Multi-AZ and adds
+a forced-failover drill. The temporary restored clone in this Phase 53 exercise
+remains deliberately single-AZ because its purpose is isolated recovery and
+data validation, not serving traffic.
+
 ## Safety boundary
 
 The script does not change the ECS service, production flags, DNS, or the source

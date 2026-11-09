@@ -36,6 +36,7 @@
     "db:verify-workplace": "node backend/src/db/verify-workplace.mjs",
     "db:verify-course-cutover": "node backend/src/db/verify-course-cutover.mjs",
     "db:verify-multi-task": "node backend/src/db/verify-multi-task.mjs",
+    "db:verify-failover": "node backend/src/db/verify-rds-failover.mjs",
     "cache:verify-recovery": "node backend/src/cache/verify-redis-recovery.mjs"
   },
   "dependencies": {

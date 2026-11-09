@@ -83,7 +83,13 @@ Known limitation: single application instance at GA (in-memory working set) — 
 1. Alert fires (health/uptime). 2. Orchestrator/health check restarts container. 3. On boot, app `loadDb()` rehydrates from PostgreSQL. 4. Verify `/api/health` 200 + login. **RTO target: ≤15 min.**
 
 ### RB-2 — Database unavailable / failover
-1. App **fails fast** (won't serve stale/empty). 2. Promote managed-DB replica / restore latest backup. 3. Update `DATABASE_URL` (secret). 4. Restart app; verify. **RTO ≤60 min; RPO ≤15 min** (PITR).
+1. App readiness fails closed while liveness remains available. 2. Multi-AZ RDS
+promotes its synchronous standby and retains the endpoint hostname. 3. Existing
+connections are discarded and pools reconnect through refreshed DNS. 4. Verify
+the durable marker, `/api/ready`, writer Availability Zone and unchanged ECS
+task. If automatic recovery fails, stop writers and execute the isolated PITR
+restore procedure. **Target failover RTO ≤15 min; restore RTO ≤60 min; RPO ≤15
+min** (PITR).
 
 ### RB-3 — Data corruption / bad deploy
 1. Halt writes (scale to zero or maintenance mode). 2. PITR restore to timestamp before corruption. 3. Redeploy known-good artifact. 4. Validate audit log + sample records. 5. Resume.
@@ -156,7 +162,8 @@ Per TRD §10: health/uptime checks, error-rate and latency alerts, auth-failure-
 ## 12. Post-GA Improvements (continuity roadmap)
 
 - **Phase-2 relational DB → multi-instance** (removes the single-instance SPOF; enables rolling deploys and HA).
-- Externalize rate-limit/session/lockout state to a shared store (Redis/DB) for true horizontal scale.
+- Keep rate-limit, login-lockout, companion and signaling state on the shared
+  Multi-AZ Redis authority and rehearse failover regularly.
 - Circuit breaker around Gemini; automated quota backpressure.
 - Automated, alerting backup-restore verification.
 
