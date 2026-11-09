@@ -32,6 +32,19 @@ describe("AWS backup/restore verifier contract", () => {
   });
 
   it("limits destructive cleanup to tagged, run-scoped resources", () => {
+    expect(orchestrator).toContain("ExpectedAccountId");
+    expect(orchestrator).toContain("ExpectedSourceRevision");
+    expect(orchestrator).toContain("ConfirmRestoreDrill");
+    expect(orchestrator).toContain("restricted to an explicitly non-production stack");
+    expect(orchestrator).toContain("authenticated AWS account does not match ExpectedAccountId");
+    expect(orchestrator).toContain("requires a digest-pinned Nalanda container");
+    expect(orchestrator).toContain("task definition SOURCE_REVISION does not match ExpectedSourceRevision");
+    expect(orchestrator.indexOf("ConfirmRestoreDrill.IsPresent")).toBeLessThan(
+      orchestrator.indexOf("$outputs = Get-StackOutputs"),
+    );
+    expect(orchestrator.indexOf("The task definition SOURCE_REVISION does not match ExpectedSourceRevision")).toBeLessThan(
+      orchestrator.indexOf('"prepare", $runId, $sourceRevision'),
+    );
     expect(orchestrator).toContain("Assert-RunScopedIdentifier");
     expect(orchestrator).toContain("NalandaRestoreRun");
     expect(orchestrator).toContain("Refusing to delete an untagged restored database instance");

@@ -118,6 +118,21 @@ Do not use real learner/candidate PII or real payments in this staging stack.
 
 - Force-stop the ECS task and verify ECS replaces it and readiness recovers.
 - Confirm RDS automated backups and S3 versioning are enabled.
+- Run the guarded backup/restore drill against the exact staged revision:
+
+    ```powershell
+    .\infra\aws\verify-backup-restore.ps1 `
+      -Region ap-south-1 `
+      -StackName nalanda-staging `
+      -ExpectedAccountId <12-digit-staging-account-id> `
+      -ExpectedSourceRevision <40-character-git-revision> `
+      -ConfirmRestoreDrill `
+      -MaxRestoreMinutes 45
+    ```
+
+    Require encrypted snapshot/restore, private networking, restored marker
+    and schema validation, successful run-scoped cleanup and revision-bound
+    JSON evidence.
 - Confirm Redis and RDS have no public endpoint exposure.
 - Keep `AuthorityMode=snapshot` through schema preparation, backfill,
   reconciliation and relational/multi-task verification. Promote it to

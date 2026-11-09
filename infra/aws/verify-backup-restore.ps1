@@ -1,8 +1,11 @@
 param(
   [string]$Region = "ap-south-1",
   [string]$StackName = "nalanda-staging",
+  [Parameter(Mandatory = $true)][ValidatePattern('^\d{12}$')][string]$ExpectedAccountId,
+  [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedSourceRevision,
   [ValidateRange(5, 240)][int]$MaxRestoreMinutes = 45,
   [string]$EvidencePath = "",
+  [switch]$ConfirmRestoreDrill,
   [switch]$KeepFailedResources
 )
 
@@ -39,6 +42,16 @@ function Get-RequiredOutput([hashtable]$Outputs, [string]$Key) {
 function Assert-Condition([bool]$Condition, [string]$Message) {
   if (-not $Condition) { throw $Message }
 }
+
+Assert-Condition $ConfirmRestoreDrill.IsPresent `
+  "The backup/restore drill requires the explicit -ConfirmRestoreDrill switch."
+Assert-Condition ($StackName -match '(?i)(staging|stage|test|nonprod|dev)' `
+    -and $StackName -notmatch '(?i)(^|[-_])prod(uction)?($|[-_])') `
+  "The backup/restore drill is restricted to an explicitly non-production stack."
+
+$identity = Invoke-AwsJson @("sts", "get-caller-identity", "--region", $Region, "--output", "json")
+Assert-Condition ([string]$identity.Account -eq $ExpectedAccountId) `
+  "The authenticated AWS account does not match ExpectedAccountId."
 
 function Invoke-VerifierTask(
   [string[]]$Command,
@@ -124,6 +137,23 @@ $databaseSecurityGroup = Get-RequiredOutput $outputs "DatabaseSecurityGroupId"
 $subnets = Get-RequiredOutput $outputs "ApplicationSubnetIds"
 $applicationSecurityGroup = Get-RequiredOutput $outputs "ApplicationSecurityGroupId"
 if ($sourceRevision -notmatch '^[0-9a-f]{40}$') { throw "Stack source revision is invalid." }
+Assert-Condition ($sourceRevision -eq $ExpectedSourceRevision) `
+  "The stack source revision does not match ExpectedSourceRevision."
+
+$taskDefinitionEnvelope = Invoke-AwsJson @(
+  "ecs", "describe-task-definition", "--task-definition", $taskDefinition,
+  "--region", $Region, "--output", "json"
+)
+$taskContainer = @($taskDefinitionEnvelope.TaskDefinition.ContainerDefinitions | Where-Object { $_.Name -eq "nalanda" })[0]
+Assert-Condition ($null -ne $taskContainer -and [string]$taskContainer.Image -match '@sha256:[0-9a-f]{64}$') `
+  "The backup/restore drill requires a digest-pinned Nalanda container."
+$taskSourceRevisionEntry = @($taskContainer.Environment | Where-Object { $_.Name -eq "SOURCE_REVISION" })[0]
+Assert-Condition ($null -ne $taskSourceRevisionEntry) `
+  "The task definition does not expose SOURCE_REVISION."
+$taskSourceRevision = [string]$taskSourceRevisionEntry.Value
+Assert-Condition ($taskSourceRevision -eq $ExpectedSourceRevision) `
+  "The task definition SOURCE_REVISION does not match ExpectedSourceRevision."
+$containerImage = [string]$taskContainer.Image
 
 $network = "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$applicationSecurityGroup],assignPublicIp=DISABLED}"
 $runToken = ([guid]::NewGuid().ToString("N")).ToLowerInvariant()
@@ -253,10 +283,12 @@ $completedAt = (Get-Date).ToUniversalTime()
 $evidence = [ordered]@{
   schemaVersion = 1
   capturedAt = $completedAt.ToString("o")
+  accountId = [string]$identity.Account
   region = $Region
   stackName = $StackName
   sourceRevision = $sourceRevision
   taskDefinitionArn = $taskDefinition
+  containerImage = $containerImage
   sourceDatabaseIdentifier = $sourceDatabaseIdentifier
   snapshotIdentifier = $snapshotIdentifier
   restoredDatabaseIdentifier = $restoreIdentifier

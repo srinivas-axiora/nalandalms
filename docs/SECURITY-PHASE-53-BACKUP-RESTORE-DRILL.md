@@ -47,8 +47,15 @@ deployed and verified:
 .\infra\aws\verify-backup-restore.ps1 `
   -Region ap-south-1 `
   -StackName nalanda-staging `
+  -ExpectedAccountId <12-digit-staging-account-id> `
+  -ExpectedSourceRevision <40-character-git-revision> `
+  -ConfirmRestoreDrill `
   -MaxRestoreMinutes 45
 ```
+
+Phase 60 makes these account, revision, non-production-name, digest-pinned
+image and explicit-confirmation checks mandatory before the source marker or
+temporary RDS resources can be created.
 
 The operator identity needs scoped permission for CloudFormation output reads,
 ECS one-off tasks, RDS snapshot/restore/describe/delete, and the related wait
