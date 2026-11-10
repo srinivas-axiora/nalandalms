@@ -112,9 +112,15 @@ CREATE TABLE target_skills (
   user_id TEXT REFERENCES users(id),
   target_level TEXT NOT NULL DEFAULT 'Intermediate'
     CHECK (target_level IN ('Beginner', 'Intermediate', 'Advanced', 'Expert')),
-  target_score INTEGER NOT NULL DEFAULT 80 CHECK (target_score >= 0 AND target_score <= 100),
+  target_score INTEGER NOT NULL DEFAULT 80 CHECK (target_score >= 1 AND target_score <= 100),
   priority TEXT NOT NULL DEFAULT 'Medium' CHECK (priority IN ('Low', 'Medium', 'High')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (
+    (scope = 'Organization' AND department IS NULL AND designation IS NULL AND user_id IS NULL)
+    OR (scope = 'Department' AND department IS NOT NULL AND designation IS NULL AND user_id IS NULL)
+    OR (scope = 'Role' AND department IS NULL AND designation IS NOT NULL AND user_id IS NULL)
+    OR (scope = 'Employee' AND department IS NULL AND designation IS NULL AND user_id IS NOT NULL)
+  )
 );
 
 CREATE INDEX idx_target_skills_scope ON target_skills(scope, department);

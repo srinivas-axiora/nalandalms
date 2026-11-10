@@ -77,7 +77,7 @@ The normalized PostgreSQL schema is defined in `database/schema.sql` (department
 | Health/CSRF | `GET /api/health`, `GET /api/csrf-token` |
 | Auth | `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me` |
 | Users | `GET/POST /api/users`, `PATCH /api/users/:id`, `PATCH /api/users/:id/status`, `DELETE /api/users/:id`, `PATCH /api/users/me/preferences` |
-| Skills | `POST /api/skills`, `PATCH /api/skills/:id[/status]`, `POST /api/skills/targets`, `POST /api/target-skills` |
+| Skills | Canonical: `POST /api/skills`, `PATCH /api/skills/:id/status`, `POST /api/skills/targets`; deprecated aliases: `PATCH /api/skills/:id`, `POST /api/target-skills` |
 | Courses | `GET/POST /api/courses`, `PUT /api/courses/:id`, `POST /api/courses/:id/duplicate`, `PATCH /api/courses/:id/approval|status`, `DELETE /api/courses/:id` |
 | Chapters | `GET/POST /api/courses/:courseId/chapters`, `PUT /api/courses/:courseId/chapters/:chapterId`, progress/time endpoints |
 | Assessments | `GET/POST /api/assessments`, `PUT /api/assessments/:id`, `PATCH .../status|approval`, `DELETE /api/assessments/:id` |

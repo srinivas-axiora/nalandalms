@@ -82,6 +82,7 @@ backend/src/db/verify-archives.mjs                 live complete archive/restore
 database/migrations/0021_workplace_authority.sql   attendance/review/communication authority
 backend/src/repositories/workplace.repository.pg.js transactional workplace authority
 backend/src/db/verify-workplace.mjs                live concurrency/privacy-adjacent verifier
+database/migrations/0022_skill_governance_integrity.sql target-scope FKs/check constraints
 ```
 
 The **skills** bounded context is the pilot (like the certificates pilot for the
@@ -147,8 +148,10 @@ to wire it into the app (§5). If anything fails, tell me the output and I'll fi
 
 ## 5. Cutover for the skills module (after verification)
 
-The skills module currently mutates the in-memory `skills`/`targetSkills` arrays.
-To switch it to Postgres, change its handlers to call the repository — example:
+The skills module retains a development snapshot fallback but uses the
+relational competency repository whenever its production cutover is enabled.
+Phase 66 also validates active skill/scope authority and commits target plus
+audit atomically — example:
 
 ```js
 // backend/src/modules/skills/skills.routes.js  (illustrative)

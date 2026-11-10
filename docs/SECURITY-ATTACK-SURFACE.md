@@ -177,11 +177,11 @@ The runtime-data ignore is anchored to `/uploads/`, so source modules under an
 
 | Method | Route | Auth | State | CSRF | Step | Rate | Scope / concern |
 |---|---|---|---:|---|---:|---|---|
-| POST | `/api/skills` | A | Y | Y | N | G | Validated create |
-| PATCH | `/api/skills/:id/status` | A | Y | Y | N | G | No step-up |
-| POST | `/api/skills/targets` | A | Y | Y | N | G | Missing referenced entity validation |
-| PATCH | `/api/skills/:id` | A | Y | Y | N | G | Unvalidated `req.body.status` path |
-| POST | `/api/target-skills` | A | Y | Y | N | G | Duplicate target route/model |
+| POST | `/api/skills` | A | Y | Y | Y | G | Strict bounded create, case-insensitive name uniqueness and UUID-based ID; relational skill plus audit commit atomically |
+| PATCH | `/api/skills/:id/status` | A | Y | Y | Y | G | Strict Active/Inactive transition; relational status plus audit commit atomically |
+| POST | `/api/skills/targets` | A | Y | Y | Y | G | Exact scope fields, active skill/live scope reference, transactional target plus audit and database constraints |
+| PATCH | `/api/skills/:id` | A | Y | Y | Y | G | Deprecated compatibility alias to the canonical strict status handler |
+| POST | `/api/target-skills` | A | Y | Y | Y | G | Deprecated compatibility alias to the canonical strict target handler; no independent model |
 | POST | `/api/chapter-feedbacks` | Any | Y | Y | N | G | Phase-24 relational mode binds subject identity, matching chapter/course and active enrollment; feedback and audit commit atomically |
 | GET | `/api/analytics/global` | A | N | N/A | N | G | Phase-18 relational mode derives organization counts, progress, scores and performer ordering from PostgreSQL |
 | GET | `/api/analytics/team` | M | N | N/A | N | G | Phase-18 relational mode enforces direct-report scope in SQL and derives completion, skills and engagement |

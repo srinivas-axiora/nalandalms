@@ -174,6 +174,10 @@ mandatory staging gates, not assumed successes.
   application-data persistence, repairs signup/reset UI flows, and adds
   account-neutral SQS/SES password recovery with encrypted redrive, DLQ
   alerting, least-privilege IAM and readiness/deployment attestation.
+- Phase 66 makes skill-governance mutations step-up protected and strictly
+  validated, consolidates legacy aliases onto canonical handlers, validates
+  active skill/scope references, and adds transactional target/audit writes
+  plus PostgreSQL foreign-key and exact-scope constraints.
 - Execute the backup/restore, rollback, Redis and RDS failover gates, then
   execute the Phase-57 load/soak gate and complete privacy erasure, payment
   reconciliation and retention retry drills.

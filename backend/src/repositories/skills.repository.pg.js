@@ -76,6 +76,48 @@ export async function setSkillStatus(id, status) {
   return rows[0] ? mapSkill(rows[0]) : null;
 }
 
+export async function createSkill({ actor, skill }) {
+  try {
+    return await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `INSERT INTO skills (id, name, category, description, status, created_at)
+         VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, now()))
+         RETURNING *`,
+        [skill.id, skill.name, skill.category, skill.description ?? "", skill.status ?? "Active", skill.createdAt ?? null],
+      );
+      await client.query(
+        `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, metadata)
+         VALUES ($1, 'CREATE_SKILL', 'SKILL', $2, $3::jsonb)`,
+        [actor.id, rows[0].id, JSON.stringify({ category: rows[0].category })],
+      );
+      return mapSkill(rows[0]);
+    });
+  } catch (error) {
+    if (error?.code === "23505") {
+      const duplicate = new Error("Skill name already exists");
+      duplicate.code = "DUPLICATE_SKILL";
+      throw duplicate;
+    }
+    throw error;
+  }
+}
+
+export async function updateSkillStatus({ actor, id, status }) {
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      "UPDATE skills SET status = $2 WHERE id = $1 RETURNING *",
+      [id, status],
+    );
+    if (!rows[0]) return null;
+    await client.query(
+      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, 'SKILL_STATUS', 'SKILL', $2, $3::jsonb)`,
+      [actor.id, rows[0].id, JSON.stringify({ status })],
+    );
+    return mapSkill(rows[0]);
+  });
+}
+
 // ── Target Skills ──
 export async function listTargetSkills() {
   const { rows } = await query("SELECT * FROM target_skills ORDER BY created_at DESC, id");
@@ -95,6 +137,77 @@ export async function insertTargetSkill(target) {
     ]
   );
   return mapTarget(rows[0]);
+}
+
+export class SkillTargetRepositoryError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = "SkillTargetRepositoryError";
+    this.code = code;
+  }
+}
+
+const assertTargetAuthority = async (client, target) => {
+  const skill = await client.query(
+    "SELECT status FROM skills WHERE id = $1 FOR SHARE",
+    [target.skillId],
+  );
+  if (!skill.rows[0]) {
+    throw new SkillTargetRepositoryError("SKILL_NOT_FOUND", "Skill not found");
+  }
+  if (skill.rows[0].status !== "Active") {
+    throw new SkillTargetRepositoryError("SKILL_INACTIVE", "Target rules require an active skill");
+  }
+
+  if (target.scope === "Organization") return;
+
+  const referenceQueries = {
+    Department: {
+      sql: `SELECT 1 FROM users app_user
+            JOIN departments department ON department.id = app_user.department_id
+            WHERE department.name = $1 AND app_user.status = 'Active' LIMIT 1`,
+      value: target.department,
+    },
+    Role: {
+      sql: "SELECT 1 FROM users WHERE designation = $1 AND status = 'Active' LIMIT 1",
+      value: target.designation,
+    },
+    Employee: {
+      sql: "SELECT 1 FROM users WHERE id = $1 AND status = 'Active' LIMIT 1",
+      value: target.userId,
+    },
+  };
+  const reference = referenceQueries[target.scope];
+  const result = await client.query(reference.sql, [reference.value]);
+  if (!result.rows[0]) {
+    throw new SkillTargetRepositoryError(
+      "TARGET_SCOPE_NOT_FOUND",
+      `Active ${target.scope.toLowerCase()} target not found`,
+    );
+  }
+};
+
+export async function createTargetSkill({ actor, target }) {
+  return withTransaction(async (client) => {
+    await assertTargetAuthority(client, target);
+    const { rows } = await client.query(
+      `INSERT INTO target_skills
+         (id, skill_id, scope, department, designation, user_id, target_level, target_score, priority, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, now()))
+       RETURNING *`,
+      [
+        target.id, target.skillId, target.scope,
+        target.department ?? null, target.designation ?? null, target.userId ?? null,
+        target.targetLevel, target.targetScore, target.priority, target.createdAt ?? null,
+      ],
+    );
+    await client.query(
+      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, 'CREATE_TARGET_SKILL', 'TARGET_SKILL', $2, $3::jsonb)`,
+      [actor.id, rows[0].id, JSON.stringify({ skillId: target.skillId, scope: target.scope })],
+    );
+    return mapTarget(rows[0]);
+  });
 }
 
 const adminRole = (role) => role === "Admin" || role === "Super Admin";

@@ -73,8 +73,8 @@ date: "2026-06-22"
 
 ## 4. Module: Skills & Targets (SKL)
 
-- **FR-SKL-1 — Manage skills.** AD/SA create skills (name, category, description); names unique; activate/deactivate.
-- **FR-SKL-2 — Target skills.** AD/SA define a target competency (level + score + priority) scoped to **Organization / Department / Role / Employee**.
+- **FR-SKL-1 — Manage skills.** AD/SA create skills (name, category, description); names unique; activate/deactivate. Mutations require recent re-authentication and strict bounded input.
+- **FR-SKL-2 — Target skills.** AD/SA define a target competency (level + score + priority) scoped to **Organization / Department / Role / Employee**. Exactly one matching scope reference is required; the skill and referenced scope must be active/current, and the write is coupled to audit evidence.
 - **FR-SKL-3 — Skill ratings.** System maintains per-user skill scores updated from assessment outcomes (trend up/down/stable).
 
 ## 5. Module: Courses (CRS)
