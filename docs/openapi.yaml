@@ -22,6 +22,17 @@ components:
           type: string
           description: Login ID. Use "Super Admin" for the Super Admin account; all other users use their email address.
         password: { type: string }
+    ForgotPasswordRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email, maxLength: 320 }
+    ResetPasswordRequest:
+      type: object
+      required: [token, newPassword]
+      properties:
+        token: { type: string, minLength: 10 }
+        newPassword: { type: string, minLength: 8, maxLength: 128 }
     User:
       type: object
       properties:
@@ -98,6 +109,37 @@ paths:
             schema: { $ref: '#/components/schemas/LoginRequest' }
       responses:
         "200": { description: Authenticated }
+        "401": { description: Invalid credentials }
+        "429":
+          description: Source or source/identifier pair is throttled
+          headers:
+            Retry-After:
+              schema: { type: integer, minimum: 1 }
+  /auth/forgot-password:
+    post:
+      security: []
+      summary: Queue account-neutral password recovery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ForgotPasswordRequest' }
+      responses:
+        "200": { description: Generic response for existing and unknown accounts }
+        "429": { description: Source or source/address pair is throttled }
+        "503": { description: Durable reset queue is unavailable }
+  /auth/reset-password:
+    post:
+      security: []
+      summary: Consume a short-lived password-reset token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetPasswordRequest' }
+      responses:
+        "200": { description: Password changed and prior sessions revoked }
+        "400": { description: Invalid, expired or already-consumed token }
         "401": { description: Invalid credentials }
         "403": { description: Invalid CSRF token or account lockout }
   /auth/me:

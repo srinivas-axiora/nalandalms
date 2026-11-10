@@ -7,6 +7,8 @@ two-node Multi-AZ TLS-enabled ElastiCache Redis, private S3,
 Secrets Manager, ALB access logs, a regional AWS WAF and CloudWatch/SNS alarms
 encrypted with a rotating customer-managed KMS key. GuardDuty Malware
 Protection scans course media, chapter PDFs and proctoring objects.
+Password recovery uses an encrypted SQS queue, retry/DLQ alarm and SES rather
+than performing account lookup or email delivery in the public request path.
 
 `AuthorityMode` defaults to `snapshot`. The `normalized` value atomically
 enables every relational authority, exact course/privacy coverage
@@ -63,6 +65,8 @@ evidence that a single-AZ database cannot provide.
 - Docker Desktop able to build `linux/arm64` images.
 - Three existing Secrets Manager secrets containing the Razorpay key ID, key
   secret and webhook secret. Use test-mode Razorpay credentials in staging.
+- A verified SES sender identity in the deployment region and SES production
+  sending access; sandbox-only accounts fail the deployment gate.
 - Permission to create VPC, ECS, ECR, RDS, ElastiCache, CloudFront, S3, IAM,
   KMS, GuardDuty Malware Protection, EventBridge, Secrets Manager, WAF, SNS and
   CloudWatch resources, including permission to pass the generated scan role to
@@ -87,6 +91,7 @@ $env:AWS_PROFILE = "YOUR_PROFILE"
   -CloudFrontCertificateArn arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000 `
   -OriginDomainName origin.staging.example.com `
   -OriginCertificateArn arn:aws:acm:ap-south-1:123456789012:certificate/11111111-1111-1111-1111-111111111111 `
+  -PasswordResetFromEmail security@staging.example.com `
   -RazorpayKeyIdSecretArn arn:aws:secretsmanager:...:secret:razorpay-key-id `
   -RazorpayKeySecretArn arn:aws:secretsmanager:...:secret:razorpay-key-secret `
   -RazorpayWebhookSecretArn arn:aws:secretsmanager:...:secret:razorpay-webhook

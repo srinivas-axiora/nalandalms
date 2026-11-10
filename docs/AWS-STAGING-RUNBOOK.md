@@ -12,6 +12,8 @@ Target: production-shaped staging only
 - Create three Secrets Manager values containing Razorpay test-mode key ID, key
   secret and webhook secret. Never place their values in command history,
   CloudFormation parameters, source files or Terraform state.
+- Verify the password-reset sender identity in regional SES and obtain SES
+  production access. The deployment refuses sandbox-only or unverified email.
 - For a custom hostname, prepare a public Route 53 hosted zone and an already
   validated ACM certificate in `us-east-1` whose subject/SAN covers the exact
   hostname.
@@ -80,6 +82,7 @@ For a new staging database, prepare (but do not enable) the normalized tables:
   -CloudFrontCertificateArn $cloudFrontCertificateArn `
   -OriginDomainName $originDomainName `
   -OriginCertificateArn $originCertificateArn `
+  -PasswordResetFromEmail security@staging.example.com `
   -EvidencePath artifacts/aws/nalanda-staging-attestation.json `
   -RazorpayKeyIdSecretArn $keyIdArn `
   -RazorpayKeySecretArn $keySecretArn `
@@ -107,6 +110,9 @@ From a clean browser profile and the command line:
   security group.
 - Registering with a privileged role still creates a Learner.
 - Login, logout and pre-logout token replay behave as expected.
+- Request password recovery for existing and unknown addresses, confirm the
+  public responses are indistinguishable, and exercise SES delivery, token
+  expiry/replay and the SQS dead-letter alarm with synthetic staging accounts.
 - Cross-user course, assessment, proctoring and certificate requests return 403.
 - Expired assessment starts/submissions reject late answers.
 - Upload a synthetic PDF; anonymous and cross-user downloads fail, while the

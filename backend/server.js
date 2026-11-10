@@ -38,6 +38,8 @@ import { ensureRedisReady, redisHealth, closeRedis } from "./src/cache/redis.js"
 import { startRetentionDaemon } from "./src/workers/retention-cleanup.js";
 import { startPrivacyErasureDaemon } from "./src/workers/privacy-erasure.js";
 import { startReportExportDaemon } from "./src/workers/report-exports.js";
+import { startPasswordResetDeliveryDaemon } from "./src/workers/password-reset-delivery.js";
+import { passwordResetDeliveryHealth } from "./src/notifications/password-reset-delivery.js";
 import { registerGovernance } from "./src/modules/governance/governance.routes.js";
 import { registerSettings } from "./src/modules/settings/settings.routes.js";
 import { registerSkills } from "./src/modules/skills/skills.routes.js";
@@ -109,10 +111,15 @@ const AUDIT_TRANSACTIONAL_DEPENDENCIES = USE_RELATIONAL_PAYMENTS && USE_RELATION
   && USE_RELATIONAL_SETTINGS && USE_RELATIONAL_WORKPLACE;
 const ENABLE_PRIVACY_ERASURE_WORKER = process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1";
 const ENABLE_REPORT_EXPORT_WORKER = process.env.ENABLE_REPORT_EXPORT_WORKER === "1";
+const ENABLE_PASSWORD_RESET_WORKER = process.env.ENABLE_PASSWORD_RESET_WORKER === "1";
 const PRIVACY_COVERAGE_ACK = process.env.PRIVACY_COVERAGE_ACK === "normalized-v2";
 const COURSE_AUTHORITY_COVERAGE_ACK = courseAuthorityCoverageAcknowledged();
 
 const app = express();
+let passwordResetDelivery = {
+  ok: process.env.NODE_ENV !== "production",
+  mode: process.env.NODE_ENV === "production" ? "sqs-ses" : "disabled",
+};
 app.set("trust proxy", TRUST_PROXY);
 
 // ── Global middleware ──
@@ -512,7 +519,7 @@ app.get("/api/ready", async (_req, res) => {
     && attemptRuntime.ok && certificateAuthority.ok && candidateRuntime.ok && privacyAuthority.ok
     && reportAuthority.ok && settingsAuthority.ok && auditAuthority.ok && archiveAuthority.ok
     && workplaceAuthority.ok
-    && courseAuthority.ok;
+    && courseAuthority.ok && passwordResetDelivery.ok;
   if (!ok) logger.error("READINESS_CHECK_FAILED", {
     database, redis, objects, skills: skillsAuthority, payments, identity, attempts: attemptRuntime,
     certificates: certificateAuthority, candidateAssessments: candidateRuntime,
@@ -520,7 +527,7 @@ app.get("/api/ready", async (_req, res) => {
     audit: auditAuthority,
     archives: archiveAuthority,
     workplace: workplaceAuthority,
-    courses: courseAuthority, startupReady,
+    courses: courseAuthority, passwordResetDelivery, startupReady,
   });
   res.status(ok ? 200 : 503).json({
     ok,
@@ -558,6 +565,7 @@ app.get("/api/ready", async (_req, res) => {
         dependencies: workplaceAuthority.dependencies,
       },
       courses: courseAuthority,
+      passwordResetDelivery,
     },
   });
 });
@@ -696,6 +704,7 @@ let httpServer = null;
 let retentionTimer = null;
 let privacyErasureTimer = null;
 let reportExportTimer = null;
+let passwordResetWorker = null;
 
 const start = async () => {
   try {
@@ -710,12 +719,19 @@ const start = async () => {
     await ensureRedisReady();
     const objects = await objectStoreHealth();
     if (!objects.ok) throw new Error(`Object storage is unavailable: ${objects.error || objects.mode}`);
+    if (process.env.NODE_ENV === "production") {
+      passwordResetDelivery = await passwordResetDeliveryHealth();
+      if (!passwordResetDelivery.ok) throw new Error("Password reset queue or email delivery is unavailable");
+    }
     retentionTimer = startRetentionDaemon();
     if (USE_RELATIONAL_PRIVACY && ENABLE_PRIVACY_ERASURE_WORKER) {
       privacyErasureTimer = startPrivacyErasureDaemon();
     }
     if (USE_PG_COURSES && ENABLE_REPORT_EXPORT_WORKER) {
       reportExportTimer = startReportExportDaemon();
+    }
+    if (ENABLE_PASSWORD_RESET_WORKER) {
+      passwordResetWorker = startPasswordResetDeliveryDaemon();
     }
     startupReady = true;
   } catch (err) {
@@ -737,6 +753,7 @@ const shutdown = async (signal) => {
   if (retentionTimer) clearInterval(retentionTimer);
   if (privacyErasureTimer) clearInterval(privacyErasureTimer);
   if (reportExportTimer) clearInterval(reportExportTimer);
+  if (passwordResetWorker) passwordResetWorker.stop();
   try { await saveDb(); } catch (err) { console.error("[shutdown] final save failed:", err?.message || err); }
   try { await storage.close(); } catch { /* ignore */ }
   try { await closeRedis(); } catch { /* ignore */ }

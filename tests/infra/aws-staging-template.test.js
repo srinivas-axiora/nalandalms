@@ -102,6 +102,27 @@ describe("AWS staging release controls", () => {
     expect(deploymentScript).toContain("acm:us-east-1:");
   });
 
+  it("provides durable encrypted password-reset delivery with least privilege and alerting", () => {
+    expect(template).toContain("PasswordResetFromEmail:");
+    expect(template).toContain("PasswordResetQueue:");
+    expect(template).toContain("PasswordResetDeadLetterQueue:");
+    expect(template).toContain("KmsMasterKeyId: alias/aws/sqs");
+    expect(template).toContain("maxReceiveCount: 5");
+    expect(template).toContain("PasswordResetDeadLetterAlarm:");
+    expect(template).toContain("PolicyName: PasswordResetDelivery");
+    expect(template).toContain("Action: [sqs:SendMessage, sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]");
+    expect(template).toContain("Action: ses:SendEmail");
+    expect(template).toContain("Name: PASSWORD_RESET_QUEUE_URL");
+    expect(template).toContain("Name: PASSWORD_RESET_BASE_URL");
+    expect(template).toContain('Name: ENABLE_PASSWORD_RESET_WORKER, Value: "1"');
+    expect(deploymentScript).toContain("sesv2 get-email-identity");
+    expect(deploymentScript).toContain("ProductionAccessEnabled");
+    expect(deploymentScript).toContain('"PasswordResetFromEmail=$PasswordResetFromEmail"');
+    expect(verificationScript).toContain('Get-RequiredOutput $outputs "PasswordResetQueueUrl"');
+    expect(verificationScript).toContain('"sqs", "get-queue-attributes"');
+    expect(verificationScript).toContain("passwordResetEmailIdentityVerified = $true");
+  });
+
   it("encrypts the CloudFront-to-ALB hop only from a complete regional origin tuple", () => {
     expect(template).toContain("HasOriginTls: !And");
     expect(template).toContain("CompleteOriginTlsConfiguration:");

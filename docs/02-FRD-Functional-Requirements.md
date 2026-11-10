@@ -58,6 +58,8 @@ date: "2026-06-22"
   - AC: a token for a now-inactive/deleted user → 401 "Session revoked".
 - **FR-AUTH-5 — Logout.** Clears session and CSRF cookies.
 - **FR-AUTH-6 — Preferences.** A user can update own UI preferences (theme, font size, language, notifications, accessibility).
+- **FR-AUTH-7 — Password recovery.** Public requests return one generic response for existing and unknown addresses and are limited by source plus source/address pair. Production queues every valid request before identity lookup; a worker resolves active identity and delivers a 15-minute, single-use-through-session-version link through SES.
+  - AC: no token appears in an HTTP query or production API response; encrypted SQS redrives failures to an alarmed DLQ; unknown accounts are consumed without email; reset rotates the session version and invalidates all outstanding reset/session tokens.
 
 ## 3. Module: User & Org Management (USR)
 

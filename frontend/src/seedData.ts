@@ -157,7 +157,6 @@ export const seedData: AppData = {
   ],
   audit: [{ id: "AUD-001", actorId: "EMP-1001", action: "System initialized", entity: "SYSTEM", at: now() }],
   archive: [],
-  loginSecurity: {},
   sessionVersion: {},
   issuedCertificates: [],
 };

@@ -37,8 +37,8 @@ or step-up middleware disagrees with its declaration.
 | POST | `/api/auth/register` | Public | Y | Y | N | G + registration limiter | Strict schema ignores/rejects role input and assigns Learner only |
 | POST | `/api/auth/login` | Public | Y | Y | N | Redis-backed IP + source/identifier pair limits | Valid credentials are checked before pair throttling; no account-global lockout |
 | POST | `/api/auth/logout` | Any | Cookie | Y | N | G | Authenticated logout rotates session version and revokes the presented JWT |
-| POST | `/api/auth/forgot-password` | Public | Y | Y | N | G | No production delivery implementation shown |
-| POST | `/api/auth/reset-password` | Public token | Y | Y | N | G | Reset bumps session version |
+| POST | `/api/auth/forgot-password` | Public | Y | Y | N | G + Redis IP/pair budgets | Production queues every valid address before worker identity lookup; response is account-neutral |
+| POST | `/api/auth/reset-password` | Public token | Y | Y | N | G | Fragment-delivered 15-minute token; reset atomically bumps session version and prevents replay |
 | POST | `/api/auth/reauth` | Any | Cookie | Y | N | G | Issues 10-minute step-up token |
 | GET | `/api/auth/me` | Any | N | N/A | N | G | Session identity |
 | PATCH | `/api/users/me/preferences` | Any | Y | Y | N | G | Self-scoped |

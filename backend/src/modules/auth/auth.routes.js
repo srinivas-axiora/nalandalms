@@ -11,6 +11,7 @@ import {
   JWT_AUDIENCE,
   JWT_ISSUER,
   JWT_SECRET,
+  IS_PRODUCTION,
 } from "../../config.js";
 import { MAX_LOGIN_ATTEMPTS, LOCKOUT_MS, users, sessionVersions, now } from "../../core.js";
 import { signToken, signStepUpToken, audit, publicUser, securityEvent } from "../../domain.js";
@@ -19,6 +20,7 @@ import { identityRepository } from "../../repositories/identity.repository.pg.js
 import { clearLoginFailures, getLoginSecurity, recordLoginFailure } from "../../cache/redis.js";
 import { setProjectedSessionVersion, upsertIdentityProjection } from "../../identity-projection.js";
 import { relationalIdentityEnabled } from "../../runtime-modes.js";
+import { enqueuePasswordResetRequest } from "../../notifications/password-reset-delivery.js";
 
 const USE_RELATIONAL_IDENTITY = relationalIdentityEnabled();
 const DUMMY_PASSWORD_HASH = bcrypt.hashSync("nalanda-login-timing-sentinel", 10);
@@ -30,6 +32,13 @@ export function registerAuth(app) {
     .digest("hex");
   const registrationRateLimit = rateLimit({ windowMs: 60_000, max: 10, name: "auth-register" });
   const loginIpRateLimit = rateLimit({ windowMs: 60_000, max: 10, name: "auth-login-ip" });
+  const passwordResetIpRateLimit = rateLimit({ windowMs: 15 * 60_000, max: 5, name: "auth-reset-ip" });
+  const passwordResetPairRateLimit = rateLimit({
+    windowMs: 15 * 60_000,
+    max: 3,
+    name: "auth-reset-pair",
+    keyGenerator: (req) => `${req.ip || "anon"}|${throttleIdentity(req.body?.email || "missing")}`,
+  });
 
   // ── Public Self-Registration ──
   app.post("/api/auth/register", registrationRateLimit, async (req, res) => {
@@ -178,12 +187,28 @@ export function registerAuth(app) {
   });
 
   // ── Forgot Password Request ──
-  app.post("/api/auth/forgot-password", async (req, res) => {
-    const schema = z.object({ email: z.string().email() });
+  app.post("/api/auth/forgot-password", passwordResetIpRateLimit, passwordResetPairRateLimit, async (req, res) => {
+    const schema = z.object({ email: z.string().trim().email().max(320) });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     const normalizedEmail = parsed.data.email.trim().toLowerCase();
+    if (IS_PRODUCTION) {
+      try {
+        // Every syntactically valid request is queued before identity lookup.
+        // The worker resolves the account, keeping request timing independent
+        // of whether the address exists while making delivery durable.
+        await enqueuePasswordResetRequest(normalizedEmail);
+      } catch (error) {
+        securityEvent(req, "PASSWORD_RESET_QUEUE_FAILED", { errorCode: "QUEUE_UNAVAILABLE" });
+        return res.status(503).json({ error: "Password reset is temporarily unavailable. Please retry later." });
+      }
+      return res.json({
+        ok: true,
+        message: "If that email is registered, password reset instructions have been sent.",
+      });
+    }
+
     const candidate = USE_RELATIONAL_IDENTITY
       ? await identityRepository.findUserByIdentifier(normalizedEmail)
       : users.find((u) => u.email.toLowerCase() === normalizedEmail);
@@ -216,7 +241,7 @@ export function registerAuth(app) {
     return res.json({
       ok: true,
       message: "If that email is registered, password reset instructions have been sent.",
-      resetToken: process.env.NODE_ENV !== "production" ? resetToken : undefined,
+      resetToken,
     });
   });
 

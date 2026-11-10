@@ -142,6 +142,10 @@ The normalized PostgreSQL schema is defined in `database/schema.sql` (department
 | `JWT_SECRET` | session signing | required ≥32 chars in prod |
 | `JWT_ISSUER` / `JWT_AUDIENCE` | token namespace | defaults `nalanda-api` / `nalanda-web` |
 | `ALLOWED_ORIGINS` | CORS allow-list | comma-separated |
+| `PASSWORD_RESET_FROM_EMAIL` | SES-verified reset sender | required in production |
+| `PASSWORD_RESET_BASE_URL` | HTTPS application origin for fragment reset links | required in production; no query/fragment |
+| `PASSWORD_RESET_QUEUE_URL` | encrypted SQS delivery queue | required in production |
+| `ENABLE_PASSWORD_RESET_WORKER` | long-poll reset delivery worker | must be `1` in production |
 | `DATABASE_URL` | Postgres connection | enables durable DB mode |
 | `PGSSL` / `PGPOOL_MAX` | DB TLS / pool size | `require`/`no-verify`; default pool 10 |
 | `SEED_*_PASSWORD` | bootstrap account passwords | required in prod to access seeded accounts |

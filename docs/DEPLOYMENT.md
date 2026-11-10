@@ -12,6 +12,7 @@ Browser
        -> private Multi-AZ RDS PostgreSQL (current JSONB collection snapshot)
        -> private Multi-AZ TLS ElastiCache Redis (distributed request budgets)
        -> private encrypted S3 (uploaded objects)
+       -> encrypted SQS -> SES (durable password recovery delivery)
        -> Secrets Manager (runtime credentials)
        -> CloudWatch Logs / Container Insights
 ```
@@ -61,9 +62,12 @@ Production startup fails closed unless all of these are configured:
   deployment-specific `JWT_ISSUER` and `JWT_AUDIENCE` values.
 - Razorpay key ID, key secret and webhook secret.
 - An explicit `CERTIFICATE_ISSUANCE_APPROVAL_ROLE`.
+- `PASSWORD_RESET_FROM_EMAIL`, an HTTPS `PASSWORD_RESET_BASE_URL`, the encrypted
+  `PASSWORD_RESET_QUEUE_URL`, and `ENABLE_PASSWORD_RESET_WORKER=1`; SES must
+  have a verified sender and production sending access.
 
 `GET /api/health` is the process liveness probe. `GET /api/ready` verifies the
-database, Redis, object store and any enabled normalized payment/identity schema
+database, Redis, object store, password-reset queue/SES delivery and any enabled normalized payment/identity schema
 and returns 503 if a required dependency is unavailable.
 
 ## Container

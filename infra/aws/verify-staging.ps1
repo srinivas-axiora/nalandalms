@@ -97,6 +97,8 @@ $cacheReplicationGroupId = Get-RequiredOutput $outputs "CacheReplicationGroupId"
 $databaseIdentifier = Get-RequiredOutput $outputs "DatabaseIdentifier"
 $authorityMode = Get-RequiredOutput $outputs "AuthorityMode"
 $deployedSourceRevision = Get-RequiredOutput $outputs "SourceRevision"
+$passwordResetQueueUrl = Get-RequiredOutput $outputs "PasswordResetQueueUrl"
+$passwordResetDeadLetterQueueUrl = Get-RequiredOutput $outputs "PasswordResetDeadLetterQueueUrl"
 Assert-Condition ($deployedSourceRevision -eq $ExpectedSourceRevision) `
   "The stack source revision does not match the expected Git commit."
 
@@ -174,6 +176,39 @@ foreach ($workerFlag in @("ENABLE_PRIVACY_ERASURE_WORKER", "ENABLE_REPORT_EXPORT
   Assert-Condition ($taskEnvironment[$workerFlag] -eq $expectedRelationalFlag) `
     "Task environment $workerFlag is inconsistent with AuthorityMode=$authorityMode."
 }
+Assert-Condition ($taskEnvironment["ENABLE_PASSWORD_RESET_WORKER"] -eq "1") `
+  "Password reset delivery worker is not enabled."
+Assert-Condition ($taskEnvironment["PASSWORD_RESET_QUEUE_URL"] -eq $passwordResetQueueUrl) `
+  "Task password reset queue does not match the stack output."
+Assert-Condition ($taskEnvironment["PASSWORD_RESET_BASE_URL"] -eq $applicationUrl) `
+  "Password reset links are not bound to the deployed application URL."
+Assert-Condition ($taskEnvironment["PASSWORD_RESET_FROM_EMAIL"] -match '^[^\s@]+@[^\s@]+\.[^\s@]+$') `
+  "Password reset sender is missing or invalid."
+
+$passwordResetQueue = Invoke-AwsJson @(
+  "sqs", "get-queue-attributes", "--queue-url", $passwordResetQueueUrl,
+  "--attribute-names", "QueueArn", "KmsMasterKeyId", "RedrivePolicy"
+)
+Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$passwordResetQueue.Attributes.QueueArn)) `
+  "Password reset queue ARN is missing."
+Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$passwordResetQueue.Attributes.KmsMasterKeyId)) `
+  "Password reset queue is not KMS encrypted."
+Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$passwordResetQueue.Attributes.RedrivePolicy)) `
+  "Password reset queue has no dead-letter redrive policy."
+$passwordResetDeadLetterQueue = Invoke-AwsJson @(
+  "sqs", "get-queue-attributes", "--queue-url", $passwordResetDeadLetterQueueUrl,
+  "--attribute-names", "QueueArn", "KmsMasterKeyId"
+)
+Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$passwordResetDeadLetterQueue.Attributes.KmsMasterKeyId)) `
+  "Password reset dead-letter queue is not KMS encrypted."
+$passwordResetEmailIdentity = Invoke-AwsJson @(
+  "sesv2", "get-email-identity", "--email-identity", $taskEnvironment["PASSWORD_RESET_FROM_EMAIL"]
+)
+Assert-Condition ([string]$passwordResetEmailIdentity.VerificationStatus -eq "SUCCESS") `
+  "Password reset SES sender identity is not verified."
+$sesAccount = Invoke-AwsJson @("sesv2", "get-account")
+Assert-Condition ([bool]$sesAccount.SendingEnabled -and [bool]$sesAccount.ProductionAccessEnabled) `
+  "SES sending or production access is not enabled."
 
 $serviceEnvelope = Invoke-AwsJson @("ecs", "describe-services", "--cluster", $clusterName, "--services", $serviceName)
 $service = @($serviceEnvelope.services)[0]
@@ -410,6 +445,11 @@ $evidence = [ordered]@{
     endToEndTlsRequired = [bool]$RequireEndToEndTls
     endToEndTlsVerified = [bool]$originTlsEnabled
     regionalWebAclArn = [string]$webAclEnvelope.WebACL.ARN
+    passwordResetQueueArn = [string]$passwordResetQueue.Attributes.QueueArn
+    passwordResetQueueEncrypted = $true
+    passwordResetDeadLetterQueueArn = [string]$passwordResetDeadLetterQueue.Attributes.QueueArn
+    passwordResetEmailIdentityVerified = $true
+    sesProductionAccess = $true
   }
   runtimeAuthority = [ordered]@{
     mode = $authorityMode
@@ -418,6 +458,7 @@ $evidence = [ordered]@{
     privacyCoverage = $expectedPrivacyCoverage
     privacyWorkerEnabled = $taskEnvironment["ENABLE_PRIVACY_ERASURE_WORKER"]
     reportWorkerEnabled = $taskEnvironment["ENABLE_REPORT_EXPORT_WORKER"]
+    passwordResetWorkerEnabled = $taskEnvironment["ENABLE_PASSWORD_RESET_WORKER"]
   }
   supplyChain = [ordered]@{
     sourceRevision = $ExpectedSourceRevision

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { cn, Avatar, ToastNotification } from "./components";
 import { navByRole, now } from "./types";
-import type { AppData, ModuleKey, User, LoginSecurity } from "./types";
+import type { AppData, ModuleKey, User } from "./types";
 import { seedData } from "./seedData";
 import { setToastHandler } from "./toast";
 import { apiFetch } from "./api";
@@ -23,6 +23,7 @@ import Evaluation from "./pages/Evaluation";
 import Archive from "./pages/Archive";
 import TextToCourseAgent from "./pages/TextToCourseAgent";
 import AICopilot from "./components/AICopilot";
+import { readAppState, writeAppState } from "./app-state-storage";
 
 type AuthenticatedUser = Partial<User> & Pick<User, "id"> & { sessionVersion?: number; sv?: number };
 
@@ -54,9 +55,11 @@ function ModuleGlyph({ icon, active }: { icon: string; active: boolean }) {
 
 function useLocalState<T>(key: string, init: T) {
   const [val, setVal] = useState<T>(() => {
-    try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : init; } catch { return init; }
+    try { return readAppState(localStorage, key, init, import.meta.env.DEV); } catch { return init; }
   });
-  useEffect(() => { localStorage.setItem(key, JSON.stringify(val)); }, [key, val]);
+  useEffect(() => {
+    try { writeAppState(localStorage, key, val, import.meta.env.DEV); } catch {}
+  }, [key, val]);
   return [val, setVal] as const;
 }
 
@@ -73,7 +76,6 @@ const emptyAppData: AppData = {
   skillRatings: [],
   audit: [],
   archive: [],
-  loginSecurity: {},
   sessionVersion: {},
   issuedCertificates: [],
 };
@@ -164,7 +166,6 @@ function normalizeData(data: AppData): AppData {
       timeSpentSeconds: attempt.timeSpentSeconds ?? (attempt.submittedAt ? Math.max(0, Math.round((new Date(attempt.submittedAt).getTime() - new Date(attempt.startedAt).getTime()) / 1000)) : 0),
     })),
     archive: data?.archive || (data as any)?.archives || [],
-    loginSecurity: data?.loginSecurity || {},
     sessionVersion: data?.sessionVersion || {},
     issuedCertificates: data?.issuedCertificates || [],
     audit: data?.audit || (data as any)?.auditLogs || [],
@@ -172,6 +173,7 @@ function normalizeData(data: AppData): AppData {
 }
 
 export default function App() {
+  const passwordResetFlowRequested = window.location.hash.startsWith("#reset-password?");
   const [rawData, setDataState] = useLocalState<AppData>("nalanda-v3", import.meta.env.DEV ? seedData : emptyAppData);
   const data = normalizeData(rawData);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -236,6 +238,14 @@ export default function App() {
       requestAnimationFrame(() => setToastMsg(msg));
     });
 
+    if (passwordResetFlowRequested) {
+      setSessionId(null);
+      setSessionVersion(null);
+      if (!import.meta.env.DEV) setDataState(emptyAppData);
+      setIsInitializing(false);
+      return;
+    }
+
     // Check existing session
     apiFetch("/auth/me")
       .then((res) => {
@@ -251,9 +261,10 @@ export default function App() {
       .catch(() => {
         setSessionId(null);
         setSessionVersion(null);
+        if (!import.meta.env.DEV) setDataState(emptyAppData);
       })
       .finally(() => setIsInitializing(false));
-  }, [syncAuthenticatedUser, loadBackendData]);
+  }, [syncAuthenticatedUser, loadBackendData, passwordResetFlowRequested, setDataState]);
 
   const currentUser = data.users.find((u) => u.id === sessionId && u.status === "Active") || null;
   const setData = (next: AppData) => setDataState(next);
@@ -275,17 +286,12 @@ export default function App() {
     } catch (e) {}
     setSessionId(null);
     setSessionVersion(null);
+    setDataState(import.meta.env.DEV ? seedData : emptyAppData);
+    try { localStorage.removeItem("nalanda-v3"); } catch {}
     if (reason) setToastMsg(reason);
-  }, [setSessionId, setSessionVersion]);
+  }, [setDataState]);
 
   const resetDemo = () => { setDataState(seedData); setSessionId(null); setSessionVersion(null); };
-
-  const handleUpdateSecurity = useCallback((next: Record<string, LoginSecurity>) => {
-    setDataState((prev) => {
-      const normalized = normalizeData(prev);
-      return { ...normalized, loginSecurity: next };
-    });
-  }, [setDataState]);
 
   // Periodic session validation — every 5 seconds
   useEffect(() => {
@@ -331,7 +337,7 @@ export default function App() {
     return <div className="flex min-h-screen items-center justify-center bg-slate-950 text-white font-semibold">Loading Nalanda...</div>;
   }
 
-  if (!currentUser) return <Login users={data.users} data={data} onLogin={signIn} onUpdateSecurity={handleUpdateSecurity} />;
+  if (!currentUser || passwordResetFlowRequested) return <Login users={data.users} onLogin={signIn} />;
 
   const nav = navByRole[currentUser.role];
 

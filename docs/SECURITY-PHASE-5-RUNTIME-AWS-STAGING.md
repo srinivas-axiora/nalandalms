@@ -170,6 +170,10 @@ mandatory staging gates, not assumed successes.
   state is Redis-backed per source/identifier pair, valid credentials recover
   before pair enforcement, and unknown identities traverse the same bcrypt
   path without exposing counters or lock timestamps.
+- Phase 65 removes browser-authoritative authentication state and production
+  application-data persistence, repairs signup/reset UI flows, and adds
+  account-neutral SQS/SES password recovery with encrypted redrive, DLQ
+  alerting, least-privilege IAM and readiness/deployment attestation.
 - Execute the backup/restore, rollback, Redis and RDS failover gates, then
   execute the Phase-57 load/soak gate and complete privacy erasure, payment
   reconciliation and retention retry drills.

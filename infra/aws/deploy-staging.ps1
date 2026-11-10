@@ -21,6 +21,7 @@ param(
   [string]$PromotionEvidencePath = "",
   [Parameter(Mandatory = $true)][ValidatePattern('^\d{12}$')][string]$ExpectedAccountId,
   [switch]$ConfirmStagingDeployment,
+  [Parameter(Mandatory = $true)][ValidatePattern('^[^\s@]+@[^\s@]+\.[^\s@]+$')][string]$PasswordResetFromEmail,
   [Parameter(Mandatory = $true)][string]$RazorpayKeyIdSecretArn,
   [Parameter(Mandatory = $true)][string]$RazorpayKeySecretArn,
   [Parameter(Mandatory = $true)][string]$RazorpayWebhookSecretArn
@@ -99,6 +100,18 @@ if ([string]$identity.Account -ne $ExpectedAccountId) {
   throw "The authenticated AWS account does not match ExpectedAccountId."
 }
 
+$sesIdentity = aws sesv2 get-email-identity `
+  --email-identity $PasswordResetFromEmail `
+  --region $Region `
+  --output json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or $sesIdentity.VerificationStatus -ne "SUCCESS") {
+  throw "PasswordResetFromEmail must be a verified SES identity in the deployment region."
+}
+$sesAccount = aws sesv2 get-account --region $Region --output json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $sesAccount.SendingEnabled -or -not $sesAccount.ProductionAccessEnabled) {
+  throw "SES sending and production access must be enabled before staging deployment."
+}
+
 Write-Host "Validating CloudFormation template with AWS..."
 aws cloudformation validate-template `
   --template-body file://infra/aws/staging.yml `
@@ -164,6 +177,7 @@ $parameterOverrides = @(
   "RazorpayKeyIdSecretArn=$RazorpayKeyIdSecretArn",
   "RazorpayKeySecretArn=$RazorpayKeySecretArn",
   "RazorpayWebhookSecretArn=$RazorpayWebhookSecretArn",
+  "PasswordResetFromEmail=$PasswordResetFromEmail",
   "WafRateLimit=$WafRateLimit"
 )
 if ($AlertEmail) { $parameterOverrides += "AlertEmail=$AlertEmail" }

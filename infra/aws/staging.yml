@@ -27,6 +27,10 @@ Parameters:
     Type: String
   RazorpayWebhookSecretArn:
     Type: String
+  PasswordResetFromEmail:
+    Type: String
+    AllowedPattern: '^[^\s@]+@[^\s@]+\.[^\s@]+$'
+    Description: Existing SES-verified sender identity in the deployment region
   AlertEmail:
     Type: String
     Default: ""
@@ -760,6 +764,45 @@ Resources:
               ArnLike:
                 aws:SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${EnvironmentName}-malware-*
 
+  PasswordResetDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${EnvironmentName}-password-reset-dlq
+      KmsMasterKeyId: alias/aws/sqs
+      MessageRetentionPeriod: 1209600
+
+  PasswordResetQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${EnvironmentName}-password-reset
+      KmsMasterKeyId: alias/aws/sqs
+      MessageRetentionPeriod: 86400
+      ReceiveMessageWaitTimeSeconds: 20
+      VisibilityTimeout: 60
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt PasswordResetDeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  PasswordResetDeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-password-reset-dlq-visible
+      AlarmDescription: Password reset delivery messages exhausted their retry budget
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt PasswordResetDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+      OKActions: [!Ref AlertTopic]
+
   MalwareScanResultAlert:
     Type: AWS::Events::Rule
     DependsOn: AlertTopicPolicy
@@ -867,6 +910,19 @@ Resources:
                   - !Sub ${MediaBucket.Arn}/proctoring/*
                   - !Sub ${MediaBucket.Arn}/reports/*
                   - !Sub ${MediaBucket.Arn}/verification/*
+        - PolicyName: PasswordResetDelivery
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [sqs:SendMessage, sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
+                Resource: !GetAtt PasswordResetQueue.Arn
+              - Effect: Allow
+                Action: ses:SendEmail
+                Resource: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${PasswordResetFromEmail}
+              - Effect: Allow
+                Action: ses:GetAccount
+                Resource: "*"
 
   Cluster:
     Type: AWS::ECS::Cluster
@@ -927,11 +983,19 @@ Resources:
             - { Name: USE_PG_AUDIT, Value: !If [NormalizedAuthorityEnabled, "1", "0"] }
             - { Name: ENABLE_PRIVACY_ERASURE_WORKER, Value: !If [NormalizedAuthorityEnabled, "1", "0"] }
             - { Name: ENABLE_REPORT_EXPORT_WORKER, Value: !If [NormalizedAuthorityEnabled, "1", "0"] }
+            - { Name: ENABLE_PASSWORD_RESET_WORKER, Value: "1" }
             - { Name: PRIVACY_COVERAGE_ACK, Value: !If [NormalizedAuthorityEnabled, normalized-v2, ""] }
             - { Name: APP_TIME_ZONE, Value: Asia/Kolkata }
             - { Name: REDIS_URL, Value: !Sub "rediss://${Cache.PrimaryEndPoint.Address}:${Cache.PrimaryEndPoint.Port}" }
             - { Name: S3_BUCKET, Value: !Ref MediaBucket }
             - { Name: S3_REGION, Value: !Ref AWS::Region }
+            - { Name: PASSWORD_RESET_FROM_EMAIL, Value: !Ref PasswordResetFromEmail }
+            - { Name: PASSWORD_RESET_QUEUE_URL, Value: !Ref PasswordResetQueue }
+            - Name: PASSWORD_RESET_BASE_URL
+              Value: !If
+                - HasCustomDomain
+                - !Sub https://${CustomDomainName}
+                - !Sub https://${Distribution.DomainName}
             - { Name: CERTIFICATE_ISSUANCE_APPROVAL_ROLE, Value: Admin }
             - { Name: PROCTORING_RETENTION_DAYS, Value: "90" }
           Secrets:
@@ -1429,6 +1493,10 @@ Outputs:
     Value: !Ref AccessLogBucket
   AlertTopicArn:
     Value: !Ref AlertTopic
+  PasswordResetQueueUrl:
+    Value: !Ref PasswordResetQueue
+  PasswordResetDeadLetterQueueUrl:
+    Value: !Ref PasswordResetDeadLetterQueue
   RegionalWebAclArn:
     Value: !GetAtt RegionalWebAcl.Arn
   MalwareProtectionPlanArn:

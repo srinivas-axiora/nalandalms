@@ -41,6 +41,22 @@ loadLocalEnv();
 export const IS_PRODUCTION = process.env.NODE_ENV === "production";
 export const PORT = process.env.PORT || 8080;
 
+const passwordResetEmailSchema = z.string().trim().email().max(320);
+const validatePasswordResetBaseUrl = (value) => {
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+    throw new Error("PASSWORD_RESET_BASE_URL must be an HTTPS URL without credentials, query or fragment");
+  }
+  return url.toString().replace(/\/$/, "");
+};
+const validatePasswordResetQueueUrl = (value) => {
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+    throw new Error("PASSWORD_RESET_QUEUE_URL must be an HTTPS URL without credentials, query or fragment");
+  }
+  return url.toString();
+};
+
 if (IS_PRODUCTION && !process.env.DATABASE_URL && !process.env.PGHOST) {
   console.error("FATAL: DATABASE_URL or PGHOST is required in production. Refusing to use local JSON-file persistence.");
   process.exit(1);
@@ -55,6 +71,9 @@ if (IS_PRODUCTION) {
     "RAZORPAY_KEY_SECRET",
     "RAZORPAY_WEBHOOK_SECRET",
     "CERTIFICATE_ISSUANCE_APPROVAL_ROLE",
+    "PASSWORD_RESET_FROM_EMAIL",
+    "PASSWORD_RESET_BASE_URL",
+    "PASSWORD_RESET_QUEUE_URL",
   ];
   const missing = required.filter((name) => !String(process.env[name] || "").trim());
   if (missing.length) {
@@ -63,6 +82,18 @@ if (IS_PRODUCTION) {
   }
   if (process.env.PGSSL !== "require") {
     console.error("FATAL: PGSSL=require is mandatory in production.");
+    process.exit(1);
+  }
+  try {
+    passwordResetEmailSchema.parse(process.env.PASSWORD_RESET_FROM_EMAIL);
+    validatePasswordResetBaseUrl(process.env.PASSWORD_RESET_BASE_URL);
+    validatePasswordResetQueueUrl(process.env.PASSWORD_RESET_QUEUE_URL);
+  } catch (error) {
+    console.error(`FATAL: invalid password-reset delivery configuration: ${error?.message || error}`);
+    process.exit(1);
+  }
+  if (process.env.ENABLE_PASSWORD_RESET_WORKER !== "1") {
+    console.error("FATAL: ENABLE_PASSWORD_RESET_WORKER=1 is mandatory in production.");
     process.exit(1);
   }
   if (process.env.ENABLE_PRIVACY_ERASURE_WORKER === "1"
@@ -166,6 +197,15 @@ export const PAYMENT_ORDER_TTL_SECONDS = paymentOrderTtlSchema.parse(
 export const getRazorpayKeyId = () => String(process.env.RAZORPAY_KEY_ID || "").trim();
 export const getRazorpayKeySecret = () => String(process.env.RAZORPAY_KEY_SECRET || "").trim();
 export const getRazorpayWebhookSecret = () => String(process.env.RAZORPAY_WEBHOOK_SECRET || "").trim();
+export const getPasswordResetFromEmail = () => passwordResetEmailSchema.parse(
+  String(process.env.PASSWORD_RESET_FROM_EMAIL || "").trim()
+);
+export const getPasswordResetBaseUrl = () => validatePasswordResetBaseUrl(
+  String(process.env.PASSWORD_RESET_BASE_URL || "").trim()
+);
+export const getPasswordResetQueueUrl = () => validatePasswordResetQueueUrl(
+  String(process.env.PASSWORD_RESET_QUEUE_URL || "").trim()
+);
 
 export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 export const getGeminiApiKey = () => {

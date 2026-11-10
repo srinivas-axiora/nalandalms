@@ -6,12 +6,6 @@ export type Approval = "Approved" | "Pending" | "Rejected";
 export type AssessmentType = "MCQ" | "Descriptive" | "Mixed";
 export type SkillLevel = "Beginner" | "Intermediate" | "Advanced" | "Expert";
 
-export type LoginSecurity = {
-  failedAttempts: number;
-  lockedUntil: string | null;
-  lastFailedAt: string | null;
-};
-
 export type User = {
   id: string;
   name: string;
@@ -340,7 +334,6 @@ export type AppData = {
   skillRatings: SkillRating[];
   audit: Audit[];
   archive: ArchivedRecord[];
-  loginSecurity: Record<string, LoginSecurity>;
   sessionVersion: Record<string, number>;
   issuedCertificates: IssuedCertificate[];
 };
