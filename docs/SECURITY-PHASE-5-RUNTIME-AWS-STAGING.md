@@ -187,6 +187,8 @@ mandatory staging gates, not assumed successes.
 - Phase 69 replaces the monolithic frontend bundle with route-level lazy
   loading and makes a 500 KiB per-chunk budget a fail-closed production build
   gate.
+- Phase 70 closes snapshot/relational authorization parity for course
+  duplication; Managers can clone only their own source courses.
 - Execute the backup/restore, rollback, Redis and RDS failover gates, then
   execute the Phase-57 load/soak gate and complete privacy erasure, payment
   reconciliation and retention retry drills.

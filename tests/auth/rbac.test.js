@@ -107,6 +107,17 @@ describe("Nalanda LMS — Security & RBAC Test Suite", () => {
       expect(res.status).toBe(403);
     });
 
+    it("Manager cannot duplicate another owner's course", async () => {
+      const { token, cookie } = await getCsrfPair();
+      const res = await request(app)
+        .post("/api/courses/CRS-001/duplicate")
+        .set("Cookie", `${cookie}; ${authCookieFor(testUsers.manager)}`)
+        .set("x-csrf-token", token)
+        .send({});
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe("Forbidden");
+    });
+
     it("Employee cannot delete an assessment (DELETE /api/assessments/:id)", async () => {
       const { token, cookie } = await getCsrfPair();
       const res = await request(app)

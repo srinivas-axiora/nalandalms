@@ -248,6 +248,7 @@ export function registerCourses(app) {
   app.post("/api/courses/:id/duplicate", authenticate, requireRole("Admin", "Manager"), (req, res) => {
     const source = courses.find((item) => item.id === req.params.id);
     if (!source) return res.status(404).json({ error: "Course not found" });
+    if (!canManageCourse(req.user, source)) return res.status(403).json({ error: "Forbidden" });
     const copyId = nextCourseId(source.skill);
     const prerequisitePolicy = validateCoursePrerequisites({
       courseId: copyId,
