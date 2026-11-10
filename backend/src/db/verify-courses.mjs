@@ -138,8 +138,99 @@ try {
         && Number(evidence.rows[0].audits) >= 1
     );
 
-    await client.query("DELETE FROM deleted_archives WHERE entity_type = 'Course' AND entity_id = $1", [courseId]);
-    await client.query("DELETE FROM audit_logs WHERE entity_type = 'COURSE' AND entity_id = $1", [courseId]);
+    // Verify Phase 68 prerequisite graph invariants on relational authority
+    const prereqCourseId = `VERIFY-PREREQ-${suffix}`;
+    await repository.createCourse({
+      actor: owner,
+      course: {
+        id: prereqCourseId,
+        title: "Prerequisite verification course",
+        description: "Synthetic prerequisite course",
+        skill: "Security",
+        priceCents: 0,
+        currency: "INR",
+        contentTypes: ["Rich Text"],
+      },
+    });
+    await repository.reviewCourse({
+      id: prereqCourseId,
+      actor: admin,
+      expectedVersion: 1,
+      approval: "Approved",
+      reason: "Prerequisite course publishing review",
+    });
+
+    const dependentCourseId = `VERIFY-DEP-${suffix}`;
+    await repository.createCourse({
+      actor: owner,
+      course: {
+        id: dependentCourseId,
+        title: "Dependent verification course",
+        description: "Synthetic dependent course",
+        skill: "Security",
+        priceCents: 0,
+        currency: "INR",
+        contentTypes: ["Rich Text"],
+        prerequisites: [prereqCourseId],
+      },
+    });
+    await repository.reviewCourse({
+      id: dependentCourseId,
+      actor: admin,
+      expectedVersion: 1,
+      approval: "Approved",
+      reason: "Dependent course publishing review",
+    });
+    ok("prerequisite graph permits valid prerequisite binding", true);
+
+    await assert.rejects(
+      repository.updateCourse({
+        id: prereqCourseId,
+        actor: owner,
+        expectedVersion: 2,
+        updates: { prerequisites: [dependentCourseId] },
+      }),
+      (error) => error?.code === "COURSE_PREREQUISITE_CYCLE"
+    );
+    checks.push("prerequisite cycle is rejected by graph authority");
+
+    await assert.rejects(
+      repository.archiveAndDelete({
+        id: prereqCourseId,
+        actor: owner,
+        expectedVersion: 2,
+        deletionComment: "Attempt to delete in-use prerequisite",
+      }),
+      (error) => error?.code === "COURSE_PREREQUISITE_IN_USE"
+    );
+    checks.push("in-use prerequisite cannot be deleted");
+
+    await assert.rejects(
+      repository.updateCourse({
+        id: prereqCourseId,
+        actor: owner,
+        expectedVersion: 2,
+        updates: { title: "Attempt to unapprove live prerequisite" },
+      }),
+      (error) => error?.code === "COURSE_PREREQUISITE_IN_USE"
+    );
+    checks.push("in-use prerequisite cannot be unapproved");
+
+    await repository.archiveAndDelete({
+      id: dependentCourseId,
+      actor: owner,
+      expectedVersion: 2,
+      deletionComment: "Cleanup dependent course",
+    });
+    await repository.archiveAndDelete({
+      id: prereqCourseId,
+      actor: owner,
+      expectedVersion: 2,
+      deletionComment: "Cleanup prerequisite course",
+    });
+
+    await client.query("DELETE FROM deleted_archives WHERE entity_type = 'Course' AND entity_id = ANY($1::text[])", [[courseId, prereqCourseId, dependentCourseId]]);
+    await client.query("DELETE FROM audit_logs WHERE entity_type = 'COURSE' AND entity_id = ANY($1::text[])", [[courseId, prereqCourseId, dependentCourseId]]);
     await client.query("DELETE FROM users WHERE id = ANY($1::text[])", [[learnerId, ownerId, adminId]]);
   });
 

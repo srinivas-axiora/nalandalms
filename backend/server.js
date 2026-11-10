@@ -581,22 +581,22 @@ app.get("/api/csrf-token", (req, res) => {
   res.json({ csrfToken: token });
 });
 
-app.get("/api/app-data", authenticate, async (req, res) => {
-  const admin = isAdmin(req.user.role);
-  const superAdmin = req.user.role === "Super Admin";
+const buildAppDataProjection = async (user, { bootstrap = false } = {}) => {
+  const admin = isAdmin(user.role);
+  const superAdmin = user.role === "Super Admin";
   const authoritativeVisibleUsers = USE_RELATIONAL_IDENTITY
     ? (admin
         ? await identityRepository.listUsers({ status: "All" })
-        : req.user.role === "Manager"
-          ? await identityRepository.listUsers({ managerId: req.user.id, status: "Active" })
-          : [await identityRepository.findUserById(req.user.id)].filter(Boolean))
-    : users.filter((user) => visibleUserIdsFor(req.user).includes(user.id));
-  const visibleUserIds = new Set(authoritativeVisibleUsers.map((user) => user.id));
+        : user.role === "Manager"
+          ? await identityRepository.listUsers({ managerId: user.id, status: "Active" })
+          : [await identityRepository.findUserById(user.id)].filter(Boolean))
+    : users.filter((candidate) => visibleUserIdsFor(user).includes(candidate.id));
+  const visibleUserIds = new Set(authoritativeVisibleUsers.map((candidate) => candidate.id));
   const allSkills = USE_RELATIONAL_SKILLS ? await skillsRepo.listSkills() : skills;
   const allTargetSkills = USE_RELATIONAL_SKILLS ? await skillsRepo.listTargetSkills() : targetSkills;
   const visibleCourses = USE_PG_COURSES
-    ? await courseAuthorityRepository.listVisible({ actor: req.user, status: "Active" })
-    : coursesVisibleTo(req.user);
+    ? await courseAuthorityRepository.listVisible({ actor: user, status: "Active" })
+    : coursesVisibleTo(user);
   const visibleCourseIds = new Set(visibleCourses.map((course) => course.id));
   const authoritativeAssignments = USE_PG_COURSES
     ? await enrollmentsRepo.listEnrollments()
@@ -604,35 +604,13 @@ app.get("/api/app-data", authenticate, async (req, res) => {
   const scopedAssignments = authoritativeAssignments.filter((assignment) =>
     visibleUserIds.has(assignment.userId) && (admin || visibleCourseIds.has(assignment.courseId)));
   const authoritativeAttempts = USE_RELATIONAL_ATTEMPTS ? await attemptsRepository.list() : attempts;
-  const authoritativeProctoring = USE_RELATIONAL_ATTEMPTS
-    ? await attemptsRepository.listProctorEvents(admin ? {} : { userIds: [...visibleUserIds] })
-    : proctoringLogs;
   const scopedAttempts = authoritativeAttempts.filter((attempt) => admin || visibleUserIds.has(attempt.userId));
-  const scopedProctoring = authoritativeProctoring.filter((event) => admin || visibleUserIds.has(event.userId));
-  const scopedReports = USE_PG_COURSES && (admin || req.user.role === "Manager")
-    ? await reportsRepository.listAccessible({ actor: req.user })
-    : (admin ? reportExports : reportExports.filter((report) => report.requestedBy === req.user.id));
-  const scopedAiFeedback = USE_PG_COURSES && (admin || req.user.role === "Manager")
-    ? await aiFeedbackRepository.list(req.user, 25)
-    : (admin ? acharyaFeedbackMemory : []);
-  const scopedLearningTimeEvents = USE_PG_COURSES
-    ? await analyticsRepository.listTimeEvents({ actor: req.user, limit: 500 })
-    : learningTimeEvents.filter((event) => admin || visibleUserIds.has(event.userId));
   const scopedSkillRatings = USE_RELATIONAL_SKILLS
-    ? await skillsRepo.listSkillRatings(req.user)
+    ? await skillsRepo.listSkillRatings(user)
     : skillRatings.filter((rating) => admin || visibleUserIds.has(rating.userId));
   const scopedChapterFeedbacks = USE_RELATIONAL_SKILLS
-    ? await skillsRepo.listChapterFeedback(req.user)
-    : chapterFeedbacks.filter((feedback) => admin || feedback.userId === req.user.id || (req.user.role === "Manager" && visibleUserIds.has(feedback.userId)));
-  const authoritativeSettings = admin
-    ? (USE_RELATIONAL_SETTINGS ? await settingsRepository.getProctoring() : settings)
-    : {};
-  const authoritativeAudit = admin && USE_RELATIONAL_AUDIT
-    ? await securityEvidenceRepository.listAudit({ limit: 200 })
-    : null;
-  const authoritativeSecurityEvents = admin && USE_RELATIONAL_AUDIT
-    ? await securityEvidenceRepository.listSecurityEvents({ limit: 500 })
-    : null;
+    ? await skillsRepo.listChapterFeedback(user)
+    : chapterFeedbacks.filter((feedback) => admin || feedback.userId === user.id || (user.role === "Manager" && visibleUserIds.has(feedback.userId)));
   const relationalArchiveTypes = [
     ...(USE_RELATIONAL_IDENTITY ? ["User"] : []),
     ...(USE_PG_COURSES ? ["Course", "Assessment"] : []),
@@ -644,26 +622,60 @@ app.get("/api/app-data", authenticate, async (req, res) => {
       ].sort((a, b) => new Date(b.deletedAt).getTime() - new Date(a.deletedAt).getTime())
     : archives;
   const scopedCertificates = USE_RELATIONAL_CERTIFICATES
-    ? await certificatesPgRepository.listForUser(req.user)
+    ? await certificatesPgRepository.listForUser(user)
     : issuedCertificates.filter((cert) => admin || visibleUserIds.has(cert.employeeId));
-  const scopedCandidateAssessments = USE_RELATIONAL_CANDIDATE_ASSESSMENTS
-    ? await candidateAssessmentsPgRepository.listForUser(req.user)
-    : (admin ? candidateAssessments : candidateAssessments.filter((item) => item.createdBy === req.user.id));
   const authoritativeChapters = USE_PG_COURSES
     ? await chaptersRepo.listChapters()
     : chapters;
   const scopedChapters = authoritativeChapters.filter((chapter) => visibleCourseIds.has(chapter.courseId));
   const scopedAssessments = USE_PG_COURSES
-    ? await assessmentAuthorityRepository.listVisible({ actor: req.user, status: "Active" })
-    : assessmentsVisibleTo(req.user).map((assessment) => assessmentForUser(assessment, req.user));
+    ? await assessmentAuthorityRepository.listVisible({ actor: user, status: "Active" })
+    : assessmentsVisibleTo(user).map((assessment) => assessmentForUser(assessment, user));
   const scopedUsers = authoritativeVisibleUsers.map(publicUser);
-  res.json({
+  const bootstrapProjection = {
     users: scopedUsers,
     courses: visibleCourses,
     chapters: scopedChapters,
     assessments: scopedAssessments,
     assignments: scopedAssignments,
     attempts: scopedAttempts,
+    issuedCertificates: scopedCertificates,
+    archives: superAdmin ? redactSensitive(authoritativeArchives) : [],
+    skills: allSkills,
+    targetSkills: allTargetSkills.filter((target) => targetSkillVisibleTo(target, user)),
+    skillRatings: scopedSkillRatings,
+    chapterFeedbacks: scopedChapterFeedbacks,
+  };
+  if (bootstrap) return bootstrapProjection;
+
+  const authoritativeProctoring = USE_RELATIONAL_ATTEMPTS
+    ? await attemptsRepository.listProctorEvents(admin ? {} : { userIds: [...visibleUserIds] })
+    : proctoringLogs;
+  const scopedProctoring = authoritativeProctoring.filter((event) => admin || visibleUserIds.has(event.userId));
+  const scopedReports = USE_PG_COURSES && (admin || user.role === "Manager")
+    ? await reportsRepository.listAccessible({ actor: user })
+    : (admin ? reportExports : reportExports.filter((report) => report.requestedBy === user.id));
+  const scopedAiFeedback = USE_PG_COURSES && (admin || user.role === "Manager")
+    ? await aiFeedbackRepository.list(user, 25)
+    : (admin ? acharyaFeedbackMemory : []);
+  const scopedLearningTimeEvents = USE_PG_COURSES
+    ? await analyticsRepository.listTimeEvents({ actor: user, limit: 500 })
+    : learningTimeEvents.filter((event) => admin || visibleUserIds.has(event.userId));
+  const authoritativeSettings = admin
+    ? (USE_RELATIONAL_SETTINGS ? await settingsRepository.getProctoring() : settings)
+    : {};
+  const authoritativeAudit = admin && USE_RELATIONAL_AUDIT
+    ? await securityEvidenceRepository.listAudit({ limit: 200 })
+    : null;
+  const authoritativeSecurityEvents = admin && USE_RELATIONAL_AUDIT
+    ? await securityEvidenceRepository.listSecurityEvents({ limit: 500 })
+    : null;
+  const scopedCandidateAssessments = USE_RELATIONAL_CANDIDATE_ASSESSMENTS
+    ? await candidateAssessmentsPgRepository.listForUser(user)
+    : (admin ? candidateAssessments : candidateAssessments.filter((item) => item.createdBy === user.id));
+
+  return {
+    ...bootstrapProjection,
     proctoringLogs: scopedProctoring,
     auditLogs: admin ? redactSensitive(authoritativeAudit?.data || auditLogs) : [],
     securityEvents: admin ? redactSensitive(authoritativeSecurityEvents?.data || securityEvents.slice(0, 500)) : [],
@@ -671,14 +683,19 @@ app.get("/api/app-data", authenticate, async (req, res) => {
     acharyaFeedbackMemory: scopedAiFeedback,
     reportExports: scopedReports,
     settings: authoritativeSettings,
-    issuedCertificates: scopedCertificates,
-    archives: superAdmin ? redactSensitive(authoritativeArchives) : [],
-    skills: allSkills,
-    targetSkills: allTargetSkills.filter((target) => targetSkillVisibleTo(target, req.user)),
-    skillRatings: scopedSkillRatings,
-    chapterFeedbacks: scopedChapterFeedbacks,
-    candidateAssessments: scopedCandidateAssessments
-  });
+    candidateAssessments: scopedCandidateAssessments,
+  };
+};
+
+app.get("/api/app-data/bootstrap", authenticate, async (req, res) => {
+  res.json(await buildAppDataProjection(req.user, { bootstrap: true }));
+});
+
+app.get("/api/app-data", authenticate, async (req, res) => {
+  res.set("Deprecation", "true");
+  res.set("Sunset", "Wed, 10 Feb 2027 00:00:00 GMT");
+  res.set("Link", '</api/app-data/bootstrap>; rel="successor-version"');
+  res.json(await buildAppDataProjection(req.user));
 });
 
 // Runtime objects are private. They are delivered only through scoped API or

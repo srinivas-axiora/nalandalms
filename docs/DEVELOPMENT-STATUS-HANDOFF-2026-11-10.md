@@ -87,6 +87,7 @@ payment, privacy and concurrency attestations pass.
 
 ### Most recently completed and committed phases
 
+- Phase 71: `/api/app-data` decomposed with `/api/app-data/bootstrap` projection, RFC deprecation headers, production storage fail-closed hardening, and live PostgreSQL migrations 0023/0024 verifier coverage.
 - `6309d29` — Phase 70: snapshot/relational course-duplication authorization parity.
 - `650e855` — Phase 69: route-level frontend delivery and enforced chunk budget.
 - `bb7c9eb` — Phase 68: course prerequisite graph integrity.
@@ -99,33 +100,35 @@ payment, privacy and concurrency attestations pass.
 
 ## Work completed after the pause
 
-Phase 69 is committed and locally validated.
+Phase 69, Phase 70 and Phase 71 are complete.
 
-- All top-level pages and public/runtime surfaces now use route-level dynamic
+- Phase 69: All top-level pages and public/runtime surfaces now use route-level dynamic
   imports behind a shared React Suspense boundary.
-- The former **1,007.43 kB** entry bundle is now **356.68 kB**.
-- The build emits **23 JavaScript chunks**; the largest is **348.32 KiB** by
-  filesystem size.
-- `scripts/verify-frontend-bundles.mjs` makes a 500 KiB per-chunk limit a
-  fail-closed part of `npm run build`.
-- The build completes without chunk-size or ineffective-import warnings.
-
-Phase 70 is also committed. Snapshot and relational course-duplication routes
-now both require source-course ownership for Managers, with an authenticated
-cross-owner denial regression test.
+  - The former **1,007.43 kB** entry bundle is now **356.68 kB**.
+  - The build emits **23 JavaScript chunks**; the largest is **348.33 KiB** by filesystem size.
+  - `scripts/verify-frontend-bundles.mjs` makes a 500 KiB per-chunk limit a fail-closed part of `npm run build`.
+- Phase 70: Snapshot and relational course-duplication routes both require source-course ownership for Managers.
+- Phase 71:
+  - Decomposed `/api/app-data` into a minimal `/api/app-data/bootstrap` projection, omitting bulky telemetry, audit logs, and sensitive operational data for frontend mounting.
+  - Added RFC deprecation and successor headers (`Deprecation`, `Sunset`, `Link: </api/app-data/bootstrap>; rel="successor-version"`) to `/api/app-data`.
+  - Updated authorization inventory to 130 declared route policies.
+  - Hardened storage adapter (`backend/db.js`) to strictly prohibit local file-storage fallback when `NODE_ENV === "production"`.
+  - Added live PostgreSQL execution verification for Migration 0023 (payment order eligibility binding) in `verify-payments.mjs`.
+  - Added live PostgreSQL execution verification for Migration 0024 (prerequisite graph cycle and in-use constraints) in `verify-courses.mjs`.
+  - Added cross-task concurrent prerequisite graph mutation coverage in `verify-multi-task.mjs`.
 
 ## Latest verified local evidence
 
 | Gate | Result |
 |---|---|
-| Functional suite | 111 files, 518 tests passed |
+| Functional suite | 112 files, 520 tests passed |
 | Isolated adversarial suite | 33 tests passed |
 | TypeScript | Passed |
-| Production frontend build | Passed; 23 chunks, largest 348.32 KiB |
+| Production frontend build | Passed; 23 chunks, largest 348.33 KiB |
 | Dependency audit | 0 vulnerabilities across 414 dependencies |
 | CloudFormation structure | 81 resources, 33 outputs |
-| Authorization inventory | 129 route policies |
-| JavaScript syntax | 369 files passed |
+| Authorization inventory | 130 route policies |
+| JavaScript syntax | 370 files passed |
 | PowerShell syntax | 9 files passed |
 | OpenAPI YAML | Parsed successfully |
 | Patch hygiene | `git diff --check` passed |
@@ -177,7 +180,8 @@ cross-owner denial regression test.
 
 ## Current development focus
 
-Phase 69 and Phase 70 are complete. The next source-level focus is decomposing
-`/api/app-data` into bounded role-scoped projections while preserving existing
-client behavior. Live AWS staging remains the decisive production gate once
-the remaining local compatibility boundaries are closed.
+Phases 69, 70, and 71 are complete. The `/api/app-data` decomposition with `/api/app-data/bootstrap`,
+fail-closed storage safety, and PostgreSQL migrations 0023/0024 live execution verification are
+locally validated with 112 passing test suites (520 tests). The mandatory next gate is live AWS
+staging deployment, container image digest pinning, CloudFormation deployment validation, and
+the live multi-task concurrency and failover attestations.

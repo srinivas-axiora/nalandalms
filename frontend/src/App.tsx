@@ -217,7 +217,7 @@ export default function App() {
 
   const loadBackendData = useCallback(async () => {
     try {
-      const res = await apiFetch("/app-data");
+      const res = await apiFetch("/app-data/bootstrap");
       if (res.ok) {
         const dbData = await res.json();
         const mappedData = {

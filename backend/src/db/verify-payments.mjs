@@ -32,6 +32,9 @@ const makeOrder = (index) => ({
   provider: "Razorpay",
   userId,
   courseId: courseIds[index],
+  courseVersion: 1,
+  prerequisiteIds: [],
+  eligibilityBoundAt: new Date().toISOString(),
   amountCents: 125_00 + index,
   currency: "INR",
   createdAt: new Date().toISOString(),
@@ -50,9 +53,10 @@ try {
     for (const [index, courseId] of courseIds.entries()) {
       await client.query(
         `INSERT INTO courses (
-           id, title, description, owner_id, status, approval, price_cents, currency
+           id, title, description, owner_id, status, approval, price_cents, currency,
+           current_version, prerequisites
          ) VALUES ($1, $2, 'Synthetic payment reconciliation', $3,
-                   'Active', 'Approved', $4, 'INR')`,
+                   'Active', 'Approved', $4, 'INR', 1, ARRAY[]::text[])`,
         [courseId, `Payment verification ${index + 1}`, ownerId, 125_00 + index],
       );
     }

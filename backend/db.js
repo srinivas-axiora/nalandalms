@@ -20,6 +20,9 @@ const { Pool } = pg;
 
 export function createStorage({ filePath, databaseUrl }) {
   if (databaseUrl || process.env.PGHOST) return createPostgresStorage({ databaseUrl });
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("DATABASE_URL or PGHOST is mandatory in production. Refusing to use file-storage fallback.");
+  }
   return createFileStorage({ filePath });
 }
 
@@ -62,7 +65,11 @@ function createFileStorage({ filePath }) {
     },
     async close() {},
     async health() {
-      return { ok: true, mode: "file" };
+      return {
+        ok: process.env.NODE_ENV !== "production",
+        mode: "file",
+        ...(process.env.NODE_ENV === "production" ? { error: "File storage is not permitted in production" } : {}),
+      };
     },
   };
 }

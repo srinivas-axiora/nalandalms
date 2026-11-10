@@ -33,6 +33,7 @@ or step-up middleware disagrees with its declaration.
 | GET | `/api/ready` | Public | N | N/A | N | G | Sanitized database, Redis and object-store readiness |
 | GET | `/api/csrf-token` | Public | Cookie | N/A | N | G | Token returned in body intentionally |
 | GET | `/api/app-data` | Any | N | N/A | N | G | Phases 23-24/32-33 relational identity scope plus canonical learning events, reports, AI feedback, settings, ratings, chapter feedback, administrator security evidence and Super Admin archives when cutovers are enabled; large response still requires decomposition |
+| GET | `/api/app-data/bootstrap` | Any | N | N/A | N | G | Minimal bootstrap projection containing only core user, course, chapter, assessment, enrollment, certificate, skill and archive structures needed for initial app mount |
 | GET | `*splat` | Public | N | N/A | N | None | Frontend fallback; API paths return JSON 404 |
 | POST | `/api/auth/register` | Public | Y | Y | N | G + registration limiter | Strict schema ignores/rejects role input and assigns Learner only |
 | POST | `/api/auth/login` | Public | Y | Y | N | Redis-backed IP + source/identifier pair limits | Valid credentials are checked before pair throttling; no account-global lockout |

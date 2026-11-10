@@ -24,6 +24,8 @@ const ids = {
   owner: `${prefix}-OWNER`,
   learner: `${prefix}-LEARNER`,
   course: `${prefix}-COURSE`,
+  coursePrereqA: `${prefix}-PREREQ-A`,
+  coursePrereqB: `${prefix}-PREREQ-B`,
   chapter: `${prefix}-CHAPTER`,
   assessment: `${prefix}-ASSESSMENT`,
 };
@@ -103,8 +105,8 @@ const cleanup = async () => {
     await client.query("DELETE FROM enrollments WHERE course_id = $1", [ids.course]);
     await client.query("DELETE FROM assessments WHERE id = $1", [ids.assessment]);
     await client.query("DELETE FROM chapters WHERE id = $1", [ids.chapter]);
-    await client.query("DELETE FROM course_versions WHERE course_id = $1", [ids.course]);
-    await client.query("DELETE FROM courses WHERE id = $1", [ids.course]);
+    await client.query("DELETE FROM course_versions WHERE course_id = ANY($1::text[])", [[ids.course, ids.coursePrereqA, ids.coursePrereqB]]);
+    await client.query("DELETE FROM courses WHERE id = ANY($1::text[])", [[ids.course, ids.coursePrereqA, ids.coursePrereqB]]);
     await client.query("DELETE FROM users WHERE id = ANY($1::text[])", [[ids.learner, ids.owner]]);
   });
 };
@@ -128,6 +130,14 @@ const setup = async () => {
          'Synthetic cross-task invariant verification', 'Security',
          'Active', 'Approved', $2, 1)`,
       [ids.course, ids.owner]
+    );
+    await client.query(
+      `INSERT INTO courses (
+         id, title, description, skill, status, approval, owner_id, current_version, prerequisites
+       ) VALUES
+         ($1, 'Prerequisite canary A', 'Prerequisite cycle concurrency test A', 'Security', 'Active', 'Approved', $3, 1, ARRAY[]::text[]),
+         ($2, 'Prerequisite canary B', 'Prerequisite cycle concurrency test B', 'Security', 'Active', 'Approved', $3, 1, ARRAY[]::text[])`,
+      [ids.coursePrereqA, ids.coursePrereqB, ids.owner]
     );
     await client.query(
       `INSERT INTO course_versions (
@@ -268,6 +278,49 @@ const worker = async () => {
     outcome: updateOutcome,
   });
 
+  await barrier("PREREQUISITE_MUTATION", workerId);
+  const workerList = (await query(
+    `SELECT DISTINCT metadata->>'workerId' AS id FROM audit_logs
+     WHERE entity_type = $1 AND entity_id = $2 AND action = $3
+     ORDER BY id`,
+    [entityType, runId, actionFor("ENROLLMENT_READY")]
+  )).rows.map((r) => r.id);
+  const isFirstWorker = workerList[0] === workerId;
+
+  let prereqOutcome = "conflict";
+  try {
+    if (isFirstWorker) {
+      await courseAuthorityRepository.updateCourse({
+        id: ids.coursePrereqA,
+        actor: { id: ids.owner, role: "Manager" },
+        expectedVersion: 1,
+        updates: { prerequisites: [ids.coursePrereqB] },
+      });
+      prereqOutcome = "updated";
+    } else {
+      await courseAuthorityRepository.updateCourse({
+        id: ids.coursePrereqB,
+        actor: { id: ids.owner, role: "Manager" },
+        expectedVersion: 1,
+        updates: { prerequisites: [ids.coursePrereqA] },
+      });
+      prereqOutcome = "updated";
+    }
+  } catch (error) {
+    if (error?.code === "COURSE_PREREQUISITE_CYCLE" || error?.constraint === "course_prerequisite_cycle") {
+      prereqOutcome = "cycle_rejected";
+    } else if (error?.code === "VERSION_CONFLICT") {
+      prereqOutcome = "conflict";
+    } else {
+      throw error;
+    }
+  }
+  await writeEvidence({
+    stage: "PREREQUISITE_MUTATION_RESULT",
+    workerId,
+    outcome: prereqOutcome,
+  });
+
   console.log(`Multi-task worker completed: ${workerId}`);
 };
 
@@ -302,6 +355,7 @@ const assertResults = async () => {
     assertTwoWorkers("ATTEMPT", ["created", "conflict"]);
     assertTwoWorkers("REPORT_CLAIM", ["claimed", "no_work"]);
     assertTwoWorkers("COURSE_UPDATE", ["updated", "conflict"]);
+    assertTwoWorkers("PREREQUISITE_MUTATION", ["updated", "cycle_rejected"]);
 
     const state = await query(
       `SELECT

@@ -22,6 +22,7 @@ describe("multi-task concurrency verifier contract", () => {
     expect(source).toContain('["created", "conflict"]');
     expect(source).toContain('["claimed", "no_work"]');
     expect(source).toContain('["updated", "conflict"]');
+    expect(source).toContain('["updated", "cycle_rejected"]');
   });
 
   it("asserts durable database and transactional audit outcomes before cleanup", () => {
