@@ -35,7 +35,7 @@ or step-up middleware disagrees with its declaration.
 | GET | `/api/app-data` | Any | N | N/A | N | G | Phases 23-24/32-33 relational identity scope plus canonical learning events, reports, AI feedback, settings, ratings, chapter feedback, administrator security evidence and Super Admin archives when cutovers are enabled; large response still requires decomposition |
 | GET | `*splat` | Public | N | N/A | N | None | Frontend fallback; API paths return JSON 404 |
 | POST | `/api/auth/register` | Public | Y | Y | N | G + registration limiter | Strict schema ignores/rejects role input and assigns Learner only |
-| POST | `/api/auth/login` | Public | Y | Y | N | G + login map | Identifier lockout enables victim DoS |
+| POST | `/api/auth/login` | Public | Y | Y | N | Redis-backed IP + source/identifier pair limits | Valid credentials are checked before pair throttling; no account-global lockout |
 | POST | `/api/auth/logout` | Any | Cookie | Y | N | G | Authenticated logout rotates session version and revokes the presented JWT |
 | POST | `/api/auth/forgot-password` | Public | Y | Y | N | G | No production delivery implementation shown |
 | POST | `/api/auth/reset-password` | Public token | Y | Y | N | G | Reset bumps session version |

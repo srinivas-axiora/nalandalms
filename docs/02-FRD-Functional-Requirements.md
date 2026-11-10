@@ -50,8 +50,8 @@ date: "2026-06-22"
 - **FR-AUTH-1 — Login.** Actors: all. Users sign in with email + password; Super Admin may sign in with the identifier `"Super Admin"`.
   - Rules: passwords verified against bcrypt hash; only `Active` accounts may sign in; session issued as an HttpOnly JWT cookie (30-min expiry); `Secure` cookie in production.
   - AC: valid creds → 200 + session; invalid → 401 generic "Invalid credentials"; deactivated → 401.
-- **FR-AUTH-2 — Brute-force protection.** After 5 failed attempts the account is locked for 5 minutes; login endpoint is IP rate-limited.
-  - AC: 6th attempt within window → 403 with `lockedUntil`; lockout key is normalized (case/whitespace-insensitive).
+- **FR-AUTH-2 — Brute-force protection.** Login requests are rate-limited by source IP and by a normalized source/identifier pair. Five invalid passwords throttle that pair for 5 minutes; a valid password remains recoverable and clears the pair state so hostile guesses cannot lock the account globally.
+  - AC: the fifth invalid attempt within the window → 429 with a `Retry-After` header and a generic response; unknown and inactive identities traverse the same bcrypt path; valid credentials still succeed after pair throttling.
 - **FR-AUTH-3 — CSRF protection.** All state-changing requests require a valid CSRF token (double-submit cookie + `X-CSRF-Token` header).
   - AC: missing/mismatched token → 403.
 - **FR-AUTH-4 — Session revocation.** Deactivating or deleting a user invalidates their existing sessions (session-version bump).

@@ -166,6 +166,10 @@ mandatory staging gates, not assumed successes.
 - Phase 63 removes the last account exception from multi-task evidence by
   guarding direct canary execution and recording its account and immutable
   image binding.
+- Phase 64 removes the account-global login lockout primitive. Failed-password
+  state is Redis-backed per source/identifier pair, valid credentials recover
+  before pair enforcement, and unknown identities traverse the same bcrypt
+  path without exposing counters or lock timestamps.
 - Execute the backup/restore, rollback, Redis and RDS failover gates, then
   execute the Phase-57 load/soak gate and complete privacy erasure, payment
   reconciliation and retention retry drills.

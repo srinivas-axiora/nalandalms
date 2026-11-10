@@ -147,7 +147,6 @@ const now = () => new Date().toISOString();
 const nextCourseId = (skill = "GN") => `NLD-${skill.slice(0, 2).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
 // ── Login security & rate limiting state ──
-const loginSecurity = {};  // { email: { failedAttempts, lockedUntil, lastFailedAt } }
 const sessionVersions = {}; // { userId: number }
 const rateLimitLog = [];    // [{ ip, endpoint, at }]
 const issuedCertificates = []; // issued cert records
@@ -537,7 +536,6 @@ const snapshot = () => ({
   reportExports,
   settings,
   videoProgress,
-  loginSecurity,
   sessionVersions,
   issuedCertificates,
   paymentOrders,
@@ -591,7 +589,8 @@ const loadDb = async () => {
     if (data.reportExports) { reportExports.length = 0; reportExports.push(...data.reportExports); }
     if (data.settings) { Object.assign(settings, data.settings); }
     if (data.videoProgress) { Object.assign(videoProgress, data.videoProgress); }
-    if (data.loginSecurity) { Object.assign(loginSecurity, data.loginSecurity); }
+    // Legacy snapshots may contain loginSecurity. It is intentionally ignored:
+    // authentication abuse state is ephemeral and Redis-authoritative.
     if (data.sessionVersions) { Object.assign(sessionVersions, data.sessionVersions); }
     if (data.issuedCertificates) { issuedCertificates.length = 0; issuedCertificates.push(...data.issuedCertificates); }
     if (data.paymentOrders) { paymentOrders.length = 0; paymentOrders.push(...data.paymentOrders); }
@@ -617,7 +616,6 @@ export {
   adminRoles,
   now,
   nextCourseId,
-  loginSecurity,
   sessionVersions,
   rateLimitLog,
   issuedCertificates,

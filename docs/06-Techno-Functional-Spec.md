@@ -26,7 +26,7 @@ This is the **bridge** between business (FRD) and technical (TRD) views. The cor
 
 | Functional area | UI (frontend/src/pages) | API (backend/server.js) | Data collections | Key controls |
 |---|---|---|---|---|
-| Login/Session | `Login.tsx`, `App.tsx` | `/api/auth/*`, `/api/csrf-token` | users, loginSecurity, sessionVersions | JWT cookie, CSRF, lockout, rate limit |
+| Login/Session | `Login.tsx`, `App.tsx` | `/api/auth/*`, `/api/csrf-token` | users, sessionVersions; Redis login-abuse counters | JWT cookie, CSRF, source/pair throttling, session revocation |
 | Users/RBAC | `Users.tsx` | `/api/users*` | users | role+ownership, escalation guards |
 | Skills | `Skills.tsx` | `/api/skills*`, `/api/target-skills` | skills, targetSkills, skillRatings | AD/SA only |
 | Courses | `Courses.tsx` | `/api/courses*` | courses, course versions | approval workflow, owner checks |

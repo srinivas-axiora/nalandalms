@@ -60,7 +60,7 @@ Nalanda is a single-process **Node.js (Express 5)** API that also serves a **Rea
 ## 3. Data Model
 
 ### 3.1 Runtime collections (current persistence)
-Persisted as JSONB-per-collection (Postgres) or a single JSON document (file): `users, courses, chapters, assessments, assignments(enrollments), attempts, proctoringLogs, auditLogs, learningTimeEvents, acharyaFeedbackMemory, reportExports, settings, videoProgress, loginSecurity, sessionVersions, issuedCertificates, archives, skills, targetSkills, skillRatings, chapterFeedbacks`.
+Persisted as JSONB-per-collection (Postgres) or a single JSON document (file): `users, courses, chapters, assessments, assignments(enrollments), attempts, proctoringLogs, auditLogs, learningTimeEvents, acharyaFeedbackMemory, reportExports, settings, videoProgress, sessionVersions, issuedCertificates, archives, skills, targetSkills, skillRatings, chapterFeedbacks`. Login abuse state is short-lived and Redis-authoritative in production; it is never part of the durable application snapshot.
 
 ### 3.2 Target relational schema (Phase 2)
 The normalized PostgreSQL schema is defined in `database/schema.sql` (departments, users, login_security, skills, target_skills, courses, course_versions, chapters, course_approvals, enrollments, chapter_time_totals, assessments, questions, assessment_attempts, learning_time_events, assessment_answers, proctoring_logs, proctor_captures, chapter_feedbacks, skill_ratings, system_settings, report_exports, audit_logs, deleted_archives, issued_certificates + analytics views).

@@ -21,6 +21,7 @@ import { setProjectedSessionVersion, upsertIdentityProjection } from "../../iden
 import { relationalIdentityEnabled } from "../../runtime-modes.js";
 
 const USE_RELATIONAL_IDENTITY = relationalIdentityEnabled();
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync("nalanda-login-timing-sentinel", 10);
 
 export function registerAuth(app) {
   const throttleIdentity = (identifier) => crypto
@@ -29,12 +30,6 @@ export function registerAuth(app) {
     .digest("hex");
   const registrationRateLimit = rateLimit({ windowMs: 60_000, max: 10, name: "auth-register" });
   const loginIpRateLimit = rateLimit({ windowMs: 60_000, max: 10, name: "auth-login-ip" });
-  const loginIdentityRateLimit = rateLimit({
-    windowMs: 60_000,
-    max: 10,
-    name: "auth-login-identity",
-    keyGenerator: (req) => throttleIdentity(req.body?.email || "missing"),
-  });
 
   // ── Public Self-Registration ──
   app.post("/api/auth/register", registrationRateLimit, async (req, res) => {
@@ -115,7 +110,7 @@ export function registerAuth(app) {
   });
 
   // ── Login ──
-  app.post("/api/auth/login", loginIpRateLimit, loginIdentityRateLimit, async (req, res) => {
+  app.post("/api/auth/login", loginIpRateLimit, async (req, res) => {
     const ip = req.ip || req.connection.remoteAddress;
     const schema = z.object({ email: z.string().min(2), password: z.string().min(8) });
     const parsed = schema.safeParse(req.body);
@@ -127,12 +122,6 @@ export function registerAuth(app) {
     // Lockouts are scoped to the account/IP pair. An attacker cannot lock a
     // victim out globally by repeatedly submitting that victim's identifier.
     const securityKey = `${identityKey}|${ip}`;
-    const security = await getLoginSecurity(securityKey, MAX_LOGIN_ATTEMPTS);
-
-    if (security.lockedUntil && new Date(security.lockedUntil).getTime() > Date.now()) {
-      return res.status(403).json({ error: "Account locked due to too many failed attempts", lockedUntil: security.lockedUntil });
-    }
-
     const candidate = USE_RELATIONAL_IDENTITY
       ? await identityRepository.findUserByIdentifier(normalizedIdentifier)
       : users.find((item) => (
@@ -140,17 +129,37 @@ export function registerAuth(app) {
           || (item.role === "Super Admin" && normalizedIdentifier === "super admin")
         ));
     const user = candidate?.status === "Active" ? candidate : null;
+    // Always perform a bcrypt comparison so unknown/inactive identities have
+    // the same expensive credential path as active accounts. A correct
+    // password is evaluated before pair throttling, preventing an attacker
+    // from turning failed guesses into an account-wide denial of service.
+    const passwordMatches = bcrypt.compareSync(
+      parsed.data.password,
+      user?.passwordHash || DUMMY_PASSWORD_HASH,
+    );
 
-    if (!user || !bcrypt.compareSync(parsed.data.password, user.passwordHash)) {
-      const failure = await recordLoginFailure(securityKey, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS);
-      return res.status(401).json({ error: "Invalid credentials", ...failure });
+    if (user && passwordMatches) {
+      await clearLoginFailures(securityKey);
+      if (USE_RELATIONAL_IDENTITY) await identityRepository.recordLogin(user.id);
+      else audit(user.id, "LOGIN", "USER", user.id);
+      res.cookie("token", signToken(user), { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE, maxAge: 30 * 60 * 1000 });
+      return res.json({ user: publicUser(user) });
     }
 
-    await clearLoginFailures(securityKey);
-    if (USE_RELATIONAL_IDENTITY) await identityRepository.recordLogin(user.id);
-    else audit(user.id, "LOGIN", "USER", user.id);
-    res.cookie("token", signToken(user), { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE, maxAge: 30 * 60 * 1000 });
-    return res.json({ user: publicUser(user) });
+    const security = await getLoginSecurity(securityKey, MAX_LOGIN_ATTEMPTS);
+    if (security.lockedUntil && new Date(security.lockedUntil).getTime() > Date.now()) {
+      const retryAfter = Math.max(1, Math.ceil((new Date(security.lockedUntil).getTime() - Date.now()) / 1000));
+      res.setHeader("Retry-After", String(retryAfter));
+      return res.status(429).json({ error: "Too many invalid login attempts. Please retry later." });
+    }
+
+    const failure = await recordLoginFailure(securityKey, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS);
+    if (failure.lockedUntil) {
+      const retryAfter = Math.max(1, Math.ceil((new Date(failure.lockedUntil).getTime() - Date.now()) / 1000));
+      res.setHeader("Retry-After", String(retryAfter));
+      return res.status(429).json({ error: "Too many invalid login attempts. Please retry later." });
+    }
+    return res.status(401).json({ error: "Invalid credentials" });
   });
 
   // ── Logout ──

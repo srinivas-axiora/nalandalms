@@ -58,6 +58,42 @@ describe("Nalanda LMS — Security Controls & Input Sanitization", () => {
 
       expect(res.status).toBe(400);
     });
+
+    it("throttles bad source/identity pairs without denying the correct password", async () => {
+      const email = `lockout-${Date.now()}@example.com`;
+      const password = "correct-password-123";
+      const registrationCsrf = await getCsrfPair();
+      const registered = await request(app)
+        .post("/api/auth/register")
+        .set("Cookie", registrationCsrf.cookie)
+        .set("x-csrf-token", registrationCsrf.token)
+        .send({ name: "Lockout Test", email, password });
+      expect(registered.status).toBe(201);
+
+      let finalFailure;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const csrf = await getCsrfPair();
+        finalFailure = await request(app)
+          .post("/api/auth/login")
+          .set("Cookie", csrf.cookie)
+          .set("x-csrf-token", csrf.token)
+          .send({ email, password: "incorrect-password-123" });
+      }
+
+      expect(finalFailure.status).toBe(429);
+      expect(finalFailure.headers["retry-after"]).toBeDefined();
+      expect(finalFailure.body).toEqual({ error: "Too many invalid login attempts. Please retry later." });
+
+      const loginCsrf = await getCsrfPair();
+      const validLogin = await request(app)
+        .post("/api/auth/login")
+        .set("Cookie", loginCsrf.cookie)
+        .set("x-csrf-token", loginCsrf.token)
+        .send({ email, password });
+
+      expect(validLogin.status).toBe(200);
+      expect(validLogin.body.user.email).toBe(email);
+    });
   });
 
   describe("Rate Limiter & Endpoint Protection", () => {

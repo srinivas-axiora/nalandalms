@@ -796,4 +796,40 @@ describe("Nalanda release-blocking security regressions", () => {
     expect(replay.body.duplicate).toBe(true);
     expect(core.assignments.filter((item) => item.userId === paymentLearner.id && item.courseId === paidCourse.id)).toHaveLength(1);
   });
+
+  it("SEC-P64-001 hostile password guesses cannot globally lock a valid account", async () => {
+    const password = "SecurityRecovery123!";
+    const user = {
+      ...learnerA,
+      id: unique("SEC-LOGIN-RECOVERY"),
+      email: `${unique("login-recovery")}@example.test`,
+      passwordHash: bcrypt.hashSync(password, 10),
+    };
+    core.users.push(user);
+    core.sessionVersions[user.id] = 0;
+
+    let throttled;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const csrf = await csrfPair();
+      throttled = await request(app)
+        .post("/api/auth/login")
+        .set("Cookie", csrf.cookie)
+        .set("x-csrf-token", csrf.token)
+        .send({ email: user.email, password: "hostile-password-guess" });
+    }
+
+    expect(throttled.status).toBe(429);
+    expect(throttled.headers["retry-after"]).toBeDefined();
+    expect(throttled.body).toEqual({ error: "Too many invalid login attempts. Please retry later." });
+
+    const recoveryCsrf = await csrfPair();
+    const recovered = await request(app)
+      .post("/api/auth/login")
+      .set("Cookie", recoveryCsrf.cookie)
+      .set("x-csrf-token", recoveryCsrf.token)
+      .send({ email: user.email, password });
+
+    expect(recovered.status).toBe(200);
+    expect(recovered.body.user.id).toBe(user.id);
+  });
 });
