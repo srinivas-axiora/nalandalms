@@ -66,12 +66,12 @@ keeps the flag and acknowledgement disabled until live staging approval.
 | GET | `/api/catalog` | Public | N | N/A | N | G | Approved active course metadata |
 | POST | `/api/courses/:id/enroll` | Any | Y | Y | N | G | Idempotent existing enrollment; free enrollment requires durable completion of every course prerequisite and relational mode locks authority |
 | GET | `/api/courses` | Any | N | N/A | N | G | Role/enrollment scoped; Phase-12 relational mode uses database joins |
-| POST | `/api/courses` | A/M | Y | Y | N | G | Phase-12 relational mode accepts validated metadata only; media uses scoped object grants |
-| PUT | `/api/courses/:id` | A/M | Y | Y | N | G | Phase-12 relational mode enforces owner/admin scope and optimistic versioning |
+| POST | `/api/courses` | A/M | Y | Y | N | G | Validated metadata; prerequisite references and acyclic graph enforced; media uses scoped object grants |
+| PUT | `/api/courses/:id` | A/M | Y | Y | N | G | Owner/admin scope, optimistic versioning and serialized prerequisite graph validation |
 | POST | `/api/courses/:id/duplicate` | A/M | Y | Y | N | G | Phase-12 relational mode rejects foreign-manager duplication |
-| PATCH | `/api/courses/:id/approval` | A | Y | Y | Y | G | Step-up required; Phase-12 relational mode also requires a current version and review reason |
-| PATCH | `/api/courses/:id/status` | A | Y | Y | Y | G | Step-up present |
-| DELETE | `/api/courses/:id` | A/M | Y | Y | Y | G | Phase-12 relational mode versions/archives and refuses deletion when retained learning, payment or credential history exists |
+| PATCH | `/api/courses/:id/approval` | A | Y | Y | Y | G | Step-up/version/reason required; approval validates available prerequisites and protects live dependents |
+| PATCH | `/api/courses/:id/status` | A | Y | Y | Y | G | Step-up required; activation validates prerequisites and live prerequisite dependents are protected |
+| DELETE | `/api/courses/:id` | A/M | Y | Y | Y | G | Archives course graph and refuses deletion with retained history or an active approved dependent |
 | GET | `/api/courses/:courseId/chapters` | Any | N | N/A | N | G | Phase-13 relational mode requires enrollment/ownership and emits a minimal DTO for locked chapters |
 | POST | `/api/courses/:courseId/chapters` | A/M | Y | Y | N | G | Phase-13 relational mode enforces owner/admin scope, course version and transactional audit/version coupling |
 | PUT | `/api/courses/:courseId/chapters/:chapterId` | A/M | Y | Y | N | G | Phase-13 relational mode requires course and chapter versions; HTML is sanitized |

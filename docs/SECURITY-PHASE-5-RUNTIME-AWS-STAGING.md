@@ -181,6 +181,9 @@ mandatory staging gates, not assumed successes.
 - Phase 67 enforces course prerequisites for free enrollment and paid checkout.
   Checkout orders immutably bind the course version, prerequisite snapshot and
   decision time; the migration expires older unbound open orders.
+- Phase 68 serializes course-prerequisite graph mutations and rejects missing,
+  duplicate, cyclic or unavailable prerequisite references. Live prerequisite
+  courses cannot be rejected, disabled or deleted while still referenced.
 - Execute the backup/restore, rollback, Redis and RDS failover gates, then
   execute the Phase-57 load/soak gate and complete privacy erasure, payment
   reconciliation and retention retry drills.

@@ -84,6 +84,7 @@ backend/src/repositories/workplace.repository.pg.js transactional workplace auth
 backend/src/db/verify-workplace.mjs                live concurrency/privacy-adjacent verifier
 database/migrations/0022_skill_governance_integrity.sql target-scope FKs/check constraints
 database/migrations/0023_enrollment_prerequisite_authority.sql immutable checkout eligibility binding
+database/migrations/0024_course_prerequisite_graph.sql serialized prerequisite graph integrity
 ```
 
 The **skills** bounded context is the pilot (like the certificates pilot for the

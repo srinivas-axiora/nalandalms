@@ -69,6 +69,11 @@ Payment orders persist immutable `course_version`, `prerequisite_ids` and
 `eligibility_bound_at` fields. Unbound open orders created by older builds are
 expired during migration and cannot create an entitlement.
 
+Course prerequisite graph mutations take a PostgreSQL transaction advisory
+lock and are protected by a database trigger. The trigger rejects missing or
+duplicate references, direct or transitive cycles, unavailable prerequisites
+for active approved courses, and removal of a live referenced prerequisite.
+
 ### 3.3 Known model reconciliation items (must fix before Phase 2)
 - `attempt_status` ENUM vs app statuses `"Passed"/"Failed"` — reconcile (add columns or map to `Submitted/Evaluated` + a derived pass flag).
 - Runtime `assignments` ↔ schema `enrollments` field/shape mapping (`timeSpentMinutes` is derived, not stored).

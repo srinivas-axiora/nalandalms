@@ -1,5 +1,6 @@
 import { query, withTransaction } from "../db/pool.js";
 import { enrollmentIsComplete } from "../enrollment-eligibility.js";
+import { activeDependentCourseIds, validateCoursePrerequisites } from "../course-prerequisite-policy.js";
 
 const iso = (value) => value instanceof Date ? value.toISOString() : value;
 const isAdmin = (role) => role === "Admin" || role === "Super Admin";
@@ -52,6 +53,35 @@ const audit = (client, actorId, action, courseId, metadata = {}) => client.query
 const canManage = (actor, row) => isAdmin(actor?.role) || row.owner_id === actor?.id;
 
 export function createCourseAuthorityRepository(db = { query, withTransaction }) {
+  const loadPrerequisiteGraph = async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('nalanda:course-prerequisite-graph'))");
+    const { rows } = await client.query(
+      "SELECT id, prerequisites, status, approval FROM courses ORDER BY id",
+    );
+    return rows;
+  };
+
+  const assertPrerequisitePolicy = async (client, {
+    courseId, prerequisiteIds, requireAvailable = false,
+  }) => {
+    const courses = await loadPrerequisiteGraph(client);
+    const result = validateCoursePrerequisites({
+      courseId, prerequisiteIds, courses, requireAvailable,
+    });
+    if (!result.valid) fail(result.code, "Course prerequisite policy rejected the change", result.details);
+    return result.prerequisites;
+  };
+
+  const assertNoActiveDependents = async (client, courseId) => {
+    const courses = await loadPrerequisiteGraph(client);
+    const dependentCourseIds = activeDependentCourseIds({ courseId, courses });
+    if (dependentCourseIds.length) {
+      fail("COURSE_PREREQUISITE_IN_USE", "Course is required by an active approved course", {
+        dependentCourseIds,
+      });
+    }
+  };
+
   const getRow = async (id, client = db, forUpdate = false) => {
     const { rows } = await client.query(
       `SELECT * FROM courses WHERE id = $1${forUpdate ? " FOR UPDATE" : ""}`,
@@ -140,6 +170,11 @@ export function createCourseAuthorityRepository(db = { query, withTransaction })
   const createCourse = async ({ course, actor }) => {
     try {
       return await db.withTransaction(async (client) => {
+        const prerequisites = await assertPrerequisitePolicy(client, {
+          courseId: course.id,
+          prerequisiteIds: course.prerequisites || [],
+          requireAvailable: isAdmin(actor.role),
+        });
         const { rows } = await client.query(
           `INSERT INTO courses (
              id, title, description, skill, skill_ids, target_level, difficulty,
@@ -157,7 +192,7 @@ export function createCourseAuthorityRepository(db = { query, withTransaction })
             course.skillIds || [], course.targetLevel || "Beginner",
             course.difficulty || "Beginner", course.estimatedHours ?? 4,
             course.priceCents ?? 0, course.currency || "INR",
-            course.category || "General", course.prerequisites || [], course.tags || [],
+            course.category || "General", prerequisites, course.tags || [],
             course.thumbnailColor || "#22d3ee", course.contentTypes || ["Rich Text"],
             JSON.stringify(course.storage || { files: [] }), course.status || "Active",
             isAdmin(actor.role) ? "Approved" : "Pending", actor.id,
@@ -187,6 +222,14 @@ export function createCourseAuthorityRepository(db = { query, withTransaction })
       if (!row) fail("COURSE_NOT_FOUND", "Course not found");
       if (!canManage(actor, row)) fail("FORBIDDEN", "You cannot manage this course");
       assertVersion(row, expectedVersion);
+
+      const prerequisites = await assertPrerequisitePolicy(client, {
+        courseId: id,
+        prerequisiteIds: updates.prerequisites ?? row.prerequisites ?? [],
+        requireAvailable: isAdmin(actor.role),
+      });
+      if (!isAdmin(actor.role)) await assertNoActiveDependents(client, id);
+      if (updates.prerequisites !== undefined) updates = { ...updates, prerequisites };
 
       const fields = [];
       const params = [id];
@@ -227,6 +270,11 @@ export function createCourseAuthorityRepository(db = { query, withTransaction })
       const row = await getRow(sourceId, client, true);
       if (!row) fail("COURSE_NOT_FOUND", "Course not found");
       if (!canManage(actor, row)) fail("FORBIDDEN", "You cannot duplicate this course");
+      await assertPrerequisitePolicy(client, {
+        courseId: newId,
+        prerequisiteIds: row.prerequisites || [],
+        requireAvailable: isAdmin(actor.role),
+      });
       let inserted;
       try {
         inserted = await client.query(
@@ -262,6 +310,15 @@ export function createCourseAuthorityRepository(db = { query, withTransaction })
       const row = await getRow(id, client, true);
       if (!row) fail("COURSE_NOT_FOUND", "Course not found");
       assertVersion(row, expectedVersion);
+      if (approval === "Approved") {
+        await assertPrerequisitePolicy(client, {
+          courseId: id,
+          prerequisiteIds: row.prerequisites || [],
+          requireAvailable: true,
+        });
+      } else {
+        await assertNoActiveDependents(client, id);
+      }
       const { rows } = await client.query(
         `UPDATE courses SET approval = $2::approval_status,
            status = CASE WHEN $2 = 'Rejected' THEN 'Inactive'::lifecycle_status ELSE status END,
@@ -284,6 +341,15 @@ export function createCourseAuthorityRepository(db = { query, withTransaction })
       const row = await getRow(id, client, true);
       if (!row) fail("COURSE_NOT_FOUND", "Course not found");
       assertVersion(row, expectedVersion);
+      if (status === "Active" && row.approval === "Approved") {
+        await assertPrerequisitePolicy(client, {
+          courseId: id,
+          prerequisiteIds: row.prerequisites || [],
+          requireAvailable: true,
+        });
+      } else if (status === "Inactive") {
+        await assertNoActiveDependents(client, id);
+      }
       const { rows } = await client.query(
         `UPDATE courses SET status = $2::lifecycle_status,
            current_version = current_version + 1, updated_at = now()
@@ -353,6 +419,7 @@ export function createCourseAuthorityRepository(db = { query, withTransaction })
       if (!row) fail("COURSE_NOT_FOUND", "Course not found");
       if (!canManage(actor, row)) fail("FORBIDDEN", "You cannot delete this course");
       assertVersion(row, expectedVersion);
+      await assertNoActiveDependents(client, id);
 
       const history = await client.query(
         `SELECT

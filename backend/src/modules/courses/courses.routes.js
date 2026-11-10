@@ -9,9 +9,16 @@ import { audit, canManageCourse, coursesVisibleTo } from "../../domain.js";
 import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
 import { bufferMatchesContentType } from "../../security/file-validation.js";
 import { assertSnapshotEnrollmentEligibility } from "../../enrollment-eligibility.js";
+import { activeDependentCourseIds, validateCoursePrerequisites } from "../../course-prerequisite-policy.js";
 import { registerCoursesPgRoutes } from "./courses.pg.routes.js";
 
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
+
+const prerequisiteError = (res, result) => res.status(409).json({
+  error: "Course prerequisite policy rejected the change",
+  code: result.code,
+  details: result.details,
+});
 
 export function registerCourses(app) {
   if (USE_PG_COURSES) return registerCoursesPgRoutes(app);
@@ -155,9 +162,18 @@ export function registerCourses(app) {
     });
     const parsed = schema.safeParse(body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const courseId = nextCourseId(parsed.data.skill);
+    const prerequisitePolicy = validateCoursePrerequisites({
+      courseId,
+      prerequisiteIds: parsed.data.prerequisites,
+      courses,
+      requireAvailable: req.user.role === "Admin",
+    });
+    if (!prerequisitePolicy.valid) return prerequisiteError(res, prerequisitePolicy);
     const course = {
-      id: nextCourseId(parsed.data.skill),
+      id: courseId,
       ...parsed.data,
+      prerequisites: prerequisitePolicy.prerequisites,
       isFree: parsed.data.priceCents === 0,
       approval: req.user.role === "Admin" ? "Approved" : "Pending",
       status: "Active",
@@ -203,7 +219,23 @@ export function registerCourses(app) {
     });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const proposedPrerequisites = parsed.data.prerequisites ?? course.prerequisites ?? [];
+    const prerequisitePolicy = validateCoursePrerequisites({
+      courseId: course.id,
+      prerequisiteIds: proposedPrerequisites,
+      courses,
+      requireAvailable: req.user.role === "Admin",
+    });
+    if (!prerequisitePolicy.valid) return prerequisiteError(res, prerequisitePolicy);
+    if (req.user.role !== "Admin") {
+      const dependentCourseIds = activeDependentCourseIds({ courseId: course.id, courses });
+      if (dependentCourseIds.length) return prerequisiteError(res, {
+        code: "COURSE_PREREQUISITE_IN_USE",
+        details: { dependentCourseIds },
+      });
+    }
     Object.assign(course, parsed.data, {
+      prerequisites: prerequisitePolicy.prerequisites,
       ...(parsed.data.priceCents !== undefined ? { isFree: parsed.data.priceCents === 0 } : {}),
       version: course.version + 1,
       approval: req.user.role === "Admin" ? "Approved" : "Pending",
@@ -216,7 +248,15 @@ export function registerCourses(app) {
   app.post("/api/courses/:id/duplicate", authenticate, requireRole("Admin", "Manager"), (req, res) => {
     const source = courses.find((item) => item.id === req.params.id);
     if (!source) return res.status(404).json({ error: "Course not found" });
-    const copy = { ...source, id: nextCourseId(source.skill), title: `${source.title} Copy`, approval: req.user.role === "Admin" ? "Approved" : "Pending", ownerId: req.user.id, version: 1, createdAt: now(), updatedAt: now() };
+    const copyId = nextCourseId(source.skill);
+    const prerequisitePolicy = validateCoursePrerequisites({
+      courseId: copyId,
+      prerequisiteIds: source.prerequisites,
+      courses,
+      requireAvailable: req.user.role === "Admin",
+    });
+    if (!prerequisitePolicy.valid) return prerequisiteError(res, prerequisitePolicy);
+    const copy = { ...source, id: copyId, prerequisites: prerequisitePolicy.prerequisites, title: `${source.title} Copy`, approval: req.user.role === "Admin" ? "Approved" : "Pending", ownerId: req.user.id, version: 1, createdAt: now(), updatedAt: now() };
     courses.unshift(copy);
     audit(req.user.id, "DUPLICATE_COURSE", "COURSE", copy.id, { sourceId: source.id });
     res.status(201).json({ data: copy });
@@ -228,6 +268,21 @@ export function registerCourses(app) {
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     const course = courses.find((item) => item.id === req.params.id);
     if (!course) return res.status(404).json({ error: "Course not found" });
+    if (parsed.data.approval === "Approved") {
+      const prerequisitePolicy = validateCoursePrerequisites({
+        courseId: course.id,
+        prerequisiteIds: course.prerequisites,
+        courses,
+        requireAvailable: true,
+      });
+      if (!prerequisitePolicy.valid) return prerequisiteError(res, prerequisitePolicy);
+    } else {
+      const dependentCourseIds = activeDependentCourseIds({ courseId: course.id, courses });
+      if (dependentCourseIds.length) return prerequisiteError(res, {
+        code: "COURSE_PREREQUISITE_IN_USE",
+        details: { dependentCourseIds },
+      });
+    }
     course.approval = parsed.data.approval;
     if (parsed.data.approval === "Rejected") course.status = "Inactive";
     audit(req.user.id, "COURSE_APPROVAL", "COURSE", course.id, parsed.data);
@@ -240,6 +295,21 @@ export function registerCourses(app) {
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     const course = courses.find((item) => item.id === req.params.id);
     if (!course) return res.status(404).json({ error: "Course not found" });
+    if (parsed.data.status === "Active" && course.approval === "Approved") {
+      const prerequisitePolicy = validateCoursePrerequisites({
+        courseId: course.id,
+        prerequisiteIds: course.prerequisites,
+        courses,
+        requireAvailable: true,
+      });
+      if (!prerequisitePolicy.valid) return prerequisiteError(res, prerequisitePolicy);
+    } else if (parsed.data.status === "Inactive") {
+      const dependentCourseIds = activeDependentCourseIds({ courseId: course.id, courses });
+      if (dependentCourseIds.length) return prerequisiteError(res, {
+        code: "COURSE_PREREQUISITE_IN_USE",
+        details: { dependentCourseIds },
+      });
+    }
     course.status = parsed.data.status;
     audit(req.user.id, "COURSE_STATUS", "COURSE", course.id, parsed.data);
     res.json({ data: course });
@@ -254,6 +324,11 @@ export function registerCourses(app) {
     if (idx === -1) return res.status(404).json({ error: "Course not found" });
     const course = courses[idx];
     if (!canManageCourse(req.user, course)) return res.status(403).json({ error: "Forbidden" });
+    const dependentCourseIds = activeDependentCourseIds({ courseId: course.id, courses });
+    if (dependentCourseIds.length) return prerequisiteError(res, {
+      code: "COURSE_PREREQUISITE_IN_USE",
+      details: { dependentCourseIds },
+    });
 
     const relatedChapters = chapters.filter((ch) => ch.courseId === course.id);
     const relatedAssessments = assessments.filter((a) => a.courseId === course.id);

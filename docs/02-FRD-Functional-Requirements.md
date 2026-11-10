@@ -115,6 +115,7 @@ date: "2026-06-22"
 - **FR-ENR-2 — Track progress.** System maintains progress %, completed chapters, time-on-task, completion timestamp per (user, course).
 - **FR-ENR-3 — Self-enroll on activity.** Time/progress events auto-create an enrollment if absent.
 - **FR-ENR-4 — Prerequisite eligibility.** Free self-enrollment and paid checkout require durable completion evidence for every prerequisite course. Existing enrollment is idempotent. Checkout orders immutably bind the course version and prerequisite snapshot used for the eligibility decision.
+- **FR-ENR-5 — Prerequisite graph integrity.** Course authoring rejects unknown prerequisite IDs and cycles. Active approved courses may depend only on active approved courses, and a live prerequisite cannot be rejected, disabled, or deleted while an active approved dependent references it.
 
 ## 9. Module: AI — Acharya & Copilot (AI)
 

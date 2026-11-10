@@ -92,6 +92,88 @@ describe("PostgreSQL course authority", () => {
     expect(courseInsert[1]).toContain("Pending");
   });
 
+  it("rejects an unknown prerequisite before creating a course", async () => {
+    const { db, client } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT id, prerequisites")) return { rows: [] };
+      return { rows: [], rowCount: 1 };
+    });
+    const repository = createCourseAuthorityRepository(db);
+
+    await expect(repository.createCourse({
+      actor: { id: "OWNER-1", role: "Manager" },
+      course: {
+        id: "CRS-NEW", title: "Secure systems", description: "Production security engineering",
+        skill: "Security", prerequisites: ["CRS-MISSING"],
+      },
+    })).rejects.toMatchObject({ code: "COURSE_PREREQUISITE_NOT_FOUND" });
+    expect(client.query.mock.calls.some(([sql]) => sql.includes("INSERT INTO courses"))).toBe(false);
+  });
+
+  it("rejects a prerequisite cycle during course update", async () => {
+    const { db, client } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT * FROM courses")) return { rows: [courseRow({ id: "CRS-C" })] };
+      if (sql.includes("SELECT id, prerequisites")) {
+        return { rows: [
+          courseRow({ id: "CRS-A", prerequisites: ["CRS-B"] }),
+          courseRow({ id: "CRS-B", prerequisites: ["CRS-C"] }),
+          courseRow({ id: "CRS-C", prerequisites: [] }),
+        ] };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    const repository = createCourseAuthorityRepository(db);
+
+    await expect(repository.updateCourse({
+      id: "CRS-C",
+      actor: { id: "OWNER-1", role: "Manager" },
+      expectedVersion: 1,
+      updates: { prerequisites: ["CRS-A"] },
+    })).rejects.toMatchObject({ code: "COURSE_PREREQUISITE_CYCLE" });
+    expect(client.query.mock.calls.some(([sql]) => sql.startsWith("UPDATE courses"))).toBe(false);
+  });
+
+  it("prevents deletion of a prerequisite used by a live course", async () => {
+    const { db, client } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT * FROM courses")) return { rows: [courseRow({ id: "CRS-PRE" })] };
+      if (sql.includes("SELECT id, prerequisites")) {
+        return { rows: [courseRow({ id: "CRS-LIVE", prerequisites: ["CRS-PRE"] })] };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    const repository = createCourseAuthorityRepository(db);
+
+    await expect(repository.archiveAndDelete({
+      id: "CRS-PRE",
+      actor: { id: "OWNER-1", name: "Owner", role: "Manager" },
+      expectedVersion: 1,
+      deletionComment: "Retire obsolete authoring draft",
+    })).rejects.toMatchObject({ code: "COURSE_PREREQUISITE_IN_USE" });
+    expect(client.query.mock.calls.some(([sql]) => sql.startsWith("DELETE FROM courses"))).toBe(false);
+  });
+
+  it("prevents a manager update from implicitly unapproving a live prerequisite", async () => {
+    let graphReads = 0;
+    const { db, client } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT * FROM courses")) return { rows: [courseRow({ id: "CRS-PRE" })] };
+      if (sql.includes("SELECT id, prerequisites")) {
+        graphReads += 1;
+        return graphReads === 1
+          ? { rows: [courseRow({ id: "CRS-PRE" })] }
+          : { rows: [courseRow({ id: "CRS-LIVE", prerequisites: ["CRS-PRE"] })] };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    const repository = createCourseAuthorityRepository(db);
+
+    await expect(repository.updateCourse({
+      id: "CRS-PRE",
+      actor: { id: "OWNER-1", role: "Manager" },
+      expectedVersion: 1,
+      updates: { title: "Updated prerequisite title" },
+    })).rejects.toMatchObject({ code: "COURSE_PREREQUISITE_IN_USE" });
+    expect(client.query.mock.calls.some(([sql]) => sql.startsWith("UPDATE courses"))).toBe(false);
+  });
+
   it("rejects a stale writer before issuing an update", async () => {
     const { db, client } = fakeDb(async (sql) => {
       if (sql.includes("SELECT * FROM courses")) return { rows: [courseRow({ current_version: 3 })] };
