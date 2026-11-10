@@ -1,4 +1,5 @@
 import { query, withTransaction } from "../db/pool.js";
+import { enrollmentIsComplete } from "../enrollment-eligibility.js";
 
 const iso = (value) => value instanceof Date ? value.toISOString() : value;
 const isAdmin = (role) => role === "Admin" || role === "Super Admin";
@@ -303,11 +304,31 @@ export function createCourseAuthorityRepository(db = { query, withTransaction })
       if (!row || row.status !== "Active" || row.approval !== "Approved") {
         fail("COURSE_NOT_FOUND", "Approved course not found");
       }
+      const existing = await client.query(
+        "SELECT * FROM enrollments WHERE course_id = $1 AND user_id = $2 FOR SHARE",
+        [courseId, userId],
+      );
+      if (existing.rows[0]) return { enrollment: existing.rows[0], created: false };
       if (Number(row.price_cents || 0) > 0) {
         fail("PAYMENT_REQUIRED", "Payment required to enroll in this course", {
           priceCents: Number(row.price_cents),
           currency: row.currency,
         });
+      }
+      const prerequisites = [...new Set(row.prerequisites || [])];
+      if (prerequisites.length) {
+        const completions = await client.query(
+          `SELECT * FROM enrollments
+           WHERE user_id = $1 AND course_id = ANY($2::text[]) FOR SHARE`,
+          [userId, prerequisites],
+        );
+        const completed = new Set(
+          completions.rows.filter(enrollmentIsComplete).map((item) => item.course_id),
+        );
+        const unmetPrerequisiteIds = prerequisites.filter((id) => !completed.has(id));
+        if (unmetPrerequisiteIds.length) {
+          fail("PREREQUISITES_NOT_MET", "Course prerequisites are not complete", { unmetPrerequisiteIds });
+        }
       }
       const inserted = await client.query(
         `INSERT INTO enrollments (id, course_id, user_id, assigned_by, status, started_at)
@@ -319,11 +340,11 @@ export function createCourseAuthorityRepository(db = { query, withTransaction })
         await audit(client, userId, "SELF_ENROLL", courseId);
         return { enrollment: inserted.rows[0], created: true };
       }
-      const existing = await client.query(
+      const competing = await client.query(
         "SELECT * FROM enrollments WHERE course_id = $1 AND user_id = $2",
         [courseId, userId]
       );
-      return { enrollment: existing.rows[0], created: false };
+      return { enrollment: competing.rows[0], created: false };
     });
 
   const archiveAndDelete = async ({ id, actor, expectedVersion, deletionComment }) =>

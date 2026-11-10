@@ -10,6 +10,9 @@ const orderRow = (overrides = {}) => ({
   provider: "Razorpay",
   user_id: "USR-001",
   course_id: "CRS-001",
+  course_version: 1,
+  prerequisite_ids: [],
+  eligibility_bound_at: new Date("2026-11-03T08:00:00.000Z"),
   amount_cents: 499900,
   currency: "INR",
   status: "Created",
@@ -184,6 +187,12 @@ describe("PostgreSQL payment repository", () => {
   it("uses the partial unique key when racing to create an open order", async () => {
     let insertSeen = false;
     const { db, client } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT current_version, prerequisites")) {
+        return { rows: [{
+          current_version: 1, prerequisites: [], price_cents: 499900,
+          currency: "INR", status: "Active", approval: "Approved",
+        }] };
+      }
       if (sql.includes("INSERT INTO payment_orders")) {
         insertSeen = true;
         return { rows: [], rowCount: 0 };
@@ -198,6 +207,9 @@ describe("PostgreSQL payment repository", () => {
       provider: "Razorpay",
       userId: "USR-001",
       courseId: "CRS-001",
+      courseVersion: 1,
+      prerequisiteIds: [],
+      eligibilityBoundAt: "2026-11-03T08:00:00.000Z",
       amountCents: 499900,
       currency: "INR",
       createdAt: "2026-11-03T08:00:00.000Z",
@@ -207,5 +219,78 @@ describe("PostgreSQL payment repository", () => {
     expect(result).toMatchObject({ idempotent: true, order: { orderId: "order_001" } });
     const insertSql = client.query.mock.calls.find(([sql]) => sql.includes("INSERT INTO payment_orders"))[0];
     expect(insertSql).toContain("ON CONFLICT (user_id, course_id) WHERE status = 'Created'");
+  });
+
+  it("refuses to create a payment order with incomplete prerequisites", async () => {
+    const { db, client } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT current_version, prerequisites")) {
+        return { rows: [{
+          current_version: 3, prerequisites: ["CRS-PRE"], price_cents: 499900,
+          currency: "INR", status: "Active", approval: "Approved",
+        }] };
+      }
+      if (sql.includes("FROM enrollments")) return { rows: [] };
+      return { rows: [], rowCount: 1 };
+    });
+    const repository = createPaymentsRepository(db);
+
+    await expect(repository.insertOrder({
+      orderId: "order_prerequisite",
+      receipt: "nld_prerequisite",
+      provider: "Razorpay",
+      userId: "USR-001",
+      courseId: "CRS-001",
+      courseVersion: 3,
+      prerequisiteIds: ["CRS-PRE"],
+      eligibilityBoundAt: "2026-11-03T08:00:00.000Z",
+      amountCents: 499900,
+      currency: "INR",
+      createdAt: "2026-11-03T08:00:00.000Z",
+      expiresAt: "2026-11-03T09:00:00.000Z",
+    })).rejects.toMatchObject({ code: "PREREQUISITES_NOT_MET" });
+
+    expect(client.query.mock.calls.some(([sql]) => sql.includes("INSERT INTO payment_orders"))).toBe(false);
+  });
+
+  it("binds course version and prerequisite evidence into a new payment order", async () => {
+    const boundRow = orderRow({
+      course_version: 3,
+      prerequisite_ids: ["CRS-PRE"],
+      eligibility_bound_at: new Date("2026-11-03T08:00:00.000Z"),
+    });
+    const { db, client } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT current_version, prerequisites")) {
+        return { rows: [{
+          current_version: 3, prerequisites: ["CRS-PRE"], price_cents: 499900,
+          currency: "INR", status: "Active", approval: "Approved",
+        }] };
+      }
+      if (sql.includes("FROM enrollments")) {
+        return { rows: [{ course_id: "CRS-PRE", progress: 100 }] };
+      }
+      if (sql.includes("INSERT INTO payment_orders")) return { rows: [boundRow], rowCount: 1 };
+      return { rows: [], rowCount: 1 };
+    });
+    const repository = createPaymentsRepository(db);
+
+    const result = await repository.insertOrder({
+      orderId: "order_001",
+      receipt: "nld_receipt_001",
+      provider: "Razorpay",
+      userId: "USR-001",
+      courseId: "CRS-001",
+      courseVersion: 3,
+      prerequisiteIds: ["CRS-PRE"],
+      eligibilityBoundAt: "2026-11-03T08:00:00.000Z",
+      amountCents: 499900,
+      currency: "INR",
+      createdAt: "2026-11-03T08:00:00.000Z",
+      expiresAt: "2026-11-03T09:00:00.000Z",
+    });
+
+    expect(result.order).toMatchObject({ courseVersion: 3, prerequisiteIds: ["CRS-PRE"] });
+    const insert = client.query.mock.calls.find(([sql]) => sql.includes("INSERT INTO payment_orders"));
+    expect(insert[0]).toContain("course_version, prerequisite_ids, eligibility_bound_at");
+    expect(client.query.mock.calls.some(([sql]) => sql.includes("INSERT INTO audit_logs"))).toBe(true);
   });
 });

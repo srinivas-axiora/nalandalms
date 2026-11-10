@@ -54,7 +54,7 @@ const errorStatus = (error) => {
   if (error.code === "COURSE_NOT_FOUND") return 404;
   if (error.code === "FORBIDDEN") return 403;
   if (error.code === "PAYMENT_REQUIRED") return 402;
-  if (["COURSE_CONFLICT", "VERSION_CONFLICT", "COURSE_HAS_HISTORY"].includes(error.code)) return 409;
+  if (["COURSE_CONFLICT", "VERSION_CONFLICT", "COURSE_HAS_HISTORY", "PREREQUISITES_NOT_MET"].includes(error.code)) return 409;
   if (error.code === "NO_CHANGES") return 400;
   return 500;
 };

@@ -1,5 +1,6 @@
 import { v4 as uuid } from "uuid";
 import { query, withTransaction } from "../db/pool.js";
+import { enrollmentIsComplete } from "../enrollment-eligibility.js";
 
 const iso = (value) => (value instanceof Date ? value.toISOString() : value);
 
@@ -9,6 +10,9 @@ const mapOrder = (row) => row && ({
   provider: row.provider,
   userId: row.user_id,
   courseId: row.course_id,
+  courseVersion: row.course_version == null ? null : Number(row.course_version),
+  prerequisiteIds: row.prerequisite_ids || [],
+  eligibilityBoundAt: row.eligibility_bound_at ? iso(row.eligibility_bound_at) : null,
   amountCents: Number(row.amount_cents),
   currency: row.currency,
   status: row.status,
@@ -79,11 +83,24 @@ export function createPaymentsRepository(db = { query, withTransaction }) {
   const findReusableOrder = async (userId, courseId, at = new Date()) => {
     const { rows } = await db.query(
       `SELECT * FROM payment_orders
-       WHERE user_id = $1 AND course_id = $2 AND status = 'Created' AND expires_at > $3
+       WHERE user_id = $1 AND course_id = $2 AND status = 'Created'
+         AND eligibility_bound_at IS NOT NULL AND expires_at > $3
        ORDER BY created_at DESC LIMIT 1`,
       [userId, courseId, at]
     );
     return mapOrder(rows[0]);
+  };
+
+  const findUnmetPrerequisiteIds = async (userId, prerequisiteIds, runner = db) => {
+    const prerequisites = [...new Set(prerequisiteIds || [])];
+    if (!prerequisites.length) return [];
+    const { rows } = await runner.query(
+      `SELECT * FROM enrollments
+       WHERE user_id = $1 AND course_id = ANY($2::text[])`,
+      [userId, prerequisites],
+    );
+    const completed = new Set(rows.filter(enrollmentIsComplete).map((row) => row.course_id));
+    return prerequisites.filter((id) => !completed.has(id));
   };
 
   const insertOrder = async (order) => db.withTransaction(async (client) => {
@@ -92,16 +109,50 @@ export function createPaymentsRepository(db = { query, withTransaction }) {
        WHERE user_id = $1 AND course_id = $2 AND status = 'Created' AND expires_at <= $3`,
       [order.userId, order.courseId, order.createdAt]
     );
+    const courseResult = await client.query(
+      `SELECT current_version, prerequisites, price_cents, currency, status, approval
+       FROM courses WHERE id = $1 FOR SHARE`,
+      [order.courseId],
+    );
+    const course = courseResult.rows[0];
+    const currentPrerequisites = [...new Set(course?.prerequisites || [])];
+    const boundPrerequisites = [...new Set(order.prerequisiteIds || [])];
+    if (
+      !course
+      || course.status !== "Active"
+      || course.approval !== "Approved"
+      || Number(course.current_version) !== Number(order.courseVersion)
+      || JSON.stringify(currentPrerequisites) !== JSON.stringify(boundPrerequisites)
+    ) {
+      repoFail("ORDER_ELIGIBILITY_STALE", "Course eligibility changed before checkout order creation");
+    }
+    if (
+      Number(course.price_cents) !== Number(order.amountCents)
+      || String(course.currency || "").toUpperCase() !== String(order.currency || "").toUpperCase()
+    ) {
+      repoFail("ORDER_BINDING_MISMATCH", "Course price changed before checkout order creation");
+    }
+    const unmetPrerequisiteIds = await findUnmetPrerequisiteIds(
+      order.userId,
+      boundPrerequisites,
+      client,
+    );
+    if (unmetPrerequisiteIds.length) {
+      repoFail("PREREQUISITES_NOT_MET", "Course prerequisites are not complete");
+    }
     const { rows } = await client.query(
         `INSERT INTO payment_orders (
            order_id, receipt, provider, user_id, course_id, amount_cents, currency,
+           course_version, prerequisite_ids, eligibility_bound_at,
            status, created_at, expires_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'Created', $8, $9)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'Created', $11, $12)
          ON CONFLICT (user_id, course_id) WHERE status = 'Created' DO NOTHING
          RETURNING *`,
         [
           order.orderId, order.receipt, order.provider, order.userId, order.courseId,
-          order.amountCents, order.currency, order.createdAt, order.expiresAt,
+          order.amountCents, order.currency, order.courseVersion,
+          boundPrerequisites, order.eligibilityBoundAt,
+          order.createdAt, order.expiresAt,
         ]
     );
     if (rows[0]) {
@@ -112,13 +163,16 @@ export function createPaymentsRepository(db = { query, withTransaction }) {
           orderId: order.orderId,
           amountCents: order.amountCents,
           currency: order.currency,
+          courseVersion: order.courseVersion,
+          prerequisiteIds: boundPrerequisites,
         })]
       );
       return { order: mapOrder(rows[0]), idempotent: false };
     }
     const existing = await client.query(
       `SELECT * FROM payment_orders
-       WHERE user_id = $1 AND course_id = $2 AND status = 'Created' AND expires_at > $3
+       WHERE user_id = $1 AND course_id = $2 AND status = 'Created'
+         AND eligibility_bound_at IS NOT NULL AND expires_at > $3
        ORDER BY created_at DESC LIMIT 1`,
       [order.userId, order.courseId, order.createdAt]
     );
@@ -156,6 +210,9 @@ export function createPaymentsRepository(db = { query, withTransaction }) {
       repoFail("ORDER_PAID", "Order has already been paid with a different payment");
     }
     if (order.status !== "Created") repoFail("ORDER_NOT_PAYABLE", "Payment order is no longer payable");
+    if (!order.eligibilityBoundAt || !Number.isInteger(order.courseVersion)) {
+      repoFail("ORDER_NOT_PAYABLE", "Payment order is missing its eligibility binding");
+    }
     if (Date.parse(order.expiresAt) <= Date.parse(at)) {
       await client.query(
         "UPDATE payment_orders SET status = 'Expired', updated_at = $2 WHERE order_id = $1",
@@ -287,6 +344,7 @@ export function createPaymentsRepository(db = { query, withTransaction }) {
     findOrderById,
     findEnrollment,
     findReusableOrder,
+    findUnmetPrerequisiteIds,
     insertOrder,
     settleOrder,
     recordIgnoredWebhook,

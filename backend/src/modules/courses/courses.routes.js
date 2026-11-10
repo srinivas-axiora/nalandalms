@@ -8,6 +8,7 @@ import { courses, chapters, assessments, assignments, archives, users, now, next
 import { audit, canManageCourse, coursesVisibleTo } from "../../domain.js";
 import { authenticate, requireRole, requireStepUp } from "../../middleware.js";
 import { bufferMatchesContentType } from "../../security/file-validation.js";
+import { assertSnapshotEnrollmentEligibility } from "../../enrollment-eligibility.js";
 import { registerCoursesPgRoutes } from "./courses.pg.routes.js";
 
 const USE_PG_COURSES = process.env.USE_PG_COURSES === "1";
@@ -73,6 +74,19 @@ export function registerCourses(app) {
         error: "Payment required to enroll in this course",
         priceCents: course.priceCents,
         currency: course.currency || "INR",
+      });
+    }
+
+    const eligibility = assertSnapshotEnrollmentEligibility({
+      course,
+      enrollments: assignments,
+      userId: req.user.id,
+    });
+    if (!eligibility.eligible) {
+      return res.status(409).json({
+        error: "Course prerequisites are not complete",
+        code: "PREREQUISITES_NOT_MET",
+        details: { unmetPrerequisiteIds: eligibility.unmetPrerequisiteIds },
       });
     }
 

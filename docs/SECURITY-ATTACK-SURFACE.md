@@ -64,7 +64,7 @@ keeps the flag and acknowledgement disabled until live staging approval.
 | Method | Route | Auth | State | CSRF | Step | Rate | Scope / concern |
 |---|---|---|---:|---|---:|---|---|
 | GET | `/api/catalog` | Public | N | N/A | N | G | Approved active course metadata |
-| POST | `/api/courses/:id/enroll` | Any | Y | Y | N | G | Phase-12 relational mode locks the course and uses enrollment uniqueness; prerequisite policy remains pending |
+| POST | `/api/courses/:id/enroll` | Any | Y | Y | N | G | Idempotent existing enrollment; free enrollment requires durable completion of every course prerequisite and relational mode locks authority |
 | GET | `/api/courses` | Any | N | N/A | N | G | Role/enrollment scoped; Phase-12 relational mode uses database joins |
 | POST | `/api/courses` | A/M | Y | Y | N | G | Phase-12 relational mode accepts validated metadata only; media uses scoped object grants |
 | PUT | `/api/courses/:id` | A/M | Y | Y | N | G | Phase-12 relational mode enforces owner/admin scope and optimistic versioning |
@@ -157,7 +157,7 @@ same transactional enrollment records consumed by relational course access.
 | POST | `/api/certificates` | A/M/I | Y | Y | Y | G | Phase-39 course cutover implies relational eligibility; configured approver, course authority and step-up required |
 | POST | `/api/certificates/:certificateId/revoke` | A/M/I | Y | Y | Y | G | Phase-39 course cutover implies transactional certificate/enrollment revocation; course authority and step-up required |
 | POST | `/api/certificates/auto-issue` | Any | Y | Y | N | G | Phase-39 relational self-scope; selected passed attempt is transactionally bound to learner/course |
-| POST | `/api/payments/create-order` | Any | Y | Y | N | G | Server-priced order ledger binds user/course/amount/currency and expires |
+| POST | `/api/payments/create-order` | Any | Y | Y | N | G | Server-priced ledger binds user/course/version/amount/currency plus prerequisite snapshot; incomplete prerequisites are rejected |
 | POST | `/api/payments/verify` | Any | Y | Y | N | G | Mandatory HMAC, order ownership/binding and payment-level idempotency |
 | POST | `/api/payments/webhook` | Public | Y | Exempt | N | G | Mandatory raw-body HMAC and provider event-ID replay protection |
 | POST | `/api/uploads/presign` | A/M | Y | Y | N | G | Explicit course scope; owner/admin authority; short-lived grant; extension/MIME allowlist and course-rooted randomized key; no pre-scan download grant |

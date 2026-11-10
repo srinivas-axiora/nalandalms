@@ -21,6 +21,7 @@ import {
   paymentsRepository,
 } from "../../repositories/payments.repository.pg.js";
 import { relationalPaymentsEnabled } from "../../runtime-modes.js";
+import { assertSnapshotEnrollmentEligibility } from "../../enrollment-eligibility.js";
 
 const RAZORPAY_API_ORIGIN = "https://api.razorpay.com";
 const USE_RELATIONAL_PAYMENTS = relationalPaymentsEnabled();
@@ -48,6 +49,9 @@ const translateRepositoryError = (error) => {
     WEBHOOK_MISMATCH: 409,
     EVENT_REPLAY_MISMATCH: 409,
     ORDER_INSERT_CONFLICT: 409,
+    ORDER_ELIGIBILITY_STALE: 409,
+    ORDER_BINDING_MISMATCH: 409,
+    PREREQUISITES_NOT_MET: 409,
   };
   fail(statusByCode[error.code] || 409, error.message);
 };
@@ -200,6 +204,7 @@ export const createCheckoutOrder = async ({ user, courseId }) => {
     && item.courseId === course.id
     && item.status === "Created"
     && Date.parse(item.expiresAt) > currentTime
+    && item.eligibilityBoundAt
   );
   if (reusable) {
     return {
@@ -212,6 +217,13 @@ export const createCheckoutOrder = async ({ user, courseId }) => {
       idempotent: true,
     };
   }
+
+  const eligibility = assertSnapshotEnrollmentEligibility({
+    course,
+    enrollments: assignments,
+    userId: user.id,
+  });
+  if (!eligibility.eligible) fail(409, "Course prerequisites are not complete");
 
   const receipt = `nld_${uuid().replace(/-/g, "").slice(0, 24)}`;
   const providerOrder = await createProviderOrder({ amountCents, currency, receipt, userId: user.id, courseId: course.id });
@@ -230,6 +242,9 @@ export const createCheckoutOrder = async ({ user, courseId }) => {
     provider: "Razorpay",
     userId: user.id,
     courseId: course.id,
+    courseVersion: Number(course.version || 1),
+    prerequisiteIds: [...new Set(course.prerequisites || [])],
+    eligibilityBoundAt: createdAt,
     amountCents,
     currency,
     status: "Created",
@@ -278,6 +293,10 @@ const createCheckoutOrderPg = async ({ user, courseId }) => {
     };
   }
 
+  const prerequisiteIds = [...new Set(course.prerequisites || [])];
+  const unmetPrerequisiteIds = await paymentsRepository.findUnmetPrerequisiteIds(user.id, prerequisiteIds);
+  if (unmetPrerequisiteIds.length) fail(409, "Course prerequisites are not complete");
+
   const receipt = `nld_${uuid().replace(/-/g, "").slice(0, 24)}`;
   const providerOrder = await createProviderOrder({
     amountCents, currency, receipt, userId: user.id, courseId: course.id,
@@ -297,6 +316,9 @@ const createCheckoutOrderPg = async ({ user, courseId }) => {
     provider: "Razorpay",
     userId: user.id,
     courseId: course.id,
+    courseVersion: Number(course.version || 1),
+    prerequisiteIds,
+    eligibilityBoundAt: createdAt,
     amountCents,
     currency,
     createdAt,
@@ -337,6 +359,9 @@ export const verifyCheckoutPayment = async ({ actor, orderId, paymentId, signatu
     };
   }
   if (order.status !== "Created") fail(409, "Payment order is no longer payable");
+  if (!order.eligibilityBoundAt || !Number.isInteger(Number(order.courseVersion))) {
+    fail(409, "Payment order is no longer payable");
+  }
   if (Date.parse(order.expiresAt) <= Date.now()) {
     Object.assign(order, { status: "Expired", updatedAt: now() });
     fail(410, "Payment order has expired");

@@ -145,6 +145,54 @@ describe("PostgreSQL course authority", () => {
     expect(client.query.mock.calls.some(([sql]) => sql.includes("INSERT INTO audit_logs"))).toBe(false);
   });
 
+  it("rejects free self-enrollment until every prerequisite is complete", async () => {
+    const { db, client } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT * FROM courses")) {
+        return { rows: [courseRow({ prerequisites: ["CRS-PRE-1", "CRS-PRE-2"] })] };
+      }
+      if (sql.includes("course_id = ANY")) {
+        return { rows: [{ course_id: "CRS-PRE-1", progress: 100 }] };
+      }
+      if (sql.includes("SELECT * FROM enrollments")) return { rows: [] };
+      return { rows: [], rowCount: 1 };
+    });
+    const repository = createCourseAuthorityRepository(db);
+
+    await expect(repository.selfEnroll({
+      enrollmentId: "ENR-NEW", courseId: "CRS-1", userId: "USER-1",
+    })).rejects.toMatchObject({
+      code: "PREREQUISITES_NOT_MET",
+      details: { unmetPrerequisiteIds: ["CRS-PRE-2"] },
+    });
+    expect(client.query.mock.calls.some(([sql]) => sql.includes("INSERT INTO enrollments"))).toBe(false);
+  });
+
+  it("creates enrollment after all prerequisites are complete", async () => {
+    const enrollment = {
+      id: "ENR-NEW", course_id: "CRS-1", user_id: "USER-1",
+      assigned_by: "USER-1", status: "Enrolled",
+    };
+    const { db, client } = fakeDb(async (sql) => {
+      if (sql.includes("SELECT * FROM courses")) {
+        return { rows: [courseRow({ prerequisites: ["CRS-PRE-1"] })] };
+      }
+      if (sql.includes("course_id = ANY")) {
+        return { rows: [{ course_id: "CRS-PRE-1", status: "Passed" }] };
+      }
+      if (sql.includes("SELECT * FROM enrollments")) return { rows: [] };
+      if (sql.includes("INSERT INTO enrollments")) return { rows: [enrollment], rowCount: 1 };
+      return { rows: [], rowCount: 1 };
+    });
+    const repository = createCourseAuthorityRepository(db);
+
+    const result = await repository.selfEnroll({
+      enrollmentId: "ENR-NEW", courseId: "CRS-1", userId: "USER-1",
+    });
+
+    expect(result).toMatchObject({ created: true, enrollment: { id: "ENR-NEW" } });
+    expect(client.query.mock.calls.some(([sql]) => sql.includes("INSERT INTO audit_logs"))).toBe(true);
+  });
+
   it("refuses deletion when retained learning or financial history exists", async () => {
     const { db, client } = fakeDb(async (sql) => {
       if (sql.includes("SELECT * FROM courses")) return { rows: [courseRow()] };

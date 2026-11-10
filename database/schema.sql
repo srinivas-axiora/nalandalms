@@ -973,6 +973,9 @@ CREATE TABLE payment_orders (
   provider TEXT NOT NULL DEFAULT 'Razorpay',
   user_id TEXT NOT NULL REFERENCES users(id),
   course_id TEXT NOT NULL REFERENCES courses(id),
+  course_version INTEGER NOT NULL CHECK (course_version > 0),
+  prerequisite_ids TEXT[] NOT NULL DEFAULT '{}',
+  eligibility_bound_at TIMESTAMPTZ NOT NULL,
   amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
   currency TEXT NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
   status TEXT NOT NULL CHECK (status IN ('Created', 'Paid', 'Expired', 'Cancelled')),
@@ -1026,6 +1029,9 @@ BEGIN
      OR NEW.provider IS DISTINCT FROM OLD.provider
      OR NEW.user_id IS DISTINCT FROM OLD.user_id
      OR NEW.course_id IS DISTINCT FROM OLD.course_id
+     OR NEW.course_version IS DISTINCT FROM OLD.course_version
+     OR NEW.prerequisite_ids IS DISTINCT FROM OLD.prerequisite_ids
+     OR NEW.eligibility_bound_at IS DISTINCT FROM OLD.eligibility_bound_at
      OR NEW.amount_cents IS DISTINCT FROM OLD.amount_cents
      OR NEW.currency IS DISTINCT FROM OLD.currency
      OR NEW.created_at IS DISTINCT FROM OLD.created_at

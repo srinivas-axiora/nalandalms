@@ -65,6 +65,10 @@ Persisted as JSONB-per-collection (Postgres) or a single JSON document (file): `
 ### 3.2 Target relational schema (Phase 2)
 The normalized PostgreSQL schema is defined in `database/schema.sql` (departments, users, login_security, skills, target_skills, courses, course_versions, chapters, course_approvals, enrollments, chapter_time_totals, assessments, questions, assessment_attempts, learning_time_events, assessment_answers, proctoring_logs, proctor_captures, chapter_feedbacks, skill_ratings, system_settings, report_exports, audit_logs, deleted_archives, issued_certificates + analytics views).
 
+Payment orders persist immutable `course_version`, `prerequisite_ids` and
+`eligibility_bound_at` fields. Unbound open orders created by older builds are
+expired during migration and cannot create an entitlement.
+
 ### 3.3 Known model reconciliation items (must fix before Phase 2)
 - `attempt_status` ENUM vs app statuses `"Passed"/"Failed"` — reconcile (add columns or map to `Submitted/Evaluated` + a derived pass flag).
 - Runtime `assignments` ↔ schema `enrollments` field/shape mapping (`timeSpentMinutes` is derived, not stored).
