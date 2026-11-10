@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { lazy, useEffect, useState, useCallback, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { cn, Avatar, ToastNotification } from "./components";
 import { navByRole, now } from "./types";
@@ -6,24 +6,25 @@ import type { AppData, ModuleKey, User } from "./types";
 import { seedData } from "./seedData";
 import { setToastHandler } from "./toast";
 import { apiFetch } from "./api";
-import Login from "./pages/Login";
-import { MobileProctor } from "./pages/MobileProctor";
-import { ProctorCockpit } from "./pages/ProctorCockpit";
-import { VerifyCertificate } from "./pages/VerifyCertificate";
-import Dashboard from "./pages/Dashboard";
-import Courses from "./pages/Courses";
-import Assessments from "./pages/Assessments";
-import Skills from "./pages/Skills";
-import Users from "./pages/Users";
-import Team from "./pages/Team";
-import Settings from "./pages/Settings";
-import Reports from "./pages/Reports";
-import Certificates from "./pages/Certificates";
-import Evaluation from "./pages/Evaluation";
-import Archive from "./pages/Archive";
-import TextToCourseAgent from "./pages/TextToCourseAgent";
-import AICopilot from "./components/AICopilot";
 import { readAppState, writeAppState } from "./app-state-storage";
+
+const Login = lazy(() => import("./pages/Login"));
+const MobileProctor = lazy(() => import("./pages/MobileProctor").then((module) => ({ default: module.MobileProctor })));
+const ProctorCockpit = lazy(() => import("./pages/ProctorCockpit").then((module) => ({ default: module.ProctorCockpit })));
+const VerifyCertificate = lazy(() => import("./pages/VerifyCertificate").then((module) => ({ default: module.VerifyCertificate })));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Courses = lazy(() => import("./pages/Courses"));
+const Assessments = lazy(() => import("./pages/Assessments"));
+const Skills = lazy(() => import("./pages/Skills"));
+const Users = lazy(() => import("./pages/Users"));
+const Team = lazy(() => import("./pages/Team"));
+const Settings = lazy(() => import("./pages/Settings"));
+const Reports = lazy(() => import("./pages/Reports"));
+const Certificates = lazy(() => import("./pages/Certificates"));
+const Evaluation = lazy(() => import("./pages/Evaluation"));
+const Archive = lazy(() => import("./pages/Archive"));
+const TextToCourseAgent = lazy(() => import("./pages/TextToCourseAgent"));
+const AICopilot = lazy(() => import("./components/AICopilot"));
 
 type AuthenticatedUser = Partial<User> & Pick<User, "id"> & { sessionVersion?: number; sv?: number };
 

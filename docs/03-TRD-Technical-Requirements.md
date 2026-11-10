@@ -141,6 +141,7 @@ for active approved courses, and removal of a live referenced prerequisite.
 | NFR-8 | Compliance | Audit retention; proctoring data retention policy; PII minimization |
 | NFR-9 | Accessibility | Reduced-motion/high-contrast prefs; responsive UI |
 | NFR-10 | Recoverability | Soft-delete archive + restore; documented runbooks |
+| NFR-11 | Frontend delivery | Route-level lazy loading; every production JavaScript chunk must remain at or below 500 KiB |
 
 ## 8. Configuration (environment variables)
 
@@ -164,7 +165,7 @@ See `.env.example`.
 
 ## 9. Deployment
 
-- **Build:** `npm run build` (Vite → `frontend/dist`), served by Express.
+- **Build:** `npm run build` (Vite → `frontend/dist` plus a fail-closed 500 KiB JavaScript chunk budget), served by Express.
 - **Run:** `node backend/server.js` with env injected.
 - **Topology (GA):** single app instance + managed PostgreSQL + TLS-terminating reverse proxy/load balancer; secrets via secret manager.
 - **Process mgmt:** containerized (recommended) with health checks and graceful shutdown honored.
