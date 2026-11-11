@@ -7,6 +7,7 @@ import { seedData } from "./seedData";
 import { setToastHandler } from "./toast";
 import { apiFetch } from "./api";
 import { readAppState, writeAppState } from "./app-state-storage";
+import { normalizeAssessment, normalizeChapter, normalizeCourse } from "./normalizeLegacy";
 
 const Login = lazy(() => import("./pages/Login"));
 const MobileProctor = lazy(() => import("./pages/MobileProctor").then((module) => ({ default: module.MobileProctor })));
@@ -111,9 +112,12 @@ function normalizeData(data: AppData): AppData {
   ] : usersRaw;
   const skills = isDev ? mergeById(data?.skills || [], seedData.skills) : (data?.skills || []);
   const targetSkills = isDev ? mergeById(data?.targetSkills || [], seedData.targetSkills) : (data?.targetSkills || []);
-  const courses = isDev ? mergeById(data?.courses || [], seedData.courses) : (data?.courses || []);
-  const chapters = isDev ? mergeById(data?.chapters || [], seedData.chapters) : (data?.chapters || []);
-  const assessments = isDev ? mergeById(data?.assessments || [], seedData.assessments) : (data?.assessments || []);
+  const chapters = (isDev ? mergeById(data?.chapters || [], seedData.chapters) : (data?.chapters || [])).map(normalizeChapter);
+  const rawCourses = isDev ? mergeById(data?.courses || [], seedData.courses) : (data?.courses || []);
+  const skillNameById = new Map(skills.map((skill) => [skill.id, skill.name]));
+  const courseIds = new Set(rawCourses.map((course) => course.id));
+  const courses = rawCourses.map((course, index) => normalizeCourse(course, { chapters, skillNameById, courseIds, index }));
+  const assessments = (isDev ? mergeById(data?.assessments || [], seedData.assessments) : (data?.assessments || [])).map(normalizeAssessment);
 
   const rawEnrollments = data?.enrollments || (data as any)?.assignments || [];
   const rawAttempts = data?.attempts || [];

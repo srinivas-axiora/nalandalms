@@ -3,8 +3,22 @@ import type { AppData, User, UserPreferences } from "../types";
 import { now, uid } from "../types";
 import { apiFetch } from "../api";
 
+// Server-seeded users may have no stored preferences (or a partial/empty
+// object from PostgreSQL), so always render on top of these defaults.
+const DEFAULT_PREFERENCES: UserPreferences = {
+  theme: "dark",
+  language: "en",
+  emailNotifications: true,
+  pushNotifications: true,
+  weeklyDigest: true,
+  courseReminders: true,
+  fontSize: "medium",
+  reducedMotion: false,
+  highContrast: false,
+};
+
 export default function Settings({ data, currentUser, setData }: { data: AppData; currentUser: User; setData: (d: AppData) => void }) {
-  const prefs = currentUser.preferences;
+  const prefs: UserPreferences = { ...DEFAULT_PREFERENCES, ...(currentUser.preferences ?? {}) };
   const updatePrefs = (p: Partial<UserPreferences>) => {
     apiFetch("/users/me/preferences", {
       method: "PATCH",
