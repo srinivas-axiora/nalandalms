@@ -1,0 +1,29 @@
+{
+    # Global options
+    email {$ACME_EMAIL:admin@example.com}
+}
+
+# Replace :80 with your domain (e.g., lms.yourdomain.com) for automatic SSL/TLS.
+# If using raw IP address without domain, Caddy serves HTTP on port 80.
+{$DOMAIN::80} {
+    # Reverse proxy to the Nalanda backend/frontend container
+    reverse_proxy app:8080 {
+        # Preserve client headers and enable WebSocket proxying
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Security headers
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(self), microphone=(self), display-capture=(self)"
+        -Server
+    }
+
+    # Enable gzip and zstd compression
+    encode gzip zstd
+}

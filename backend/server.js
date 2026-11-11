@@ -117,8 +117,8 @@ const COURSE_AUTHORITY_COVERAGE_ACK = courseAuthorityCoverageAcknowledged();
 
 const app = express();
 let passwordResetDelivery = {
-  ok: process.env.NODE_ENV !== "production",
-  mode: process.env.NODE_ENV === "production" ? "sqs-ses" : "disabled",
+  ok: process.env.NODE_ENV !== "production" || process.env.STANDALONE_MODE === "1",
+  mode: process.env.STANDALONE_MODE === "1" ? "standalone" : (process.env.NODE_ENV === "production" ? "sqs-ses" : "disabled"),
 };
 app.set("trust proxy", TRUST_PROXY);
 
@@ -736,9 +736,11 @@ const start = async () => {
     await ensureRedisReady();
     const objects = await objectStoreHealth();
     if (!objects.ok) throw new Error(`Object storage is unavailable: ${objects.error || objects.mode}`);
-    if (process.env.NODE_ENV === "production") {
+    if (process.env.NODE_ENV === "production" && process.env.STANDALONE_MODE !== "1") {
       passwordResetDelivery = await passwordResetDeliveryHealth();
       if (!passwordResetDelivery.ok) throw new Error("Password reset queue or email delivery is unavailable");
+    } else if (process.env.STANDALONE_MODE === "1") {
+      passwordResetDelivery = { ok: true, mode: "standalone" };
     }
     retentionTimer = startRetentionDaemon();
     if (USE_RELATIONAL_PRIVACY && ENABLE_PRIVACY_ERASURE_WORKER) {

@@ -30,10 +30,13 @@ export const buildPasswordResetUrl = (token, baseUrl = getPasswordResetBaseUrl()
 
 export async function enqueuePasswordResetRequest(email, {
   client = sqs(),
-  queueUrl = getPasswordResetQueueUrl(),
+  queueUrl = process.env.STANDALONE_MODE === "1" ? null : getPasswordResetQueueUrl(),
   requestId = crypto.randomUUID(),
   requestedAt = new Date().toISOString(),
 } = {}) {
+  if (process.env.STANDALONE_MODE === "1") {
+    return { requestId, messageId: `standalone-${requestId}` };
+  }
   const message = { version: 1, requestId, email, requestedAt };
   const result = await client.send(new SendMessageCommand({
     QueueUrl: queueUrl,
@@ -81,8 +84,11 @@ export async function sendPasswordResetEmail({ recipient, token }, {
 export async function passwordResetDeliveryHealth({
   queue = sqs(),
   email = ses(),
-  queueUrl = getPasswordResetQueueUrl(),
+  queueUrl = process.env.STANDALONE_MODE === "1" ? null : getPasswordResetQueueUrl(),
 } = {}) {
+  if (process.env.STANDALONE_MODE === "1") {
+    return { ok: true, mode: "standalone", queueReady: true, emailReady: true };
+  }
   try {
     const [queueResult, emailResult] = await Promise.all([
       queue.send(new GetQueueAttributesCommand({

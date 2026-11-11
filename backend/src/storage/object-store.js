@@ -82,7 +82,7 @@ export async function requireCleanObject(keyValue) {
 
 export async function objectStoreHealth() {
   if (!isS3Configured || !s3Client) {
-    return { ok: process.env.NODE_ENV !== "production", mode: "local" };
+    return { ok: process.env.NODE_ENV !== "production" || process.env.STANDALONE_MODE === "1", mode: "local" };
   }
   try {
     await s3Client.send(new HeadBucketCommand({ Bucket: bucketName }));

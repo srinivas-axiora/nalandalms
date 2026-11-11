@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nalanda-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-nalanda}
+      POSTGRES_USER: ${DB_USER:-nalanda}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-nalanda_secure_db_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-nalanda} -d ${DB_NAME:-nalanda}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nalanda-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: nalanda-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-nalanda_secure_redis_password}
+      --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-nalanda_secure_redis_password}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nalanda-net
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nalanda-app
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      STANDALONE_MODE: "1"
+      PORT: 8080
+      DATABASE_URL: postgresql://${DB_USER:-nalanda}:${DB_PASSWORD:-nalanda_secure_db_password}@postgres:5432/${DB_NAME:-nalanda}
+      PGSSL: disable
+      REDIS_URL: redis://:${REDIS_PASSWORD:-nalanda_secure_redis_password}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-insecure_default_secret_must_change_in_production}
+      CERTIFICATE_SIGNING_SECRET: ${CERTIFICATE_SIGNING_SECRET:-insecure_default_cert_secret_must_change}
+      BASE_URL: ${BASE_URL:-http://localhost}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - nalanda-net
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: nalanda-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+    volumes:
+      - ./infra/oci/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    networks:
+      - nalanda-net
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploads_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  nalanda-net:
+    driver: bridge

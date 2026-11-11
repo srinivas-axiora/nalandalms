@@ -39,6 +39,9 @@ export const loadLocalEnv = () => {
 loadLocalEnv();
 
 export const IS_PRODUCTION = process.env.NODE_ENV === "production";
+export const STANDALONE_MODE = process.env.STANDALONE_MODE === "1"
+  || process.env.DEPLOYMENT_TARGET === "standalone"
+  || process.env.DEPLOYMENT_TARGET === "oci";
 export const PORT = process.env.PORT || 8080;
 
 const passwordResetEmailSchema = z.string().trim().email().max(320);
@@ -62,7 +65,7 @@ if (IS_PRODUCTION && !process.env.DATABASE_URL && !process.env.PGHOST) {
   process.exit(1);
 }
 
-if (IS_PRODUCTION) {
+if (IS_PRODUCTION && !STANDALONE_MODE) {
   const required = [
     "REDIS_URL",
     "S3_BUCKET",
@@ -105,6 +108,16 @@ if (IS_PRODUCTION) {
     console.error(
       `FATAL: USE_PG_COURSES requires COURSE_AUTHORITY_COVERAGE_ACK=${COURSE_AUTHORITY_COVERAGE_VERSION} in production.`
     );
+    process.exit(1);
+  }
+} else if (IS_PRODUCTION && STANDALONE_MODE) {
+  const standaloneRequired = [
+    "REDIS_URL",
+    "JWT_SECRET",
+  ];
+  const missing = standaloneRequired.filter((name) => !String(process.env[name] || "").trim());
+  if (missing.length) {
+    console.error(`FATAL: missing required standalone configuration: ${missing.join(", ")}`);
     process.exit(1);
   }
 }
