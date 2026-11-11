@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { API_URL } from "../api";
 // Inline SVG icons
 const ShieldCheck = ({ className }: { className?: string }) => (
   <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -62,7 +63,7 @@ export function MobileProctor() {
   const pairDevice = async (pairingToken: string) => {
     setPairingStatus("pairing");
     try {
-      const res = await fetch("/api/proctoring/companion/pair", {
+      const res = await fetch(`${API_URL}/proctoring/companion/pair`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

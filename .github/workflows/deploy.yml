@@ -1,0 +1,99 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci-test:
+    name: Build & Security Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Backend Syntax Checks
+        run: |
+          node --check backend/server.js
+          node --check backend/src/config.js
+          node --check backend/src/core.js
+
+      - name: Run Unit & Adversarial Security Tests
+        run: |
+          npm test
+          npm run test:security
+
+      - name: Run TypeScript Typecheck
+        run: npm run typecheck
+
+      - name: Build Frontend Application
+        run: npm run build
+
+  deploy-database-and-backend:
+    name: Deploy Backend & Apply DB Migrations
+    needs: ci-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install DB Migration dependencies
+        run: npm ci --omit=dev
+
+      - name: Run Neon Database Migrations
+        if: env.DATABASE_URL != ''
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PGSSL: require
+        run: node backend/src/db/migrate.js
+
+      - name: Trigger Backend Deployment Hook
+        if: env.DEPLOY_HOOK_URL != ''
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.DEPLOY_HOOK_URL }}
+        run: |
+          echo "[+] Triggering deploy hook..."
+          curl -s -X POST "$DEPLOY_HOOK_URL"
+
+  deploy-frontend-vercel:
+    name: Deploy Frontend to Vercel
+    needs: ci-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy to Vercel Production
+        if: env.VERCEL_TOKEN != ''
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: "--prod"
+          working-directory: ./frontend
+
