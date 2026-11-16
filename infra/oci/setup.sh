@@ -68,6 +68,7 @@ if [ ! -f .env ]; then
   REDIS_PASSWORD=$(openssl rand -hex 24)
   JWT_SECRET=$(openssl rand -hex 32)
   CERT_SECRET=$(openssl rand -hex 32)
+  SUPERADMIN_PASSWORD=$(openssl rand -hex 12)
 
   cat <<EOF > .env
 # Generated on $(date)
@@ -90,6 +91,10 @@ REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
 
 JWT_SECRET=${JWT_SECRET}
 CERTIFICATE_SIGNING_SECRET=${CERT_SECRET}
+
+# Seeded admin credentials
+SEED_SUPERADMIN_PASSWORD=${SUPERADMIN_PASSWORD}
+SEED_ADMIN_PASSWORD=${SUPERADMIN_PASSWORD}
 
 BASE_URL=http://localhost
 ALLOWED_ORIGINS=
@@ -126,10 +131,15 @@ docker compose exec -T app node backend/src/db/backfill.js || {
 
 PUBLIC_IP=$(curl -s https://ifconfig.me || curl -s https://api.ipify.org || echo "YOUR-SERVER-IP")
 
+ADMIN_PASS=$(grep '^SEED_SUPERADMIN_PASSWORD=' .env 2>/dev/null | cut -d '=' -f2- || echo "${SUPERADMIN_PASSWORD:-check .env}")
+
 echo "===================================================================="
 echo "  🎉 Nalanda LMS is successfully deployed on Oracle Cloud!"
 echo "===================================================================="
 echo "  • Access URL: http://${PUBLIC_IP}"
+echo "  • Super Admin Credentials:"
+echo "      - Username: SAnalanda  (or sanalanda@nalanda.local)"
+echo "      - Password: ${ADMIN_PASS}"
 echo "  • To enable HTTPS with your domain:"
 echo "      1. Point your domain DNS (A record) to ${PUBLIC_IP}"
 echo "      2. Edit .env and set DOMAIN=lms.yourdomain.com"
