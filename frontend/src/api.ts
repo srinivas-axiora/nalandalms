@@ -3,6 +3,11 @@ export const API_URL = "/api";
 let csrfToken: string | null = null;
 let reauthInFlight: Promise<boolean> | null = null;
 
+export function clearCsrfToken() {
+  csrfToken = null;
+}
+export const clearCsrf = clearCsrfToken;
+
 export async function getCsrf() {
   const res = await fetch(`${API_URL}/csrf-token`, { credentials: "include" });
   if (res.ok) {
@@ -33,7 +38,12 @@ async function requestReauth() {
   return reauthInFlight;
 }
 
-export async function apiFetch(endpoint: string, options: RequestInit = {}, retryingAfterReauth = false): Promise<Response> {
+export async function apiFetch(
+  endpoint: string,
+  options: RequestInit = {},
+  retryingAfterReauth = false,
+  retryingAfterCsrf = false
+): Promise<Response> {
   if (["POST", "PUT", "PATCH", "DELETE"].includes(options.method?.toUpperCase() || "") && !csrfToken) {
     await getCsrf();
   }
@@ -52,11 +62,28 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}, retr
     credentials: "include" // REQUIRED FOR COOKIES
   });
 
+  if (endpoint === "/auth/logout") {
+    clearCsrfToken();
+  }
+
+  if (res.status === 403 && !retryingAfterCsrf) {
+    try {
+      const data = await res.clone().json();
+      if (data?.error === "Invalid CSRF token" || (typeof data?.error === "string" && data.error.toLowerCase().includes("csrf"))) {
+        clearCsrfToken();
+        await getCsrf();
+        return apiFetch(endpoint, options, retryingAfterReauth, true);
+      }
+    } catch {
+      // Fall through to original 403 response.
+    }
+  }
+
   if (res.status === 412 && !retryingAfterReauth) {
     try {
       const data = await res.clone().json();
       if (data?.code === "STEP_UP_REQUIRED" && await requestReauth()) {
-        return apiFetch(endpoint, options, true);
+        return apiFetch(endpoint, options, true, retryingAfterCsrf);
       }
     } catch {
       // Fall through to original 412 response.

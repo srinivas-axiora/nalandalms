@@ -5,7 +5,7 @@ import { apiFetch } from "../api";
 
 // Server-seeded users may have no stored preferences (or a partial/empty
 // object from PostgreSQL), so always render on top of these defaults.
-const DEFAULT_PREFERENCES: UserPreferences = {
+export const DEFAULT_PREFERENCES: UserPreferences = {
   theme: "dark",
   language: "en",
   emailNotifications: true,
@@ -18,7 +18,7 @@ const DEFAULT_PREFERENCES: UserPreferences = {
 };
 
 export default function Settings({ data, currentUser, setData }: { data: AppData; currentUser: User; setData: (d: AppData) => void }) {
-  const prefs: UserPreferences = { ...DEFAULT_PREFERENCES, ...(currentUser.preferences ?? {}) };
+  const prefs: UserPreferences = { ...DEFAULT_PREFERENCES, ...(currentUser?.preferences ?? {}) };
   const updatePrefs = (p: Partial<UserPreferences>) => {
     apiFetch("/users/me/preferences", {
       method: "PATCH",
@@ -26,9 +26,13 @@ export default function Settings({ data, currentUser, setData }: { data: AppData
     })
       .then((res) => { if (!res.ok) throw new Error(); return res.json(); })
       .then((resData) => {
+        const updatedUser = {
+          ...resData.data,
+          preferences: { ...DEFAULT_PREFERENCES, ...(resData.data?.preferences ?? currentUser.preferences ?? {}) },
+        };
         setData({
           ...data,
-          users: data.users.map((u) => u.id === currentUser.id ? resData.data : u),
+          users: data.users.map((u) => u.id === currentUser.id ? updatedUser : u),
           audit: [{ id: uid("AUD"), actorId: currentUser.id, action: "Updated settings", entity: currentUser.id, at: now() }, ...data.audit]
         });
       })

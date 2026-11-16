@@ -612,7 +612,7 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
       description: course.description,
       skillId: skill?.id || data.skills[0]?.id || "",
       category: course.category,
-      tags: course.tags.join(", "),
+      tags: (course.tags || []).join(", "),
       targetLevel: course.targetLevel,
       difficulty: course.difficulty,
       estimatedHours: String(course.estimatedHours),
@@ -1003,7 +1003,7 @@ export default function Courses({ data, currentUser, setData }: { data: AppData;
                       </div>
                       <h3 className="mt-4 text-xl font-semibold text-white">{c.title}</h3>
                       <p className="mt-2 text-sm text-slate-400 leading-6">{c.description}</p>
-                      <div className="mt-3 flex flex-wrap gap-2">{c.tags.map((t) => <span key={t} className="rounded-full bg-white/5 px-3 py-1 text-xs text-slate-300">{t}</span>)}</div>
+                      <div className="mt-3 flex flex-wrap gap-2">{(c.tags || []).map((t) => <span key={t} className="rounded-full bg-white/5 px-3 py-1 text-xs text-slate-300">{t}</span>)}</div>
                     </div>
                     <div className="space-y-4">
                       <div className="flex justify-between text-sm text-slate-400"><span>{enrs.length} enrolled</span><span>{avgProg}%</span></div>

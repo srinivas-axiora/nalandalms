@@ -22,7 +22,7 @@ export function registerCertificates(app) {
   // Public friendly shortcut
   app.get("/verify/:certificateId", (req, res, next) => {
     // If request accepts HTML, pass along to frontend client, else return JSON verification
-    if (req.accepts("html") && !req.accepts("json")) {
+    if (req.accepts(["html", "json"]) === "html") {
       return next();
     }
     return controller.verify(req, res);
