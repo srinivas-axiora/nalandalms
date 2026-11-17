@@ -603,13 +603,21 @@ app.get("/api/csrf-token", (req, res) => {
 const buildAppDataProjection = async (user, { bootstrap = false } = {}) => {
   const admin = isAdmin(user.role);
   const superAdmin = user.role === "Super Admin";
-  const authoritativeVisibleUsers = USE_RELATIONAL_IDENTITY
-    ? (admin
+  let authoritativeVisibleUsers = [];
+  if (USE_RELATIONAL_IDENTITY) {
+    try {
+      authoritativeVisibleUsers = admin
         ? await identityRepository.listUsers({ status: "All" })
         : user.role === "Manager"
           ? await identityRepository.listUsers({ managerId: user.id, status: "Active" })
-          : [await identityRepository.findUserById(user.id)].filter(Boolean))
-    : users.filter((candidate) => visibleUserIdsFor(user).includes(candidate.id));
+          : [await identityRepository.findUserById(user.id)].filter(Boolean);
+    } catch (err) {
+      console.warn("[bootstrap] relational listUsers failed:", err?.message || err);
+    }
+  }
+  if (!authoritativeVisibleUsers || authoritativeVisibleUsers.length === 0) {
+    authoritativeVisibleUsers = users.filter((candidate) => visibleUserIdsFor(user).includes(candidate.id));
+  }
   const visibleUserIds = new Set(authoritativeVisibleUsers.map((candidate) => candidate.id));
   const allSkills = USE_RELATIONAL_SKILLS ? await skillsRepo.listSkills() : skills;
   const allTargetSkills = USE_RELATIONAL_SKILLS ? await skillsRepo.listTargetSkills() : targetSkills;

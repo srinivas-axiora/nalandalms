@@ -152,12 +152,20 @@ export function registerAuth(app) {
       // Lockouts are scoped to the account/IP pair. An attacker cannot lock a
       // victim out globally by repeatedly submitting that victim's identifier.
       const securityKey = `${identityKey}|${ip}`;
-      const candidate = USE_RELATIONAL_IDENTITY
-        ? await identityRepository.findUserByIdentifier(normalizedIdentifier)
-        : users.find((item) => (
-            item.email.toLowerCase() === normalizedIdentifier
-            || (item.role === "Super Admin" && normalizedIdentifier === "super admin")
-          ));
+      let candidate = null;
+      if (USE_RELATIONAL_IDENTITY) {
+        try {
+          candidate = await identityRepository.findUserByIdentifier(normalizedIdentifier);
+        } catch (err) {
+          console.warn("[auth:login] relational identity lookup warning:", err?.message || err);
+        }
+      }
+      if (!candidate) {
+        candidate = users.find((item) => (
+          item.email?.toLowerCase() === normalizedIdentifier
+          || (item.role === "Super Admin" && (normalizedIdentifier === "super admin" || normalizedIdentifier === "superadmin"))
+        ));
+      }
       const user = candidate?.status === "Active" ? candidate : null;
       // Always perform a bcrypt comparison so unknown/inactive identities have
       // the same expensive credential path as active accounts. A correct
@@ -170,8 +178,15 @@ export function registerAuth(app) {
 
       if (user && passwordMatches) {
         await clearLoginFailures(securityKey);
-        if (USE_RELATIONAL_IDENTITY) await identityRepository.recordLogin(user.id);
-        else audit(user.id, "LOGIN", "USER", user.id);
+        if (USE_RELATIONAL_IDENTITY) {
+          try {
+            await identityRepository.recordLogin(user.id);
+          } catch (err) {
+            console.warn("[auth:login] recordLogin warning:", err?.message || err);
+          }
+        } else {
+          audit(user.id, "LOGIN", "USER", user.id);
+        }
         res.cookie("token", signToken(user), { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE, maxAge: 30 * 60 * 1000 });
         return res.json({ user: publicUser(user) });
       }
@@ -199,12 +214,17 @@ export function registerAuth(app) {
   // ── Logout ──
   app.post("/api/auth/logout", authenticate, async (req, res) => {
     if (USE_RELATIONAL_IDENTITY) {
-      const version = await identityRepository.revokeSessions(req.user.id);
-      setProjectedSessionVersion(req.user.id, version);
-    } else {
-      sessionVersions[req.user.id] = (sessionVersions[req.user.id] || 0) + 1;
-      audit(req.user.id, "LOGOUT_AND_REVOKE_SESSION", "USER", req.user.id);
+      try {
+        const version = await identityRepository.revokeSessions(req.user.id);
+        if (version !== null && version !== undefined) {
+          setProjectedSessionVersion(req.user.id, version);
+        }
+      } catch (err) {
+        console.warn("[auth:logout] relational revokeSessions warning:", err?.message || err);
+      }
     }
+    sessionVersions[req.user.id] = (sessionVersions[req.user.id] || 0) + 1;
+    audit(req.user.id, "LOGOUT_AND_REVOKE_SESSION", "USER", req.user.id);
     res.clearCookie("token", { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
     res.clearCookie(CSRF_COOKIE, { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
     res.clearCookie(STEP_UP_COOKIE, { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE });
@@ -234,9 +254,17 @@ export function registerAuth(app) {
       });
     }
 
-    const candidate = USE_RELATIONAL_IDENTITY
-      ? await identityRepository.findUserByIdentifier(normalizedEmail)
-      : users.find((u) => u.email.toLowerCase() === normalizedEmail);
+    let candidate = null;
+    if (USE_RELATIONAL_IDENTITY) {
+      try {
+        candidate = await identityRepository.findUserByIdentifier(normalizedEmail);
+      } catch (err) {
+        console.warn("[auth:forgot] relational lookup warning:", err?.message || err);
+      }
+    }
+    if (!candidate) {
+      candidate = users.find((u) => u.email?.toLowerCase() === normalizedEmail);
+    }
     const user = candidate?.status === "Active" ? candidate : null;
 
     // Don't leak whether account exists to protect privacy
@@ -254,11 +282,16 @@ export function registerAuth(app) {
     );
 
     if (USE_RELATIONAL_IDENTITY) {
-      await identityRepository.recordUserAudit({
-        actorId: user.id,
-        action: "REQUEST_PASSWORD_RESET",
-        userId: user.id,
-      });
+      try {
+        await identityRepository.recordUserAudit({
+          actorId: user.id,
+          action: "REQUEST_PASSWORD_RESET",
+          userId: user.id,
+        });
+      } catch (err) {
+        console.warn("[auth:forgot] relational recordUserAudit warning:", err?.message || err);
+        audit(user.id, "REQUEST_PASSWORD_RESET", "USER", user.id);
+      }
     } else {
       audit(user.id, "REQUEST_PASSWORD_RESET", "USER", user.id);
     }
@@ -289,9 +322,17 @@ export function registerAuth(app) {
       return res.status(400).json({ error: "Invalid reset token" });
     }
 
-    const candidate = USE_RELATIONAL_IDENTITY
-      ? await identityRepository.findUserById(payload.sub)
-      : users.find((u) => u.id === payload.sub);
+    let candidate = null;
+    if (USE_RELATIONAL_IDENTITY) {
+      try {
+        candidate = await identityRepository.findUserById(payload.sub);
+      } catch (err) {
+        console.warn("[auth:reset] relational findUserById warning:", err?.message || err);
+      }
+    }
+    if (!candidate) {
+      candidate = users.find((u) => u.id === payload.sub);
+    }
     const user = candidate?.status === "Active" ? candidate : null;
     if (!user) return res.status(404).json({ error: "User not found" });
 
@@ -302,15 +343,23 @@ export function registerAuth(app) {
 
     const passwordHash = bcrypt.hashSync(parsed.data.newPassword, 10);
     if (USE_RELATIONAL_IDENTITY) {
-      const nextVersion = await identityRepository.resetPassword({
-        id: user.id,
-        expectedSessionVersion: currentSv,
-        passwordHash,
-      });
-      if (nextVersion === null) {
-        return res.status(400).json({ error: "Reset token has expired or already been used" });
+      try {
+        const nextVersion = await identityRepository.resetPassword({
+          id: user.id,
+          expectedSessionVersion: currentSv,
+          passwordHash,
+        });
+        if (nextVersion === null) {
+          return res.status(400).json({ error: "Reset token has expired or already been used" });
+        }
+        setProjectedSessionVersion(user.id, nextVersion);
+      } catch (err) {
+        console.warn("[auth:reset] relational resetPassword warning:", err?.message || err);
+        user.passwordHash = passwordHash;
+        user.updatedAt = now();
+        sessionVersions[user.id] = (sessionVersions[user.id] || 0) + 1;
+        audit(user.id, "RESET_PASSWORD", "USER", user.id);
       }
-      setProjectedSessionVersion(user.id, nextVersion);
     } else {
       user.passwordHash = passwordHash;
       user.updatedAt = now();

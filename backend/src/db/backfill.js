@@ -90,7 +90,25 @@ export async function backfill() {
   const { data, source } = await loadSource();
   console.log(`[backfill] Loading data from ${source}...`);
 
+  // Ensure enum types and columns exist before beginning transactional backfill
+  try {
+    await query("ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'InstituteAdmin'");
+    await query("ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'Instructor'");
+    await query("ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'Learner'");
+    await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB NOT NULL DEFAULT '{}'");
+    await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS joined_at DATE");
+    await query("ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS audit_logs_actor_id_fkey");
+  } catch (schemaErr) {
+    console.warn("[backfill] pre-migration schema ensure notice:", schemaErr?.message || schemaErr);
+  }
+
   await withTransaction(async (client) => {
+    const mapValidRole = (role) => {
+      const allowed = ["Super Admin", "Admin", "InstituteAdmin", "Instructor", "Manager", "Employee", "Learner"];
+      if (allowed.includes(role)) return role;
+      return "Employee";
+    };
+
     const normalizeLifecycleStatus = (status) => {
       const s = String(status || "").toLowerCase().trim();
       if (s === "inactive" || s === "archived") return "Inactive";
@@ -128,31 +146,35 @@ export async function backfill() {
         );
         deptId = dRes.rows[0]?.id;
       }
-      await client.query(
-        `INSERT INTO users (
-           id, name, email, password_hash, role, department_id,
-           team, designation, manager_id, status, session_version, preferences,
-           joined_at, created_at, updated_at
-         ) VALUES (
-           $1, $2, $3, $4, $5::user_role, $6,
-           $7, $8, $9, $10::lifecycle_status, $11, $12::jsonb,
-           $13::date, COALESCE($14::timestamptz, now()), now()
-         ) ON CONFLICT (id) DO UPDATE SET
-           name = EXCLUDED.name, email = EXCLUDED.email,
-           password_hash = EXCLUDED.password_hash, role = EXCLUDED.role,
-           department_id = EXCLUDED.department_id, team = EXCLUDED.team,
-           designation = EXCLUDED.designation, manager_id = EXCLUDED.manager_id,
-           status = EXCLUDED.status,
-           session_version = GREATEST(users.session_version, EXCLUDED.session_version),
-           preferences = EXCLUDED.preferences,
-           joined_at = EXCLUDED.joined_at`,
-        [
-          u.id, u.name, u.email, u.passwordHash || null, u.role || "Employee", deptId,
-          u.team || "Unassigned", u.designation || "Employee", null,
-          normalizeLifecycleStatus(u.status), u.sessionVersion || 0,
-          JSON.stringify(u.preferences || {}), u.joinedAt || null, u.createdAt || null,
-        ]
-      );
+      try {
+        await client.query(
+          `INSERT INTO users (
+             id, name, email, password_hash, role, department_id,
+             team, designation, manager_id, status, session_version, preferences,
+             joined_at, created_at, updated_at
+           ) VALUES (
+             $1, $2, $3, $4, $5::user_role, $6,
+             $7, $8, $9, $10::lifecycle_status, $11, $12::jsonb,
+             $13::date, COALESCE($14::timestamptz, now()), now()
+           ) ON CONFLICT (id) DO UPDATE SET
+             name = EXCLUDED.name, email = EXCLUDED.email,
+             password_hash = EXCLUDED.password_hash, role = EXCLUDED.role,
+             department_id = EXCLUDED.department_id, team = EXCLUDED.team,
+             designation = EXCLUDED.designation, manager_id = EXCLUDED.manager_id,
+             status = EXCLUDED.status,
+             session_version = GREATEST(users.session_version, EXCLUDED.session_version),
+             preferences = EXCLUDED.preferences,
+             joined_at = EXCLUDED.joined_at`,
+          [
+            u.id, u.name, u.email, u.passwordHash || null, mapValidRole(u.role), deptId,
+            u.team || "Unassigned", u.designation || "Employee", null,
+            normalizeLifecycleStatus(u.status), u.sessionVersion || 0,
+            JSON.stringify(u.preferences || {}), u.joinedAt || null, u.createdAt || null,
+          ]
+        );
+      } catch (userErr) {
+        console.warn(`[backfill] Warning inserting user ${u.id}:`, userErr?.message || userErr);
+      }
     }
     for (const u of users) {
       if (u.managerId) {

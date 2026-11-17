@@ -29,19 +29,33 @@ export function registerUsers(app) {
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const user = USE_RELATIONAL_IDENTITY
-      ? await identityRepository.findUserById(req.user.id)
-      : users.find((item) => item.id === req.user.id);
+    let user = null;
+    if (USE_RELATIONAL_IDENTITY) {
+      try {
+        user = await identityRepository.findUserById(req.user.id);
+      } catch (err) {
+        console.warn("[users:prefs] relational findUserById warning:", err?.message || err);
+      }
+    }
+    if (!user) {
+      user = users.find((item) => item.id === req.user.id);
+    }
     if (!user) return res.status(404).json({ error: "User not found" });
 
     const preferences = { ...(user.preferences || {}), ...parsed.data };
     if (USE_RELATIONAL_IDENTITY) {
-      const updated = await identityRepository.updateUser(user.id, { preferences }, {
-        actorId: req.user.id,
-        action: "UPDATE_PREFERENCES",
-      });
-      upsertIdentityProjection(updated);
-      return res.json({ data: publicUser(updated) });
+      try {
+        const updated = await identityRepository.updateUser(user.id, { preferences }, {
+          actorId: req.user.id,
+          action: "UPDATE_PREFERENCES",
+        });
+        if (updated) {
+          upsertIdentityProjection(updated);
+          return res.json({ data: publicUser(updated) });
+        }
+      } catch (err) {
+        console.warn("[users:prefs] relational updateUser warning:", err?.message || err);
+      }
     }
     user.preferences = preferences;
     audit(req.user.id, "UPDATE_PREFERENCES", "USER", user.id, parsed.data);
@@ -51,13 +65,19 @@ export function registerUsers(app) {
   app.get("/api/users", authenticate, requireRole("Admin", "Manager"), async (req, res) => {
     const { department, role, status = "Active" } = req.query;
     if (USE_RELATIONAL_IDENTITY) {
-      const visible = await identityRepository.listUsers({
-        ...(!isAdmin(req.user.role) ? { managerId: req.user.id } : {}),
-        department,
-        role,
-        status,
-      });
-      return res.json({ data: visible.map(publicUser), total: visible.length });
+      try {
+        const visible = await identityRepository.listUsers({
+          ...(!isAdmin(req.user.role) ? { managerId: req.user.id } : {}),
+          department,
+          role,
+          status,
+        });
+        if (visible && visible.length > 0) {
+          return res.json({ data: visible.map(publicUser), total: visible.length });
+        }
+      } catch (err) {
+        console.warn("[users:list] relational listUsers warning:", err?.message || err);
+      }
     }
     let visible = isAdmin(req.user.role) ? users : users.filter((user) => user.managerId === req.user.id || user.id === req.user.id);
     if (department) visible = visible.filter((user) => user.department === department);

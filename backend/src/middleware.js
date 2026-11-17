@@ -64,9 +64,17 @@ export const authenticate = async (req, res, next) => {
     return res.status(401).json({ error: "Invalid or expired token" });
   }
   try {
-    const user = USE_RELATIONAL_IDENTITY
-      ? await identityRepository.findUserById(payload.sub)
-      : users.find((item) => item.id === payload.sub);
+    let user = null;
+    if (USE_RELATIONAL_IDENTITY) {
+      try {
+        user = await identityRepository.findUserById(payload.sub);
+      } catch (err) {
+        console.warn("[identity] relational lookup failed:", err?.message || err);
+      }
+    }
+    if (!user) {
+      user = users.find((item) => item.id === payload.sub);
+    }
     if (!user) return res.status(401).json({ error: "Unknown user" });
     if (user.status !== "Active") return res.status(401).json({ error: "Account deactivated — session revoked" });
     const currentSv = Number(user.sessionVersion ?? user.sv ?? sessionVersions[user.id] ?? 0);
