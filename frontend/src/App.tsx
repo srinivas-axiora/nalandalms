@@ -217,6 +217,8 @@ export default function App() {
           status: authUser.status || "Active",
           joinedAt: authUser.joinedAt || new Date().toISOString().slice(0, 10),
           lastActive: "Today",
+          sessionVersion: sessionVer,
+          sv: sessionVer,
           preferences: authUser.preferences || {
             theme: "dark",
             language: "en",
@@ -248,6 +250,8 @@ export default function App() {
         status: authUser.status ?? "Active",
         joinedAt: authUser.joinedAt ?? existing.joinedAt,
         lastActive: "Today",
+        sessionVersion: sessionVer,
+        sv: sessionVer,
         preferences: authUser.preferences ?? existing.preferences,
       };
 
@@ -270,12 +274,27 @@ export default function App() {
           audit: dbData.audit || dbData.auditLogs || [],
           archive: dbData.archive || dbData.archives || [],
         };
-        setDataState(mappedData);
+        setDataState((prev) => {
+          const sv = { ...(prev.sessionVersion || {}), ...(dbData.sessionVersion || {}) };
+          if (Array.isArray(dbData.users)) {
+            dbData.users.forEach((u: any) => {
+              if (u.id && (u.sessionVersion !== undefined || u.sv !== undefined)) {
+                sv[u.id] = Number(u.sessionVersion ?? u.sv ?? 0);
+              }
+            });
+          }
+          return {
+            ...mappedData,
+            sessionVersion: sv,
+          };
+        });
+      } else if (res.status === 401) {
+        forceSignOut("Session expired. Please sign in again.");
       }
     } catch (err) {
       console.error("Error loading app data from backend:", err);
     }
-  }, [setDataState]);
+  }, [setDataState, forceSignOut]);
 
   useEffect(() => {
     getCsrf();
@@ -346,6 +365,9 @@ export default function App() {
 
     const validate = () => {
       const freshData = normalizeData(rawData);
+      // Skip validation while initial data payload has not arrived
+      if (!freshData.users || freshData.users.length === 0) return;
+
       const user = freshData.users.find((u) => u.id === sessionId);
 
       if (!user) {
@@ -356,8 +378,8 @@ export default function App() {
         forceSignOut("Session revoked — your account has been deactivated.");
         return;
       }
-      const currentVer = freshData.sessionVersion?.[sessionId] || 0;
-      if (sessionVersion !== null && currentVer !== sessionVersion) {
+      const authoritativeSv = user.sessionVersion ?? user.sv ?? freshData.sessionVersion?.[sessionId];
+      if (sessionVersion !== null && authoritativeSv !== undefined && authoritativeSv !== sessionVersion) {
         forceSignOut("Session revoked — your access has been changed by an administrator.");
         return;
       }
@@ -387,7 +409,14 @@ export default function App() {
     return <div className="flex min-h-screen items-center justify-center bg-slate-950 text-white font-semibold">Loading Nalanda...</div>;
   }
 
-  if (!currentUser || passwordResetFlowRequested) return <Login users={data.users} onLogin={signIn} />;
+  if (!currentUser || passwordResetFlowRequested) {
+    return (
+      <>
+        <Login users={data.users} onLogin={signIn} />
+        <ToastNotification message={toastMsg} onDone={() => setToastMsg(null)} />
+      </>
+    );
+  }
 
   const nav = navByRole[currentUser.role];
 

@@ -20,6 +20,8 @@ export type User = {
   status: Status;
   joinedAt: string;
   lastActive: string;
+  sessionVersion?: number;
+  sv?: number;
   preferences: UserPreferences;
 };
 

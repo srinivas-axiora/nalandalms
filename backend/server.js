@@ -664,6 +664,12 @@ const buildAppDataProjection = async (user, { bootstrap = false } = {}) => {
     targetSkills: allTargetSkills.filter((target) => targetSkillVisibleTo(target, user)),
     skillRatings: scopedSkillRatings,
     chapterFeedbacks: scopedChapterFeedbacks,
+    sessionVersion: Object.fromEntries(
+      authoritativeVisibleUsers.map((u) => [
+        u.id,
+        Number(u.sessionVersion ?? u.sv ?? sessionVersions[u.id] ?? 0),
+      ])
+    ),
   };
   if (bootstrap) return bootstrapProjection;
 
