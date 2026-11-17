@@ -38,19 +38,19 @@ export const sixSigmaSkills = [
   {
     id: "SKILL-SSM-DMAIC",
     name: "Lean Six Sigma DMAIC Lifecycle, Statistical Process Control (SPC) & Quality Engineering",
-    category: "Operations & Quality Management",
+    category: "Functional",
     description: "Leading data-driven process improvement through DMAIC, statistical hypothesis testing, Gage R&R measurement systems, capability analysis, and real-time SPC control charting."
   },
   {
     id: "SKILL-SSM-LEAN-OPS",
     name: "Value Stream Mapping (VSM), Waste Elimination (Muda/Muri/Mura) & Just-In-Time (JIT)",
-    category: "Operations & Quality Management",
+    category: "Functional",
     description: "Designing Lean value streams, eliminating the 8 deadly wastes, sizing pull Kanban loops, and balancing cellular manufacturing lines to customer Takt Time."
   },
   {
     id: "SKILL-SSM-LEADERSHIP",
     name: "Kaizen Leadership, Total Productive Maintenance (TPM) & Design for Six Sigma (DFSS)",
-    category: "Operations & Quality Management",
+    category: "Functional",
     description: "Leading rapid Kaizen blitzen, optimizing asset reliability via TPM and OEE, designing 6-Sigma products via DMADV/QFD, and delivering executive A3 presentations."
   }
 ];

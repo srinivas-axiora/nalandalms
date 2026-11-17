@@ -42,19 +42,19 @@ export const salesExecutiveSkills = [
   {
     id: "SKILL-SLS-METHODOLOGIES-PROSPECTING",
     name: "Enterprise B2B Sales Methodologies, ICP Modeling & Outbound Prospecting",
-    category: "Sales & Revenue Operations",
+    category: "Functional",
     description: "Deep mastery of MEDDPICC, Challenger, SPIN, ICP definitions, multi-channel cadences, and account-based prospecting."
   },
   {
     id: "SKILL-SLS-DISCOVERY-PIPELINE",
     name: "Discovery Excellence, High-Impact Demos & CRM Pipeline Architecture",
-    category: "Sales & Revenue Operations",
+    category: "Functional",
     description: "Rigorous executive discovery, demo choreography, multi-threading, champion enablement, and CRM pipeline hygiene."
   },
   {
     id: "SKILL-SLS-NEGOTIATION-EXPANSION",
     name: "Procurement Negotiation, Mutual Action Plans & Account Expansion",
-    category: "Sales & Revenue Operations",
+    category: "Functional",
     description: "Principled enterprise negotiations, discount governance, cloud marketplace co-selling, and land-and-expand NRR acceleration."
   }
 ];

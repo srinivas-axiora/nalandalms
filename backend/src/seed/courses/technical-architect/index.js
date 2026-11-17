@@ -37,19 +37,19 @@ export const technicalArchitectSkills = [
   {
     id: "SKILL-TAR-SYSTEM-DESIGN",
     name: "Distributed Systems Design, High Availability, Fault Tolerance & Microservices",
-    category: "Architecture & Cloud Engineering",
+    category: "Technical",
     description: "Architecting decoupled, highly available, distributed microservices and event-driven topologies with strong consistency models, consensus algorithms, and fault isolation patterns."
   },
   {
     id: "SKILL-TAR-CLOUD-INFRA-SECURITY",
     name: "Cloud Native Topology, Zero Trust, Data Partitioning & Disaster Recovery",
-    category: "Architecture & Cloud Engineering",
+    category: "Technical",
     description: "Designing multi-region cloud infrastructures, Kubernetes control planes, eBPF CNIs, zero trust security fabrics, and disaster recovery failover architectures."
   },
   {
     id: "SKILL-TAR-ENTERPRISE-GOVERNANCE",
     name: "Architecture Decision Records (ADRs), Tech Debt Management & FinOps",
-    category: "Architecture & Cloud Engineering",
+    category: "Technical",
     description: "Leading enterprise architecture governance, quantifying technical debt, managing cloud unit economics, and communicating technical strategy to executive leadership."
   }
 ];

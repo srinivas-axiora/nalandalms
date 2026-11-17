@@ -170,6 +170,17 @@ export async function backfill() {
     }
 
     // 2. Skills & Target Skills
+    const VALID_SKILL_CATEGORIES = new Set(["Technical", "Functional", "Leadership", "Compliance", "Behavioral"]);
+    const normalizeSkillCategory = (cat) => {
+      if (VALID_SKILL_CATEGORIES.has(cat)) return cat;
+      const lower = String(cat || "").toLowerCase();
+      if (lower.includes("compliance") || lower.includes("payroll")) return "Compliance";
+      if (lower.includes("lead") || lower.includes("manage")) return "Leadership";
+      if (lower.includes("behavior") || lower.includes("soft") || lower.includes("comm")) return "Behavioral";
+      if (lower.includes("function") || lower.includes("business") || lower.includes("resource") || lower.includes("sales") || lower.includes("operation") || lower.includes("marketing")) return "Functional";
+      return "Technical";
+    };
+
     const skills = data.skills || [];
     console.log(`[backfill] Upserting ${skills.length} skills...`);
     for (const s of skills) {
@@ -179,7 +190,7 @@ export async function backfill() {
          ON CONFLICT (id) DO UPDATE SET
            name = EXCLUDED.name, category = EXCLUDED.category,
            description = EXCLUDED.description, status = EXCLUDED.status`,
-        [s.id, s.name, s.category || "Technical", s.description || "", s.status || "Active", s.createdAt || null]
+        [s.id, s.name, normalizeSkillCategory(s.category), s.description || "", s.status || "Active", s.createdAt || null]
       );
     }
     const targetSkills = data.targetSkills || [];

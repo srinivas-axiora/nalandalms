@@ -49,7 +49,7 @@ export const humanResourcesSkills = [
   {
     id: "SKILL-HRO-TALENT-LIFECYCLE",
     name: "Talent Acquisition, Onboarding & Employee Lifecycle Operations",
-    category: "Human Resources",
+    category: "Functional",
     description: "End-to-end talent lifecycle leadership: strategic workforce planning, job architecture and descriptions, proactive sourcing and employer branding, structured STAR behavioral interviewing, FCRA background screening, offer modeling, and high-impact 30-60-90 day onboarding frameworks.",
     status: "Active",
     createdAt: new Date().toISOString(),
@@ -57,7 +57,7 @@ export const humanResourcesSkills = [
   {
     id: "SKILL-HRO-COMPLIANCE-RELATIONS",
     name: "Labor Law Compliance, Statutory Governance & Employee Relations",
-    category: "Human Resources",
+    category: "Functional",
     description: "Deep statutory expertise in FLSA wage and hour compliance (duties and salary basis tests), Title VII, ADA interactive accommodations, ADEA, FMLA leave administration, OSHA incident logging, Form I-9 and E-Verify audit readiness, employee handbook architecture, conflict mediation, forensic workplace investigations (EEOC credibility), and WARN Act / OWBPA reductions in force.",
     status: "Active",
     createdAt: new Date().toISOString(),
@@ -65,7 +65,7 @@ export const humanResourcesSkills = [
   {
     id: "SKILL-HRO-COMPENSATION-ANALYTICS",
     name: "Total Rewards, Performance Systems & People Analytics",
-    category: "Human Resources",
+    category: "Functional",
     description: "Operational mastery of market salary banding, compa-ratio modeling, executive variable pay, equity administration (Options vs. RSUs), group health plan design (HDHP/HSA), ERISA and COBRA governance, payroll operations and tax withholding, continuous OKR performance systems, progressive discipline PIPs, HRIS integration architecture (SCIM/EDI 834), and People Analytics dashboards.",
     status: "Active",
     createdAt: new Date().toISOString(),

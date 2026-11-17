@@ -42,19 +42,19 @@ export const payrollComplianceSkills = [
   {
     id: "SKILL-AEP-GROSS-NET-ENGINES",
     name: "Gross-to-Net Computation Engines, Payroll Deductions & Remittance Architecture",
-    category: "Payroll & Compliance",
+    category: "Compliance",
     description: "Deep mastery of gross-to-net waterfalls, FLSA overtime regular rate calculations, Section 125 pre-tax cafeteria plans, and post-tax garnishment priority."
   },
   {
     id: "SKILL-AEP-STATUTORY-COMPLIANCE",
     name: "Multi-Jurisdiction Labor Law, Statutory Tax Withholding & Year-End Reporting",
-    category: "Payroll & Compliance",
+    category: "Compliance",
     description: "Multi-state tax nexus, federal and state income tax withholding (W-4, 941, Schedule B), FICA/FUTA unemployment frameworks, and annual W-2/1099 reporting."
   },
   {
     id: "SKILL-AEP-GLOBAL-PAYROLL-TECH",
     name: "Global Payroll SaaS, EOR/PEO Frameworks, Benefits Administration & Audit Defense",
-    category: "Payroll & Compliance",
+    category: "Compliance",
     description: "Multinational payroll architectures, EOR/PEO co-employment, international statutory schemes (UK PAYE, India EPF/ESI/TDS), SOX internal controls, and DOL audit defense."
   }
 ];

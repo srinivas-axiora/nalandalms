@@ -48,7 +48,7 @@ export const businessAnalystSkills = [
   {
     id: "SKILL-BSA-STRATEGY-ELICITATION",
     name: "Business Analysis Planning, Strategy & Requirements Elicitation",
-    category: "Business Analysis",
+    category: "Functional",
     description: "Mastery of IIBA BABOK v3 methodology, business analysis planning, enterprise current-to-future state gap analysis, requirements elicitation techniques (interviews, focus groups, workshops), requirements lifecycle management, traceability matrices (RTM), and root cause analysis (Ishikawa, Pareto, 5 Whys).",
     status: "Active",
     createdAt: new Date().toISOString(),
@@ -56,7 +56,7 @@ export const businessAnalystSkills = [
   {
     id: "SKILL-BSA-PROCESS-AGILE-MODELING",
     name: "Process Modeling (BPMN), Agile User Stories & Solution Design",
-    category: "Business Analysis",
+    category: "Functional",
     description: "Deep expertise in BPMN 2.0 formal workflow notation, Agile requirements engineering (Themes, Epics, INVEST stories), Behavior-Driven Development (BDD/Gherkin living documentation), Non-Functional Requirements (FURPS+), UML Use Cases, User Story Mapping, and Functional Requirements Documents (FRD).",
     status: "Active",
     createdAt: new Date().toISOString(),
@@ -64,7 +64,7 @@ export const businessAnalystSkills = [
   {
     id: "SKILL-BSA-DATA-VALUATION-GOVERNANCE",
     name: "Data Analytics, Business Valuation & Change Governance",
-    category: "Business Analysis",
+    category: "Functional",
     description: "Operational mastery of analytical SQL querying and data reconciliation, conceptual and logical data modeling (ERDs, 3NF), API integration contracts (REST/OpenAPI), financial valuation (ROI, NPV, IRR, TCO), decision science (MCDA, Decision Trees), stakeholder RACI governance, Prosci ADKAR change management, UAT execution, regulatory compliance (GDPR, SOX), and Celonis process mining.",
     status: "Active",
     createdAt: new Date().toISOString(),
