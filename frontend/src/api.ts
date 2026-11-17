@@ -3,12 +3,18 @@ export const API_URL = import.meta.env.VITE_API_URL || "/api";
 let csrfToken: string | null = null;
 let reauthInFlight: Promise<boolean> | null = null;
 
-export async function getCsrf() {
-  const res = await fetch(`${API_URL}/csrf-token`, { credentials: "include" });
-  if (res.ok) {
-    const data = await res.json();
-    csrfToken = data.csrfToken;
+export async function getCsrf(): Promise<string | null> {
+  try {
+    const res = await fetch(`${API_URL}/csrf-token`, { credentials: "include" });
+    if (res.ok) {
+      const data = await res.json();
+      csrfToken = data.csrfToken;
+      return csrfToken;
+    }
+  } catch (err) {
+    console.warn("[csrf] Token acquisition failed:", err);
   }
+  return null;
 }
 
 async function requestReauth() {
@@ -33,7 +39,12 @@ async function requestReauth() {
   return reauthInFlight;
 }
 
-export async function apiFetch(endpoint: string, options: RequestInit = {}, retryingAfterReauth = false): Promise<Response> {
+export async function apiFetch(
+  endpoint: string,
+  options: RequestInit = {},
+  retryingAfterReauth = false,
+  retryingAfterCsrf = false
+): Promise<Response> {
   if (["POST", "PUT", "PATCH", "DELETE"].includes(options.method?.toUpperCase() || "") && !csrfToken) {
     await getCsrf();
   }
@@ -51,6 +62,18 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}, retr
     headers,
     credentials: "include" // REQUIRED FOR COOKIES
   });
+
+  // Automatically refresh CSRF token and retry once if CSRF validation failed
+  if (res.status === 403 && !retryingAfterCsrf) {
+    try {
+      const clone = await res.clone().json();
+      if (clone?.error === "Invalid CSRF token") {
+        csrfToken = null;
+        await getCsrf();
+        return apiFetch(endpoint, options, false, true);
+      }
+    } catch {}
+  }
 
   if (res.status === 412 && !retryingAfterReauth) {
     try {

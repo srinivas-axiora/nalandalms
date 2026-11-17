@@ -119,56 +119,61 @@ export function registerAuth(app) {
   });
 
   // ── Login ──
-  app.post("/api/auth/login", loginIpRateLimit, async (req, res) => {
-    const ip = req.ip || req.connection.remoteAddress;
-    const schema = z.object({ email: z.string().min(2), password: z.string().min(8) });
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  app.post("/api/auth/login", loginIpRateLimit, async (req, res, next) => {
+    try {
+      const ip = req.ip || req.socket?.remoteAddress || "127.0.0.1";
+      const schema = z.object({ email: z.string().min(2), password: z.string().min(8) });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const identifier = parsed.data.email.trim();
-    const normalizedIdentifier = identifier.toLowerCase();
-    const identityKey = throttleIdentity(normalizedIdentifier);
-    // Lockouts are scoped to the account/IP pair. An attacker cannot lock a
-    // victim out globally by repeatedly submitting that victim's identifier.
-    const securityKey = `${identityKey}|${ip}`;
-    const candidate = USE_RELATIONAL_IDENTITY
-      ? await identityRepository.findUserByIdentifier(normalizedIdentifier)
-      : users.find((item) => (
-          item.email.toLowerCase() === normalizedIdentifier
-          || (item.role === "Super Admin" && normalizedIdentifier === "super admin")
-        ));
-    const user = candidate?.status === "Active" ? candidate : null;
-    // Always perform a bcrypt comparison so unknown/inactive identities have
-    // the same expensive credential path as active accounts. A correct
-    // password is evaluated before pair throttling, preventing an attacker
-    // from turning failed guesses into an account-wide denial of service.
-    const passwordMatches = bcrypt.compareSync(
-      parsed.data.password,
-      user?.passwordHash || DUMMY_PASSWORD_HASH,
-    );
+      const identifier = parsed.data.email.trim();
+      const normalizedIdentifier = identifier.toLowerCase();
+      const identityKey = throttleIdentity(normalizedIdentifier);
+      // Lockouts are scoped to the account/IP pair. An attacker cannot lock a
+      // victim out globally by repeatedly submitting that victim's identifier.
+      const securityKey = `${identityKey}|${ip}`;
+      const candidate = USE_RELATIONAL_IDENTITY
+        ? await identityRepository.findUserByIdentifier(normalizedIdentifier)
+        : users.find((item) => (
+            item.email.toLowerCase() === normalizedIdentifier
+            || (item.role === "Super Admin" && normalizedIdentifier === "super admin")
+          ));
+      const user = candidate?.status === "Active" ? candidate : null;
+      // Always perform a bcrypt comparison so unknown/inactive identities have
+      // the same expensive credential path as active accounts. A correct
+      // password is evaluated before pair throttling, preventing an attacker
+      // from turning failed guesses into an account-wide denial of service.
+      const passwordMatches = bcrypt.compareSync(
+        parsed.data.password,
+        user?.passwordHash || DUMMY_PASSWORD_HASH,
+      );
 
-    if (user && passwordMatches) {
-      await clearLoginFailures(securityKey);
-      if (USE_RELATIONAL_IDENTITY) await identityRepository.recordLogin(user.id);
-      else audit(user.id, "LOGIN", "USER", user.id);
-      res.cookie("token", signToken(user), { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE, maxAge: 30 * 60 * 1000 });
-      return res.json({ user: publicUser(user) });
+      if (user && passwordMatches) {
+        await clearLoginFailures(securityKey);
+        if (USE_RELATIONAL_IDENTITY) await identityRepository.recordLogin(user.id);
+        else audit(user.id, "LOGIN", "USER", user.id);
+        res.cookie("token", signToken(user), { httpOnly: true, secure: COOKIE_SECURE, sameSite: COOKIE_SAMESITE, maxAge: 30 * 60 * 1000 });
+        return res.json({ user: publicUser(user) });
+      }
+
+      const security = await getLoginSecurity(securityKey, MAX_LOGIN_ATTEMPTS);
+      if (security.lockedUntil && new Date(security.lockedUntil).getTime() > Date.now()) {
+        const retryAfter = Math.max(1, Math.ceil((new Date(security.lockedUntil).getTime() - Date.now()) / 1000));
+        res.setHeader("Retry-After", String(retryAfter));
+        return res.status(429).json({ error: "Too many invalid login attempts. Please retry later." });
+      }
+
+      const failure = await recordLoginFailure(securityKey, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS);
+      if (failure.lockedUntil) {
+        const retryAfter = Math.max(1, Math.ceil((new Date(failure.lockedUntil).getTime() - Date.now()) / 1000));
+        res.setHeader("Retry-After", String(retryAfter));
+        return res.status(429).json({ error: "Too many invalid login attempts. Please retry later." });
+      }
+      return res.status(401).json({ error: "Invalid credentials" });
+    } catch (err) {
+      console.error("[auth:login] error:", err);
+      next(err);
     }
-
-    const security = await getLoginSecurity(securityKey, MAX_LOGIN_ATTEMPTS);
-    if (security.lockedUntil && new Date(security.lockedUntil).getTime() > Date.now()) {
-      const retryAfter = Math.max(1, Math.ceil((new Date(security.lockedUntil).getTime() - Date.now()) / 1000));
-      res.setHeader("Retry-After", String(retryAfter));
-      return res.status(429).json({ error: "Too many invalid login attempts. Please retry later." });
-    }
-
-    const failure = await recordLoginFailure(securityKey, MAX_LOGIN_ATTEMPTS, LOCKOUT_MS);
-    if (failure.lockedUntil) {
-      const retryAfter = Math.max(1, Math.ceil((new Date(failure.lockedUntil).getTime() - Date.now()) / 1000));
-      res.setHeader("Retry-After", String(retryAfter));
-      return res.status(429).json({ error: "Too many invalid login attempts. Please retry later." });
-    }
-    return res.status(401).json({ error: "Invalid credentials" });
   });
 
   // ── Logout ──

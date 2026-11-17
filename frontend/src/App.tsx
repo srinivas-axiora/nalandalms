@@ -5,7 +5,7 @@ import { navByRole, now } from "./types";
 import type { AppData, ModuleKey, User } from "./types";
 import { seedData } from "./seedData";
 import { setToastHandler } from "./toast";
-import { apiFetch } from "./api";
+import { apiFetch, getCsrf } from "./api";
 import { readAppState, writeAppState } from "./app-state-storage";
 
 const Login = lazy(() => import("./pages/Login"));
@@ -234,6 +234,7 @@ export default function App() {
   }, [setDataState]);
 
   useEffect(() => {
+    getCsrf();
     setToastHandler((msg) => {
       setToastMsg(null);
       requestAnimationFrame(() => setToastMsg(msg));

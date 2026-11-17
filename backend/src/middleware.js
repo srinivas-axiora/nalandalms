@@ -160,5 +160,10 @@ export const errorHandler = (err, _req, res, _next) => {
     return;
   }
   console.error("[error]", err.stack || err);
-  if (!res.headersSent) res.status(500).json({ error: "Internal server error" });
+  if (!res.headersSent) {
+    res.status(500).json({
+      error: "Internal server error",
+      message: err?.message || String(err),
+    });
+  }
 };

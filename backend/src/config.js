@@ -189,7 +189,9 @@ const trustProxySchema = z.union([
   z.literal("uniquelocal"),
   z.coerce.number().int().min(0).max(10),
 ]);
-export const TRUST_PROXY = trustProxySchema.parse(process.env.TRUST_PROXY ?? "false");
+export const TRUST_PROXY = process.env.TRUST_PROXY
+  ? trustProxySchema.parse(process.env.TRUST_PROXY)
+  : (IS_PRODUCTION ? 1 : false);
 
 const certificateApprovalRoleSchema = z.enum(USER_ROLES);
 export const getCertificateIssuanceApprovalRole = () => {
