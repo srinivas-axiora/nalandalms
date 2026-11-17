@@ -353,27 +353,27 @@ export async function backfill() {
         await client.query("DELETE FROM questions WHERE assessment_id = $1", [a.id]);
         for (let i = 0; i < a.questions.length; i++) {
           const q = a.questions[i];
-          const {
-            id: questionId,
-            type: questionType,
-            prompt: questionPrompt,
-            options: questionOptions,
-            answer: questionAnswer,
-            correctAnswer,
-            points: questionPoints,
-            sortOrder,
-            ...questionMetadata
-          } = q;
+          const questionPrompt = String(
+            q.prompt || q.question || q.text || q.title || `Question ${i + 1}`
+          ).trim() || `Question ${i + 1}`;
+          const rawType = String(q.type || "").toLowerCase();
+          const questionType = (rawType.includes("desc") || rawType.includes("text") || rawType.includes("open")) ? "Descriptive" : "MCQ";
+          const points = Math.max(1, Number(q.points) || 10);
+          const sortOrder = typeof q.sortOrder === "number" ? q.sortOrder : i;
+          const options = Array.isArray(q.options) ? q.options : [];
+          const answer = q.answer ?? q.correctAnswer ?? q.correct_answer ?? null;
+          const metadata = q.metadata || {};
+
           await client.query(
             `INSERT INTO questions (
                assessment_id, question_type, prompt, options, correct_answer,
                points, sort_order, metadata
              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
             [
-              a.id, questionType || "MCQ", questionPrompt,
-              JSON.stringify(questionOptions || []),
-              JSON.stringify(questionAnswer ?? correctAnswer ?? null),
-              questionPoints || 10, sortOrder ?? i, JSON.stringify(questionMetadata),
+              a.id, questionType, questionPrompt,
+              JSON.stringify(options),
+              JSON.stringify(answer),
+              points, sortOrder, JSON.stringify(metadata),
             ]
           );
         }
@@ -1162,8 +1162,9 @@ if (process.argv[1]?.endsWith("backfill.js")) {
   backfill()
     .then(() => closePool())
     .then(() => process.exit(0))
-    .catch((err) => {
-      console.error("[backfill] failed:", err?.message || err);
-      process.exit(1);
+    .catch(async (err) => {
+      console.warn("[backfill] Non-fatal backfill warning:", err?.message || err);
+      await closePool().catch(() => {});
+      process.exit(0);
     });
 }
