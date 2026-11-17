@@ -10,12 +10,8 @@ RUN npm run typecheck && npm run build
 FROM node:22-alpine AS runtime
 
 ENV NODE_ENV=production \
-    PORT=8080 \
-    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/aws-rds-global-bundle.pem
+    PORT=8080
 WORKDIR /app
-
-RUN wget -q https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
-      -O /etc/ssl/certs/aws-rds-global-bundle.pem || true
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force

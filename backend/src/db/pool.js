@@ -11,11 +11,13 @@ import pg from "pg";
 const { Pool } = pg;
 
 function resolveSsl() {
-  // PGSSL=require → TLS w/ cert verification; no-verify → TLS w/o verification;
-  // unset → no TLS (local). Mirrors backend/db.js.
   const mode = process.env.PGSSL;
-  if (mode === "require") return { rejectUnauthorized: true };
-  if (mode === "no-verify") return { rejectUnauthorized: false };
+  if (mode === "disable") return false;
+  if (mode === "verify-full") return { rejectUnauthorized: true };
+  if (mode === "require" || mode === "no-verify") return { rejectUnauthorized: false };
+  if (process.env.DATABASE_URL && !process.env.DATABASE_URL.includes("localhost") && !process.env.DATABASE_URL.includes("postgres:5432")) {
+    return { rejectUnauthorized: false };
+  }
   return false;
 }
 
