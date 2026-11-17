@@ -4,6 +4,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY frontend ./frontend
+COPY scripts ./scripts
 RUN npm run typecheck && npm run build
 
 FROM node:22-alpine AS runtime
