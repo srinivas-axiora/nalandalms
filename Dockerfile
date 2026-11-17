@@ -28,4 +28,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:8080/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
-CMD ["sh", "-c", "node backend/src/db/bootstrap.js && (node backend/src/db/backfill.js || true) && exec node backend/server.js"]
+CMD ["sh", "-c", "node backend/src/db/bootstrap.js && (node backend/src/db/backfill.js &) && exec node backend/server.js"]

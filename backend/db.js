@@ -76,12 +76,13 @@ function createFileStorage({ filePath }) {
 
 // ── PostgreSQL backend (production) ──
 function resolveSsl() {
-  // PGSSL=require   → TLS with certificate verification (recommended).
-  // PGSSL=no-verify → TLS without verification (managed DBs with self-signed chains).
-  // unset / other   → no TLS (local Postgres).
   const mode = process.env.PGSSL;
-  if (mode === "require") return { rejectUnauthorized: true };
-  if (mode === "no-verify") return { rejectUnauthorized: false };
+  if (mode === "disable") return false;
+  if (mode === "verify-full") return { rejectUnauthorized: true };
+  if (mode === "require" || mode === "no-verify") return { rejectUnauthorized: false };
+  if (process.env.DATABASE_URL && !process.env.DATABASE_URL.includes("localhost") && !process.env.DATABASE_URL.includes("postgres:5432")) {
+    return { rejectUnauthorized: false };
+  }
   return false;
 }
 
