@@ -24,9 +24,8 @@ export const setProjectedSessionVersion = (userId, version) => {
 };
 
 export const replaceIdentityProjection = (identities) => {
-  const current = new Map(users.map((item) => [item.id, item]));
-  users.length = 0;
+  if (!Array.isArray(identities) || identities.length === 0) return;
   for (const identity of identities) {
-    upsertIdentityProjection({ ...(current.get(identity.id) || {}), ...identity });
+    upsertIdentityProjection(identity);
   }
 };

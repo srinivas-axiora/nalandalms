@@ -761,7 +761,18 @@ const start = async () => {
     await storage.init();
     await loadDb();
     if (USE_RELATIONAL_IDENTITY) {
-      replaceIdentityProjection(await identityRepository.listUsers({ status: "All" }));
+      try {
+        const relationalUsers = await identityRepository.listUsers({ status: "All" });
+        const relationalIds = new Set(relationalUsers.map((u) => u.id));
+        for (const u of users) {
+          if (!relationalIds.has(u.id)) {
+            await identityRepository.insertUser(u, { actorId: u.id, action: "BOOTSTRAP_SYNC" }).catch(() => {});
+          }
+        }
+        replaceIdentityProjection(await identityRepository.listUsers({ status: "All" }));
+      } catch (syncErr) {
+        console.warn("[bootstrap] relational sync notice:", syncErr?.message || syncErr);
+      }
     }
     if (USE_RELATIONAL_ATTEMPTS) {
       replaceAttemptProjection(await attemptsRepository.list());
