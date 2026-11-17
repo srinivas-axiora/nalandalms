@@ -241,6 +241,7 @@ export async function backfill() {
 
     // 3. Courses
     const courses = data.courses || [];
+    const allCourseIds = new Set(courses.map((course) => course.id));
     console.log(`[backfill] Upserting ${courses.length} courses...`);
     for (const c of courses) {
       await client.query(
@@ -265,13 +266,24 @@ export async function backfill() {
           c.id, c.title, c.description, c.skill || "", c.skillIds || [],
           c.targetLevel || "Beginner", c.difficulty || "Beginner", c.estimatedHours || 4,
           c.priceCents || 0, c.currency || "INR", c.category || "General",
-          c.prerequisites || [], c.tags || [], c.thumbnailColor || "#22d3ee",
+          [], c.tags || [], c.thumbnailColor || "#22d3ee",
           c.contentTypes || ["Rich Text"], JSON.stringify(c.storage || { files: [] }),
           normalizeLifecycleStatus(c.status), normalizeApprovalStatus(c.approval),
           c.ownerId || users[0]?.id || "SAnalanda", c.version || 1,
           c.createdAt || null,
         ]
       );
+    }
+    for (const c of courses) {
+      const validPrereqs = (c.prerequisites || []).filter(
+        (p) => typeof p === "string" && allCourseIds.has(p) && p !== c.id
+      );
+      if (validPrereqs.length > 0) {
+        await client.query(
+          "UPDATE courses SET prerequisites = $1 WHERE id = $2",
+          [validPrereqs, c.id]
+        );
+      }
     }
 
     // 4. Chapters

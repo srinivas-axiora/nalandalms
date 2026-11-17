@@ -21,10 +21,7 @@ export const payrollComplianceCourse = {
     "SKILL-AEP-STATUTORY-COMPLIANCE",
     "SKILL-AEP-GLOBAL-PAYROLL-TECH"
   ],
-  prerequisites: [
-    "Foundational commercial business acumen",
-    "Basic understanding of accounting principles and corporate employee management"
-  ],
+  prerequisites: [],
   learningObjectives: [
     "Architect and audit enterprise Gross-to-Net calculation engines with strict mathematical deduction waterfalls",
     "Enforce FLSA compliance: worker classification (W-2 vs. 1099, Exempt vs. Non-Exempt), and Regular Rate of Pay (RROP) overtime modeling",

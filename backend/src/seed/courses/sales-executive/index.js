@@ -21,10 +21,7 @@ export const salesExecutiveCourse = {
     "SKILL-SLS-DISCOVERY-PIPELINE",
     "SKILL-SLS-NEGOTIATION-EXPANSION"
   ],
-  prerequisites: [
-    "Foundational commercial business acumen",
-    "Basic understanding of B2B sales cycles and corporate purchasing"
-  ],
+  prerequisites: [],
   learningObjectives: [
     "Master enterprise B2B sales methodologies including MEDDPICC, Challenger, SPIN, and Sandler Submarine",
     "Construct data-driven Ideal Customer Profiles (ICPs) and orchestrate high-converting outbound multi-channel cadences",

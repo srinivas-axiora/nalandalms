@@ -17,11 +17,7 @@ export const technicalArchitectCourse = {
     "SKILL-TAR-CLOUD-INFRA-SECURITY",
     "SKILL-TAR-ENTERPRISE-GOVERNANCE"
   ],
-  prerequisites: [
-    "Senior Software Engineer or Lead Engineer experience",
-    "Strong proficiency in backend services and cloud fundamentals",
-    "Familiarity with distributed data stores and networking basics"
-  ],
+  prerequisites: [],
   learningOutcomes: [
     "Design resilient distributed architectures capable of handling 50k+ TPS with 5-nines availability",
     "Apply foundational architecture laws, the CAP and PACELC theorems, and distributed consensus algorithms (Paxos/Raft)",

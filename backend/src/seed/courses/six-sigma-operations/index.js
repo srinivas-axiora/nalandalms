@@ -17,11 +17,7 @@ export const sixSigmaCourse = {
     "SKILL-SSM-LEAN-OPS",
     "SKILL-SSM-LEADERSHIP"
   ],
-  prerequisites: [
-    "Operations Supervisor, Industrial Engineer, or Team Lead experience",
-    "Basic college-level algebra and familiarity with operational workflows",
-    "Foundational understanding of manufacturing or service delivery processes"
-  ],
+  prerequisites: [],
   learningOutcomes: [
     "Lead end-to-end Lean Six Sigma Black Belt operational transformations utilizing the 5-phase DMAIC framework",
     "Formulate rigorous Project Charters and translate Voice of Customer (VOC) into Critical to Quality (CTQ) specifications",
