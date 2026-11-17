@@ -191,6 +191,20 @@ export default function App() {
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const sessionRevokedRef = useRef(false);
 
+  const forceSignOut = useCallback(async (reason?: string) => {
+    if (sessionRevokedRef.current) return;
+    sessionRevokedRef.current = true;
+    try {
+      await apiFetch("/auth/logout", { method: "POST" });
+    } catch (e) {}
+    clearCsrfToken();
+    setSessionId(null);
+    setSessionVersion(null);
+    setDataState(import.meta.env.DEV ? seedData : emptyAppData);
+    try { localStorage.removeItem("nalanda-v3"); } catch {}
+    if (reason) setToastMsg(reason);
+  }, [setDataState]);
+
   const syncAuthenticatedUser = useCallback((authUser: AuthenticatedUser) => {
     setDataState((prev) => {
       const normalized = normalizeData(prev);
@@ -342,20 +356,6 @@ export default function App() {
     sessionRevokedRef.current = false;
     loadBackendData();
   };
-
-  const forceSignOut = useCallback(async (reason?: string) => {
-    if (sessionRevokedRef.current) return;
-    sessionRevokedRef.current = true;
-    try {
-      await apiFetch("/auth/logout", { method: "POST" });
-    } catch (e) {}
-    clearCsrfToken();
-    setSessionId(null);
-    setSessionVersion(null);
-    setDataState(import.meta.env.DEV ? seedData : emptyAppData);
-    try { localStorage.removeItem("nalanda-v3"); } catch {}
-    if (reason) setToastMsg(reason);
-  }, [setDataState]);
 
   const resetDemo = () => { setDataState(seedData); setSessionId(null); setSessionVersion(null); };
 
