@@ -310,9 +310,23 @@ export async function backfill() {
     }
 
     // 5. Assessments & Questions
+    const COURSE_ID_ALIASES = {
+      "CRS-SALES-001": "CRS-SLS-001",
+      "CRS-PM-001": "CRS-BSA-001",
+      "CRS-HR-001": "CRS-HRO-001",
+    };
+    const chapterIds = new Set(chapters.map((ch) => ch.id));
     const assessments = data.assessments || [];
     console.log(`[backfill] Upserting ${assessments.length} assessments...`);
     for (const a of assessments) {
+      const targetCourseId = COURSE_ID_ALIASES[a.courseId] || a.courseId;
+      if (!allCourseIds.has(targetCourseId)) {
+        console.warn(`[backfill] Skipping assessment ${a.id}: course ${a.courseId} does not exist`);
+        continue;
+      }
+      const validChapterId = chapterIds.has(a.chapterId) ? a.chapterId : null;
+      const validOwnerId = userIds.has(a.ownerId) ? a.ownerId : (users[0]?.id || "SAnalanda");
+
       await client.query(
         `INSERT INTO assessments (
            id, course_id, chapter_id, title, type, strict_mode,
@@ -327,10 +341,10 @@ export async function backfill() {
            title = EXCLUDED.title, status = EXCLUDED.status, approval = EXCLUDED.approval,
            version = GREATEST(assessments.version, EXCLUDED.version)`,
         [
-          a.id, a.courseId, a.chapterId || null, a.title, normalizeAssessmentType(a.type),
+          a.id, targetCourseId, validChapterId, a.title, normalizeAssessmentType(a.type),
           a.strictMode ?? true, a.durationMinutes || 15, a.passScore || 70,
           a.questionLimit || null, a.difficulty || "Beginner", normalizeApprovalStatus(a.approval),
-          normalizeLifecycleStatus(a.status), a.ownerId || users[0]?.id || "SAnalanda",
+          normalizeLifecycleStatus(a.status), validOwnerId,
           a.version || 1, a.createdAt || null,
         ]
       );
@@ -418,6 +432,7 @@ export async function backfill() {
     const enrollments = data.assignments || data.enrollments || [];
     console.log(`[backfill] Upserting ${enrollments.length} enrollments...`);
     for (const e of enrollments) {
+      if (!allCourseIds.has(e.courseId) || !userIds.has(e.userId)) continue;
       await client.query(
         `INSERT INTO enrollments (
            id, course_id, user_id, assigned_by, cohort_id, due_at, priority,
@@ -460,6 +475,9 @@ export async function backfill() {
     const attemptIds = new Set(attempts.map((attempt) => attempt.id));
     console.log(`[backfill] Upserting ${attempts.length} assessment attempts...`);
     for (const attempt of attempts) {
+      if (!userIds.has(attempt.userId)) continue;
+      const validCourseId = attempt.courseId && allCourseIds.has(attempt.courseId) ? attempt.courseId : null;
+      const validChapterId = attempt.chapterId && chapterIds.has(attempt.chapterId) ? attempt.chapterId : null;
       const attemptAssessment = (data.assessments || []).find(
         (assessment) => assessment.id === attempt.assessmentId
       );
@@ -491,8 +509,8 @@ export async function backfill() {
            submitted_at = EXCLUDED.submitted_at,
            version = GREATEST(assessment_attempts.version, EXCLUDED.version)`,
         [
-          attempt.id, attempt.assessmentId, attempt.chapterId || null,
-          attempt.courseId || null, attempt.userId, attempt.status || "InProgress",
+          attempt.id, attempt.assessmentId, validChapterId,
+          validCourseId, attempt.userId, attempt.status || "InProgress",
           attempt.score ?? null, attempt.maxScore ?? null, attempt.feedback || "",
           JSON.stringify(attempt.answers || {}), attempt.selectedQuestionIds || [],
           JSON.stringify(attempt.questionMap || {}), JSON.stringify(attempt.manualGrades || {}),
@@ -629,7 +647,6 @@ export async function backfill() {
     // tokens never enter the normalized tables.
     const candidateLinks = data.candidateAssessments || [];
     const assessmentsById = new Map(assessments.map((assessment) => [assessment.id, assessment]));
-    const chapterIds = new Set(chapters.map((chapter) => chapter.id));
     const candidateTokenCounts = candidateLinks.reduce((counts, link) => {
       counts.set(link.token, (counts.get(link.token) || 0) + 1);
       return counts;

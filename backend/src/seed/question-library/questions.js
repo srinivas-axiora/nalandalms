@@ -5349,7 +5349,7 @@ export const draftInternAssessments = [
   {
     "id": "ASM-INTERN-BIZ",
     "title": "Business Development & Sales Operations Intern Assessment",
-    "courseId": "CRS-SALES-001",
+    "courseId": "CRS-SLS-001",
     "type": "MCQ",
     "approval": "Draft",
     "status": "Active",
@@ -5652,7 +5652,7 @@ export const draftInternAssessments = [
   {
     "id": "ASM-INTERN-OPS",
     "title": "Product Management & Operations Intern Assessment",
-    "courseId": "CRS-PM-001",
+    "courseId": "CRS-BSA-001",
     "type": "MCQ",
     "approval": "Draft",
     "status": "Active",
@@ -5987,7 +5987,7 @@ export const draftInternAssessments = [
   {
     "id": "ASM-INTERN-HR",
     "title": "Talent Acquisition & People Operations Intern Assessment",
-    "courseId": "CRS-HR-001",
+    "courseId": "CRS-HRO-001",
     "type": "MCQ",
     "approval": "Draft",
     "status": "Active",
