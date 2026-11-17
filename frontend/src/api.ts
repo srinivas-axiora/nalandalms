@@ -100,10 +100,20 @@ export async function apiFetch(
   return res;
 }
 
-export async function uploadCourseFile(file: File): Promise<string> {
+export async function uploadCourseFile(
+  courseId: string,
+  file: File,
+  category: "course_media" | "chapter_pdf" = "chapter_pdf"
+): Promise<{ key: string; downloadUrl: string; scanStatus?: string }> {
+  const contentType = file.type || (category === "chapter_pdf" ? "application/pdf" : "application/octet-stream");
   const grantResponse = await apiFetch("/uploads/presign", {
     method: "POST",
-    body: JSON.stringify({ fileName: file.name, contentType: file.type }),
+    body: JSON.stringify({
+      courseId,
+      filename: file.name,
+      contentType,
+      category,
+    }),
   });
 
   if (!grantResponse.ok) {
@@ -112,11 +122,10 @@ export async function uploadCourseFile(file: File): Promise<string> {
   }
 
   const grant = await grantResponse.json();
-  const uploadEndpoint = grant.uploadUrl || `/uploads/${grant.uploadId}`;
-
+  const uploadEndpoint = String(grant.uploadUrl || "").replace(/^\/api/, "");
   const uploadResponse = await apiFetch(uploadEndpoint, {
     method: grant.method || "PUT",
-    headers: grant.headers || { "Content-Type": file.type },
+    headers: grant.headers || { "Content-Type": contentType },
     body: file,
   });
 
@@ -124,5 +133,9 @@ export async function uploadCourseFile(file: File): Promise<string> {
     throw new Error("File upload failed to store in object storage");
   }
 
-  return grant.publicUrl || grant.fileUrl || `/content/${grant.uploadId}`;
+  return {
+    key: String(grant.key || grant.downloadUrl || ""),
+    downloadUrl: String(grant.downloadUrl || grant.publicUrl || ""),
+    scanStatus: grant.scanStatus || "LOCAL_VALIDATED",
+  };
 }
