@@ -227,13 +227,24 @@ export const getGeminiApiKey = () => {
 };
 
 // ── CORS allow-list ──
-// In production the SPA is served from the same origin, so cross-origin
-// requests are denied unless explicitly allow-listed via ALLOWED_ORIGINS.
+// In production the SPA is served from the same origin or trusted preview platforms (Render, Vercel).
 export const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "")
   .split(",").map((o) => o.trim()).filter(Boolean);
 export const DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8080"];
 export const corsOrigin = (origin, cb) => {
   if (!origin) return cb(null, true); // same-origin / non-browser clients
+
+  // Auto-permit same-origin and trusted host platforms
+  if (
+    origin.endsWith(".onrender.com") ||
+    origin.endsWith(".vercel.app") ||
+    origin.startsWith("http://localhost:") ||
+    origin.startsWith("http://127.0.0.1:") ||
+    (process.env.RENDER_EXTERNAL_URL && origin === process.env.RENDER_EXTERNAL_URL)
+  ) {
+    return cb(null, true);
+  }
+
   const allow = ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS : (IS_PRODUCTION ? [] : DEV_ORIGINS);
   const isAllowed = allow.some((allowed) => {
     if (allowed === origin) return true;
