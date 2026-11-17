@@ -196,7 +196,7 @@ export const TRUST_PROXY = process.env.TRUST_PROXY
 const certificateApprovalRoleSchema = z.enum(USER_ROLES);
 export const getCertificateIssuanceApprovalRole = () => {
   const configured = String(process.env.CERTIFICATE_ISSUANCE_APPROVAL_ROLE || "").trim();
-  if (!configured) return null;
+  if (!configured) return IS_PRODUCTION ? null : "Admin";
   return certificateApprovalRoleSchema.parse(configured);
 };
 
@@ -232,7 +232,24 @@ export const getGeminiApiKey = () => {
 // In production the SPA is served from the same origin or trusted preview platforms (Render, Vercel).
 export const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "")
   .split(",").map((o) => o.trim()).filter(Boolean);
-export const DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8080"];
+export const DEV_ORIGINS = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:5174",
+  "http://127.0.0.1:5174",
+  "http://localhost:5175",
+  "http://127.0.0.1:5175",
+  "http://localhost:8080",
+  "http://127.0.0.1:8080",
+];
+const isLocalhostOrigin = (origin) => {
+  try {
+    const url = new URL(origin);
+    return (url.hostname === "localhost" || url.hostname === "127.0.0.1") && (url.protocol === "http:" || url.protocol === "https:");
+  } catch {
+    return false;
+  }
+};
 export const corsOrigin = (origin, cb) => {
   if (!origin) return cb(null, true); // same-origin / non-browser clients
 
@@ -248,6 +265,8 @@ export const corsOrigin = (origin, cb) => {
   }
 
   const allow = ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS : (IS_PRODUCTION ? [] : DEV_ORIGINS);
+  if (!IS_PRODUCTION && isLocalhostOrigin(origin)) return cb(null, true);
+
   const isAllowed = allow.some((allowed) => {
     if (allowed === origin) return true;
     if (allowed.includes("*")) {

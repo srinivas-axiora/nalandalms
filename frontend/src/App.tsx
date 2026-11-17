@@ -5,13 +5,15 @@ import { navByRole, now } from "./types";
 import type { AppData, ModuleKey, User } from "./types";
 import { seedData } from "./seedData";
 import { setToastHandler } from "./toast";
-import { apiFetch, getCsrf } from "./api";
+import { apiFetch, getCsrf, clearCsrfToken } from "./api";
 import { readAppState, writeAppState } from "./app-state-storage";
+import { normalizeAssessment, normalizeChapter, normalizeCourse } from "./normalizeLegacy";
 
 const Login = lazy(() => import("./pages/Login"));
 const MobileProctor = lazy(() => import("./pages/MobileProctor").then((module) => ({ default: module.MobileProctor })));
 const ProctorCockpit = lazy(() => import("./pages/ProctorCockpit").then((module) => ({ default: module.ProctorCockpit })));
 const VerifyCertificate = lazy(() => import("./pages/VerifyCertificate").then((module) => ({ default: module.VerifyCertificate })));
+const CandidateAssessment = lazy(() => import("./pages/CandidateAssessment"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Courses = lazy(() => import("./pages/Courses"));
 const Assessments = lazy(() => import("./pages/Assessments"));
@@ -111,9 +113,12 @@ function normalizeData(data: AppData): AppData {
   ] : usersRaw;
   const skills = isDev ? mergeById(data?.skills || [], seedData.skills) : (data?.skills || []);
   const targetSkills = isDev ? mergeById(data?.targetSkills || [], seedData.targetSkills) : (data?.targetSkills || []);
-  const courses = isDev ? mergeById(data?.courses || [], seedData.courses) : (data?.courses || []);
-  const chapters = isDev ? mergeById(data?.chapters || [], seedData.chapters) : (data?.chapters || []);
-  const assessments = isDev ? mergeById(data?.assessments || [], seedData.assessments) : (data?.assessments || []);
+  const chapters = (isDev ? mergeById(data?.chapters || [], seedData.chapters) : (data?.chapters || [])).map(normalizeChapter);
+  const rawCourses = isDev ? mergeById(data?.courses || [], seedData.courses) : (data?.courses || []);
+  const skillNameById = new Map(skills.map((skill) => [skill.id, skill.name]));
+  const courseIds = new Set(rawCourses.map((course) => course.id));
+  const courses = rawCourses.map((course, index) => normalizeCourse(course, { chapters, skillNameById, courseIds, index }));
+  const assessments = (isDev ? mergeById(data?.assessments || [], seedData.assessments) : (data?.assessments || [])).map(normalizeAssessment);
 
   const rawEnrollments = data?.enrollments || (data as any)?.assignments || [];
   const rawAttempts = data?.attempts || [];
@@ -190,9 +195,47 @@ export default function App() {
     setDataState((prev) => {
       const normalized = normalizeData(prev);
       const existing = normalized.users.find((user) => user.id === authUser.id);
-      if (!existing) return normalized;
-
       const sessionVer = authUser.sessionVersion ?? authUser.sv ?? normalized.sessionVersion?.[authUser.id] ?? 0;
+
+      if (!existing) {
+        const initials = (authUser.name || "Learner")
+          .split(" ")
+          .map((part) => part[0])
+          .join("")
+          .slice(0, 2)
+          .toUpperCase() || "LR";
+        const newUser: User = {
+          id: authUser.id,
+          name: authUser.name || "Learner",
+          email: authUser.email || "",
+          avatar: authUser.avatar || initials,
+          role: authUser.role || "Learner",
+          department: authUser.department || "General",
+          team: authUser.team || "Self-Enrolled",
+          designation: authUser.designation || authUser.role || "Learner",
+          managerId: authUser.managerId ?? null,
+          status: authUser.status || "Active",
+          joinedAt: authUser.joinedAt || new Date().toISOString().slice(0, 10),
+          lastActive: "Today",
+          preferences: authUser.preferences || {
+            theme: "dark",
+            language: "en",
+            emailNotifications: true,
+            pushNotifications: true,
+            weeklyDigest: true,
+            courseReminders: true,
+            fontSize: "medium",
+            reducedMotion: false,
+            highContrast: false,
+          },
+        };
+        return {
+          ...normalized,
+          users: [...normalized.users, newUser],
+          sessionVersion: { ...(normalized.sessionVersion || {}), [authUser.id]: sessionVer },
+        };
+      }
+
       const nextUser: User = {
         ...existing,
         name: authUser.name ?? existing.name,
@@ -205,6 +248,7 @@ export default function App() {
         status: authUser.status ?? "Active",
         joinedAt: authUser.joinedAt ?? existing.joinedAt,
         lastActive: "Today",
+        preferences: authUser.preferences ?? existing.preferences,
       };
 
       return {
@@ -286,6 +330,7 @@ export default function App() {
     try {
       await apiFetch("/auth/logout", { method: "POST" });
     } catch (e) {}
+    clearCsrfToken();
     setSessionId(null);
     setSessionVersion(null);
     setDataState(import.meta.env.DEV ? seedData : emptyAppData);
@@ -333,6 +378,9 @@ export default function App() {
   }
   if (window.location.pathname.startsWith("/verify/")) {
     return <VerifyCertificate />;
+  }
+  if (window.location.pathname.startsWith("/candidate-assessment") || window.location.pathname.startsWith("/take-assessment")) {
+    return <CandidateAssessment />;
   }
 
   if (isInitializing) {

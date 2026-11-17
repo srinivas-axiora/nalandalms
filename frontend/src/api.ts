@@ -3,6 +3,11 @@ export const API_URL = import.meta.env.VITE_API_URL || "/api";
 let csrfToken: string | null = null;
 let reauthInFlight: Promise<boolean> | null = null;
 
+export function clearCsrfToken() {
+  csrfToken = null;
+}
+export const clearCsrf = clearCsrfToken;
+
 export async function getCsrf(): Promise<string | null> {
   try {
     const res = await fetch(`${API_URL}/csrf-token`, { credentials: "include" });
@@ -63,23 +68,29 @@ export async function apiFetch(
     credentials: "include" // REQUIRED FOR COOKIES
   });
 
+  if (endpoint === "/auth/logout") {
+    clearCsrfToken();
+  }
+
   // Automatically refresh CSRF token and retry once if CSRF validation failed
   if (res.status === 403 && !retryingAfterCsrf) {
     try {
-      const clone = await res.clone().json();
-      if (clone?.error === "Invalid CSRF token") {
-        csrfToken = null;
+      const data = await res.clone().json();
+      if (data?.error === "Invalid CSRF token" || (typeof data?.error === "string" && data.error.toLowerCase().includes("csrf"))) {
+        clearCsrfToken();
         await getCsrf();
-        return apiFetch(endpoint, options, false, true);
+        return apiFetch(endpoint, options, retryingAfterReauth, true);
       }
-    } catch {}
+    } catch {
+      // Fall through to original 403 response.
+    }
   }
 
   if (res.status === 412 && !retryingAfterReauth) {
     try {
       const data = await res.clone().json();
       if (data?.code === "STEP_UP_REQUIRED" && await requestReauth()) {
-        return apiFetch(endpoint, options, true);
+        return apiFetch(endpoint, options, true, retryingAfterCsrf);
       }
     } catch {
       // Fall through to original 412 response.
@@ -89,26 +100,29 @@ export async function apiFetch(
   return res;
 }
 
-export async function uploadCourseFile(courseId: string, file: File, category: "course_media" | "chapter_pdf") {
-  const contentType = file.type || (category === "chapter_pdf" ? "application/pdf" : "application/octet-stream");
+export async function uploadCourseFile(file: File): Promise<string> {
   const grantResponse = await apiFetch("/uploads/presign", {
     method: "POST",
-    body: JSON.stringify({
-      courseId,
-      filename: file.name,
-      contentType,
-      category,
-    }),
+    body: JSON.stringify({ fileName: file.name, contentType: file.type }),
   });
-  if (!grantResponse.ok) throw new Error("Upload authorization failed");
+
+  if (!grantResponse.ok) {
+    const errorBody = await grantResponse.json().catch(() => ({}));
+    throw new Error(errorBody.error || "File upload grant rejected by server policy");
+  }
+
   const grant = await grantResponse.json();
-  const uploadEndpoint = String(grant.uploadUrl || "").replace(/^\/api/, "");
-  if (!uploadEndpoint.startsWith("/uploads/direct?token=")) throw new Error("Invalid upload grant");
+  const uploadEndpoint = grant.uploadUrl || `/uploads/${grant.uploadId}`;
+
   const uploadResponse = await apiFetch(uploadEndpoint, {
-    method: "PUT",
-    headers: { "Content-Type": contentType },
+    method: grant.method || "PUT",
+    headers: grant.headers || { "Content-Type": file.type },
     body: file,
   });
-  if (!uploadResponse.ok) throw new Error("Upload failed");
-  return { key: String(grant.key), scanStatus: String(grant.scanStatus || "PENDING") };
+
+  if (!uploadResponse.ok) {
+    throw new Error("File upload failed to store in object storage");
+  }
+
+  return grant.publicUrl || grant.fileUrl || `/content/${grant.uploadId}`;
 }
