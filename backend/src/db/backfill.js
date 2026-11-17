@@ -91,6 +91,30 @@ export async function backfill() {
   console.log(`[backfill] Loading data from ${source}...`);
 
   await withTransaction(async (client) => {
+    const normalizeLifecycleStatus = (status) => {
+      const s = String(status || "").toLowerCase().trim();
+      if (s === "inactive" || s === "archived") return "Inactive";
+      return "Active";
+    };
+
+    const normalizeApprovalStatus = (approval) => {
+      const a = String(approval || "").toLowerCase().trim();
+      if (a === "draft") return "Draft";
+      if (a === "pending") return "Pending";
+      if (a === "rejected") return "Rejected";
+      return "Approved";
+    };
+
+    const normalizeAssessmentType = (type) => {
+      const t = String(type || "").trim();
+      if (t === "MCQ" || t === "Descriptive" || t === "Timed Quiz" || t === "Mixed") return t;
+      const lower = t.toLowerCase();
+      if (lower.includes("quiz")) return "Timed Quiz";
+      if (lower.includes("desc")) return "Descriptive";
+      if (lower.includes("mix")) return "Mixed";
+      return "MCQ";
+    };
+
     // 1. Users & Departments
     const users = data.users || [];
     const userIds = new Set(users.map((user) => user.id));
@@ -125,7 +149,7 @@ export async function backfill() {
         [
           u.id, u.name, u.email, u.passwordHash || null, u.role || "Employee", deptId,
           u.team || "Unassigned", u.designation || "Employee", null,
-          u.status || "Active", u.sessionVersion || 0,
+          normalizeLifecycleStatus(u.status), u.sessionVersion || 0,
           JSON.stringify(u.preferences || {}), u.joinedAt || null, u.createdAt || null,
         ]
       );
@@ -190,7 +214,7 @@ export async function backfill() {
          ON CONFLICT (id) DO UPDATE SET
            name = EXCLUDED.name, category = EXCLUDED.category,
            description = EXCLUDED.description, status = EXCLUDED.status`,
-        [s.id, s.name, normalizeSkillCategory(s.category), s.description || "", s.status || "Active", s.createdAt || null]
+        [s.id, s.name, normalizeSkillCategory(s.category), s.description || "", normalizeLifecycleStatus(s.status), s.createdAt || null]
       );
     }
     const targetSkills = data.targetSkills || [];
@@ -243,7 +267,7 @@ export async function backfill() {
           c.priceCents || 0, c.currency || "INR", c.category || "General",
           c.prerequisites || [], c.tags || [], c.thumbnailColor || "#22d3ee",
           c.contentTypes || ["Rich Text"], JSON.stringify(c.storage || { files: [] }),
-          c.status || "Active", c.approval || "Approved",
+          normalizeLifecycleStatus(c.status), normalizeApprovalStatus(c.approval),
           c.ownerId || users[0]?.id || "SAnalanda", c.version || 1,
           c.createdAt || null,
         ]
@@ -291,10 +315,10 @@ export async function backfill() {
            title = EXCLUDED.title, status = EXCLUDED.status, approval = EXCLUDED.approval,
            version = GREATEST(assessments.version, EXCLUDED.version)`,
         [
-          a.id, a.courseId, a.chapterId || null, a.title, a.type || "MCQ",
+          a.id, a.courseId, a.chapterId || null, a.title, normalizeAssessmentType(a.type),
           a.strictMode ?? true, a.durationMinutes || 15, a.passScore || 70,
-          a.questionLimit || null, a.difficulty || "Beginner", a.approval || "Approved",
-          a.status || "Active", a.ownerId || users[0]?.id || "SAnalanda",
+          a.questionLimit || null, a.difficulty || "Beginner", normalizeApprovalStatus(a.approval),
+          normalizeLifecycleStatus(a.status), a.ownerId || users[0]?.id || "SAnalanda",
           a.version || 1, a.createdAt || null,
         ]
       );

@@ -14,7 +14,8 @@ export const salesExecutiveCourse = {
   duration: "32 Hours",
   thumbnail: "https://images.unsplash.com/photo-1551836022-d5d88e9218df?auto=format&fit=crop&w=1200&q=80",
   instructor: "Nalanda Global Executive Sales Academy",
-  status: "published",
+  status: "Active",
+  approval: "Approved",
   skillsCovered: [
     "SKILL-SLS-METHODOLOGIES-PROSPECTING",
     "SKILL-SLS-DISCOVERY-PIPELINE",
