@@ -235,6 +235,14 @@ export const DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173", "h
 export const corsOrigin = (origin, cb) => {
   if (!origin) return cb(null, true); // same-origin / non-browser clients
   const allow = ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS : (IS_PRODUCTION ? [] : DEV_ORIGINS);
-  if (allow.includes(origin)) return cb(null, true);
+  const isAllowed = allow.some((allowed) => {
+    if (allowed === origin) return true;
+    if (allowed.includes("*")) {
+      const pattern = new RegExp("^" + allowed.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$");
+      return pattern.test(origin);
+    }
+    return false;
+  });
+  if (isAllowed) return cb(null, true);
   return cb(new Error("Origin not allowed by CORS"));
 };
