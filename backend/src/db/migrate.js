@@ -38,10 +38,22 @@ export async function migrate() {
   for (const file of files) {
     if (done.has(file)) { console.log(`• skip   ${file} (already applied)`); continue; }
     const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), "utf8");
-    await withTransaction(async (client) => {
-      await client.query(sql);
-      await client.query("INSERT INTO schema_migrations (version) VALUES ($1)", [file]);
-    });
+    // ALTER TYPE ... ADD VALUE cannot run inside a transaction block in PostgreSQL.
+    const hasAlterTypeAddValue = /ALTER\s+TYPE\s+.*\s+ADD\s+VALUE/i.test(sql);
+    if (hasAlterTypeAddValue) {
+      const client = await getPool().connect();
+      try {
+        await client.query(sql);
+        await client.query("INSERT INTO schema_migrations (version) VALUES ($1)", [file]);
+      } finally {
+        client.release();
+      }
+    } else {
+      await withTransaction(async (client) => {
+        await client.query(sql);
+        await client.query("INSERT INTO schema_migrations (version) VALUES ($1)", [file]);
+      });
+    }
     applied += 1;
     console.log(`✓ apply  ${file}`);
   }

@@ -42,80 +42,100 @@ export function registerAuth(app) {
 
   // ── Public Self-Registration ──
   app.post("/api/auth/register", registrationRateLimit, async (req, res) => {
-    const schema = z.object({
-      name: z.string().min(2).max(100),
-      email: z.string().email(),
-      password: z.string().min(8).max(128),
-    });
+    try {
+      const schema = z.object({
+        name: z.string().min(2).max(100),
+        email: z.string().email(),
+        password: z.string().min(8).max(128),
+      });
 
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const normalizedEmail = parsed.data.email.trim().toLowerCase();
-    const existingUser = USE_RELATIONAL_IDENTITY
-      ? await identityRepository.findUserByIdentifier(normalizedEmail)
-      : users.find((u) => u.email.toLowerCase() === normalizedEmail);
-    if (existingUser) {
-      return res.status(409).json({ error: "An account with this email already exists" });
-    }
+      const normalizedEmail = parsed.data.email.trim().toLowerCase();
 
-    const assignedRole = "Learner";
-    const newUser = {
-      id: `LRN-${Math.floor(1000 + Math.random() * 9000)}`,
-      name: parsed.data.name.trim(),
-      email: normalizedEmail,
-      passwordHash: bcrypt.hashSync(parsed.data.password, 10),
-      role: assignedRole,
-      department: "General",
-      team: "Self-Enrolled",
-      designation: assignedRole,
-      managerId: null,
-      status: "Active",
-      sessionVersion: 0,
-      joinedAt: now().slice(0, 10),
-      createdAt: now(),
-      updatedAt: now(),
-      preferences: {
-        theme: "dark",
-        language: "en",
-        emailNotifications: true,
-        pushNotifications: false,
-        weeklyDigest: true,
-        courseReminders: true,
-        fontSize: "medium",
-        reducedMotion: false,
-        highContrast: false,
-      },
-    };
-
-    let createdUser = newUser;
-    if (USE_RELATIONAL_IDENTITY) {
-      try {
-        createdUser = await identityRepository.insertUser(newUser, {
-          actorId: newUser.id,
-          action: "REGISTER",
-        });
-      } catch (error) {
-        if (error?.code === "23505") {
-          return res.status(409).json({ error: "An account with this email already exists" });
+      // Check both relational repository and in-memory/durable projection
+      let existingUser = null;
+      if (USE_RELATIONAL_IDENTITY) {
+        try {
+          existingUser = await identityRepository.findUserByIdentifier(normalizedEmail);
+        } catch (dbErr) {
+          console.warn("[auth:register] relational identity lookup warning:", dbErr?.message || dbErr);
         }
-        throw error;
       }
-      upsertIdentityProjection(createdUser);
-    } else {
-      users.push(newUser);
-      sessionVersions[newUser.id] = 0;
-      audit(newUser.id, "REGISTER", "USER", newUser.id, { role: newUser.role });
+      if (!existingUser) {
+        existingUser = users.find((u) => u.email?.toLowerCase() === normalizedEmail);
+      }
+      if (existingUser) {
+        return res.status(409).json({ error: "An account with this email already exists. Please sign in." });
+      }
+
+      const assignedRole = "Learner";
+      const newUser = {
+        id: `LRN-${Math.floor(1000 + Math.random() * 9000)}`,
+        name: parsed.data.name.trim(),
+        email: normalizedEmail,
+        passwordHash: bcrypt.hashSync(parsed.data.password, 10),
+        role: assignedRole,
+        department: "General",
+        team: "Self-Enrolled",
+        designation: assignedRole,
+        managerId: null,
+        status: "Active",
+        sessionVersion: 0,
+        joinedAt: now().slice(0, 10),
+        createdAt: now(),
+        updatedAt: now(),
+        preferences: {
+          theme: "dark",
+          language: "en",
+          emailNotifications: true,
+          pushNotifications: false,
+          weeklyDigest: true,
+          courseReminders: true,
+          fontSize: "medium",
+          reducedMotion: false,
+          highContrast: false,
+        },
+      };
+
+      let createdUser = newUser;
+      if (USE_RELATIONAL_IDENTITY) {
+        try {
+          createdUser = await identityRepository.insertUser(newUser, {
+            actorId: newUser.id,
+            action: "REGISTER",
+          });
+          upsertIdentityProjection(createdUser);
+        } catch (error) {
+          if (error?.code === "23505") {
+            return res.status(409).json({ error: "An account with this email already exists. Please sign in." });
+          }
+          console.error("[auth:register] relational insert failed, falling back to durable state:", error?.message || error);
+          // Fall back gracefully to standard state so registration is never broken
+          users.push(newUser);
+          sessionVersions[newUser.id] = 0;
+          audit(newUser.id, "REGISTER", "USER", newUser.id, { role: newUser.role });
+          createdUser = newUser;
+        }
+      } else {
+        users.push(newUser);
+        sessionVersions[newUser.id] = 0;
+        audit(newUser.id, "REGISTER", "USER", newUser.id, { role: newUser.role });
+      }
+
+      res.cookie("token", signToken(createdUser), {
+        httpOnly: true,
+        secure: COOKIE_SECURE,
+        sameSite: COOKIE_SAMESITE,
+        maxAge: 30 * 60 * 1000,
+      });
+
+      return res.status(201).json({ user: publicUser(createdUser) });
+    } catch (err) {
+      console.error("[auth:register] unhandled registration error:", err?.stack || err);
+      return res.status(500).json({ error: "Registration could not be completed. Please try again." });
     }
-
-    res.cookie("token", signToken(createdUser), {
-      httpOnly: true,
-      secure: COOKIE_SECURE,
-      sameSite: COOKIE_SAMESITE,
-      maxAge: 30 * 60 * 1000,
-    });
-
-    return res.status(201).json({ user: publicUser(createdUser) });
   });
 
   // ── Login ──
